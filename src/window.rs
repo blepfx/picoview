@@ -1,6 +1,7 @@
 use crate::{
     platform::{self, PlatformCommand, PlatformWindow},
-    MouseButton, MouseCursor, Point, RawWindowHandle, Size,
+    raw_window_handle::{RawDisplayHandle, RawWindowHandle},
+    Key, Modifiers, MouseButton, MouseCursor, Point, Size,
 };
 use std::path::PathBuf;
 
@@ -15,15 +16,22 @@ pub enum Event<'a> {
     MouseUp(MouseButton),
     MouseScroll { x: f32, y: f32 },
 
-    KeyInput(&'a str),
-    KeyDown(),
-    KeyUp(),
+    KeyModifiers(Modifiers),
+    KeyDown(Key),
+    KeyUp(Key),
 
     Frame,
 
     DragHover { files: &'a [PathBuf] },
     DragAccept { files: &'a [PathBuf] },
     DragCancel,
+}
+
+#[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Decoration {
+    #[default]
+    Normal,
+    Dock,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -44,6 +52,7 @@ pub enum DropOperation {
 #[derive(Clone, Debug)]
 pub struct Options {
     pub parent: Option<RawWindowHandle>,
+    pub decoration: Decoration,
 }
 
 #[derive(Debug)]
@@ -103,7 +112,11 @@ impl Window {
         self.0.post(PlatformCommand::Close);
     }
 
-    pub fn raw_handle(&self) -> RawWindowHandle {
-        self.0.raw_handle()
+    pub fn raw_window_handle(&self) -> RawWindowHandle {
+        self.0.raw_window_handle()
+    }
+
+    pub fn raw_display_handle(&self) -> RawDisplayHandle {
+        self.0.raw_display_handle()
     }
 }

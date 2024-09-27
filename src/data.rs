@@ -1,3 +1,5 @@
+use bitflags::bitflags;
+
 #[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Hash)]
 pub enum MouseCursor {
     #[default]
@@ -44,13 +46,18 @@ pub enum MouseCursor {
     RowResize,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum MouseButton {
-    Left,
-    Right,
-    Middle,
-    Forward,
-    Back,
+bitflags! {
+    #[derive(Clone, Copy, Eq, PartialEq, Debug)]
+    pub struct Modifiers: u16 {
+        const ALT = 1 << 0;
+        const CTRL = 1 << 1;
+        const META = 1 << 2;
+        const SHIFT = 1 << 3;
+
+        const SCROLL_LOCK = 1 << 4;
+        const NUM_LOCK = 1 << 5;
+        const CAPS_LOCK = 1 << 6;
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -63,4 +70,136 @@ pub struct Point {
 pub struct Size {
     pub width: f32,
     pub height: f32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+    Forward,
+    Back,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Key {
+    Backquote,
+    Backslash,
+    BracketLeft,
+    BracketRight,
+    Comma,
+    D0,
+    D1,
+    D2,
+    D3,
+    D4,
+    D5,
+    D6,
+    D7,
+    D8,
+    D9,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    Equal,
+    Minus,
+    Period,
+    Quote,
+    Semicolon,
+    Slash,
+    AltLeft,
+    AltRight,
+    Backspace,
+    CapsLock,
+    ContextMenu,
+    ControlLeft,
+    ControlRight,
+    Enter,
+    MetaLeft,
+    MetaRight,
+    ShiftLeft,
+    ShiftRight,
+    Space,
+    Tab,
+    Delete,
+    End,
+    Home,
+    Insert,
+    PageDown,
+    PageUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    NumLock,
+    Numpad0,
+    Numpad1,
+    Numpad2,
+    Numpad3,
+    Numpad4,
+    Numpad5,
+    Numpad6,
+    Numpad7,
+    Numpad8,
+    Numpad9,
+    NumpadAdd,
+    NumpadBackspace,
+    NumpadClear,
+    NumpadClearEntry,
+    NumpadComma,
+    NumpadDecimal,
+    NumpadDivide,
+    NumpadEnter,
+    NumpadEqual,
+    NumpadHash,
+    NumpadMemoryAdd,
+    NumpadMemoryClear,
+    NumpadMemoryRecall,
+    NumpadMemoryStore,
+    NumpadMemorySubtract,
+    NumpadMultiply,
+    NumpadParenLeft,
+    NumpadParenRight,
+    NumpadStar,
+    NumpadSubtract,
+    Escape,
+    Fn,
+    FnLock,
+    PrintScreen,
+    ScrollLock,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
 }

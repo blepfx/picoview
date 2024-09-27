@@ -1,10 +1,13 @@
+use super::keyboard::{hwcode2key, hwcode2mods, keymask2mods};
 use super::{cursor::CursorCache, Window};
 use crate::{
     platform::PlatformCommand, Error, Event, EventResponse, MouseButton, MouseCursor, Options,
     Point,
 };
+use crate::{Decoration, Modifiers};
 use nix::poll::{poll, PollFd, PollFlags};
-use raw_window_handle::{RawWindowHandle, XlibWindowHandle};
+use raw_window_handle::{RawWindowHandle, XlibDisplayHandle, XlibWindowHandle};
+use std::ptr::NonNull;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 use x11rb::connection::RequestConnection;
@@ -30,6 +33,8 @@ x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
         UTF8_STRING,
         _NET_WM_NAME,
+        _NET_WM_WINDOW_TYPE,
+        _NET_WM_WINDOW_TYPE_DOCK,
         WM_PROTOCOLS,
         WM_DELETE_WINDOW,
     }
@@ -43,12 +48,12 @@ pub struct EventLoop {
     commands: Receiver<PlatformCommand>,
 
     connection: XCBConnection,
-    screen: usize,
     atoms: Atoms,
     cursor_handle: Handle,
     cursor_cache: CursorCache,
     ext_present: bool,
 
+    last_modifiers: Modifiers,
     last_cursor: MouseCursor,
     last_window_position: Option<Point>,
     event_loop_running: bool,
@@ -106,8 +111,8 @@ impl EventLoop {
                 parent_window_id,
                 0,
                 0,
-                100 as _,
-                100 as _,
+                1 as _,
+                1 as _,
                 0,
                 WindowClass::INPUT_OUTPUT,
                 COPY_FROM_PARENT,
@@ -118,8 +123,7 @@ impl EventLoop {
                         | EventMask::KEY_RELEASE
                         | EventMask::LEAVE_WINDOW
                         | EventMask::POINTER_MOTION
-                        | EventMask::FOCUS_CHANGE
-                        | EventMask::EXPOSURE,
+                        | EventMask::FOCUS_CHANGE,
                 ),
             )
             .unwrap();
@@ -134,6 +138,18 @@ impl EventLoop {
             )
             .unwrap();
 
+        if options.decoration == Decoration::Dock {
+            connection
+                .change_property32(
+                    PropMode::REPLACE,
+                    window_id,
+                    atoms._NET_WM_WINDOW_TYPE,
+                    AtomEnum::ATOM,
+                    &[atoms._NET_WM_WINDOW_TYPE_DOCK],
+                )
+                .unwrap();
+        }
+
         if ext_present {
             let event_id = connection.generate_id().unwrap();
             connection
@@ -147,23 +163,26 @@ impl EventLoop {
         connection.flush().unwrap();
 
         let window_handle = XlibWindowHandle::new(window_id as _);
+        let display_handle =
+            XlibDisplayHandle::new(Some(NonNull::new(display as _).unwrap()), screen as i32);
         let (sender, receiver) = channel();
 
         Ok(Self {
             commands: receiver,
             handler,
             window: Window {
-                handle: window_handle,
+                window: window_handle,
+                display: display_handle,
                 commands: sender,
             },
 
             connection,
-            screen,
             atoms,
             cursor_handle,
             cursor_cache: CursorCache::new(),
             ext_present,
 
+            last_modifiers: Modifiers::empty(),
             last_cursor: MouseCursor::Default,
             last_window_position: None,
             event_loop_running: true,
@@ -221,13 +240,13 @@ impl EventLoop {
 
                     let xid = self.cursor_cache.get(
                         &self.connection,
-                        self.screen,
+                        self.window.display.screen as _,
                         &self.cursor_handle,
                         cursor,
                     );
                     if xid != 0 {
                         let _ = self.connection.change_window_attributes(
-                            self.window.handle.window as _,
+                            self.window.window.window as _,
                             &ChangeWindowAttributesAux::new().cursor(xid),
                         );
                         let _ = self.connection.flush();
@@ -238,7 +257,7 @@ impl EventLoop {
             PlatformCommand::SetCursorPosition(point) => {
                 let _ = self.connection.warp_pointer(
                     x11rb::NONE,
-                    self.window.handle.window as u32,
+                    self.window.window.window as u32,
                     0,
                     0,
                     0,
@@ -251,7 +270,7 @@ impl EventLoop {
 
             PlatformCommand::SetSize(size) => {
                 let _ = self.connection.configure_window(
-                    self.window.handle.window as _,
+                    self.window.window.window as _,
                     &ConfigureWindowAux::new()
                         .width(size.width as u32)
                         .height(size.height as u32),
@@ -261,7 +280,7 @@ impl EventLoop {
 
             PlatformCommand::SetPosition(point) => {
                 let _ = self.connection.configure_window(
-                    self.window.handle.window as _,
+                    self.window.window.window as _,
                     &ConfigureWindowAux::new()
                         .x(point.x as i32)
                         .y(point.y as i32),
@@ -273,7 +292,7 @@ impl EventLoop {
             PlatformCommand::SetTitle(title) => {
                 let _ = self.connection.change_property8(
                     PropMode::REPLACE,
-                    self.window.handle.window as u32,
+                    self.window.window.window as u32,
                     AtomEnum::WM_NAME,
                     AtomEnum::STRING,
                     title.as_bytes(),
@@ -281,7 +300,7 @@ impl EventLoop {
 
                 let _ = self.connection.change_property8(
                     PropMode::REPLACE,
-                    self.window.handle.window as u32,
+                    self.window.window.window as u32,
                     self.atoms._NET_WM_NAME,
                     self.atoms.UTF8_STRING,
                     title.as_bytes(),
@@ -291,10 +310,10 @@ impl EventLoop {
             }
 
             PlatformCommand::SetVisible(true) => {
-                let _ = self.connection.map_window(self.window.handle.window as _);
+                let _ = self.connection.map_window(self.window.window.window as _);
                 if let Some(point) = self.last_window_position {
                     let _ = self.connection.configure_window(
-                        self.window.handle.window as _,
+                        self.window.window.window as _,
                         &ConfigureWindowAux::new()
                             .x(point.x as i32)
                             .y(point.y as i32),
@@ -305,14 +324,14 @@ impl EventLoop {
             }
 
             PlatformCommand::SetVisible(false) => {
-                let _ = self.connection.unmap_window(self.window.handle.window as _);
+                let _ = self.connection.unmap_window(self.window.window.window as _);
                 let _ = self.connection.flush();
             }
 
             PlatformCommand::SetKeyboardInput(true) => {
                 let _ = self.connection.grab_keyboard(
                     false,
-                    self.window.handle.window as _,
+                    self.window.window.window as _,
                     x11rb::CURRENT_TIME,
                     GrabMode::ASYNC,
                     GrabMode::ASYNC,
@@ -338,6 +357,13 @@ impl EventLoop {
             }
 
             XEvent::ButtonPress(e) => {
+                self.handle_modifiers(keymask2mods(e.state));
+
+                let position = Point {
+                    x: e.event_x as f32,
+                    y: e.event_y as f32,
+                };
+
                 let event = match e.detail {
                     1 => Event::MouseDown(MouseButton::Left),
                     2 => Event::MouseDown(MouseButton::Middle),
@@ -351,10 +377,18 @@ impl EventLoop {
                     _ => return,
                 };
 
+                (self.handler)(&self.window, Event::MouseMove(Some(position)));
                 (self.handler)(&self.window, event);
             }
 
             XEvent::ButtonRelease(e) => {
+                self.handle_modifiers(keymask2mods(e.state));
+
+                let position = Point {
+                    x: e.event_x as f32,
+                    y: e.event_y as f32,
+                };
+
                 let event = match e.detail {
                     1 => Event::MouseUp(MouseButton::Left),
                     2 => Event::MouseUp(MouseButton::Middle),
@@ -364,14 +398,29 @@ impl EventLoop {
                     _ => return,
                 };
 
+                (self.handler)(&self.window, Event::MouseMove(Some(position)));
                 (self.handler)(&self.window, event);
             }
 
-            XEvent::KeyPress(_) => {}
+            XEvent::KeyPress(e) => {
+                self.handle_modifiers(keymask2mods(e.state) | hwcode2mods(e.detail));
 
-            XEvent::KeyRelease(_) => {}
+                if let Some(key) = hwcode2key(e.detail) {
+                    (self.handler)(&self.window, Event::KeyDown(key));
+                }
+            }
+
+            XEvent::KeyRelease(e) => {
+                self.handle_modifiers(keymask2mods(e.state) - hwcode2mods(e.detail));
+
+                if let Some(key) = hwcode2key(e.detail) {
+                    (self.handler)(&self.window, Event::KeyUp(key));
+                }
+            }
 
             XEvent::MotionNotify(e) => {
+                self.handle_modifiers(keymask2mods(e.state));
+
                 (self.handler)(
                     &self.window,
                     Event::MouseMove(Some(Point {
@@ -398,11 +447,18 @@ impl EventLoop {
 
                 let _ =
                     self.connection
-                        .present_notify_msc(self.window.handle.window as _, 0, 0, 1, 0);
+                        .present_notify_msc(self.window.window.window as _, 0, 0, 1, 0);
                 let _ = self.connection.flush();
             }
 
             _ => {}
+        }
+    }
+
+    fn handle_modifiers(&mut self, mods: Modifiers) {
+        if mods != self.last_modifiers {
+            self.last_modifiers = mods;
+            (self.handler)(&self.window, Event::KeyModifiers(mods));
         }
     }
 }

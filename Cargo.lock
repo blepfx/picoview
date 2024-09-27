@@ -67,6 +67,7 @@ dependencies = [
 name = "picoview"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "nix",
  "raw-window-handle",
  "x11",

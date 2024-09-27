@@ -3,5 +3,5 @@ mod platform;
 mod window;
 
 pub use data::*;
-pub use raw_window_handle::RawWindowHandle;
-pub use window::{Error, Event, EventResponse, Options, Window};
+pub use raw_window_handle;
+pub use window::{Decoration, Error, Event, EventResponse, Options, Window};

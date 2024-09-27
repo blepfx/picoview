@@ -1,18 +1,23 @@
 mod cursor;
 mod event_loop;
+mod keyboard;
 
 use crate::{
     platform::{PlatformCommand, PlatformWindow},
-    Error, Event, EventResponse, Options, RawWindowHandle,
+    Error, Event, EventResponse, Options,
 };
-use raw_window_handle::XlibWindowHandle;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle, XlibDisplayHandle, XlibWindowHandle};
 use std::{sync::mpsc::Sender, thread};
 
 #[derive(Clone)]
 pub struct Window {
-    handle: XlibWindowHandle,
+    window: XlibWindowHandle,
+    display: XlibDisplayHandle,
     commands: Sender<PlatformCommand>,
 }
+
+unsafe impl Send for Window {}
+unsafe impl Sync for Window {}
 
 impl PlatformWindow for Window {
     fn open(
@@ -26,8 +31,12 @@ impl PlatformWindow for Window {
         Ok(window)
     }
 
-    fn raw_handle(&self) -> RawWindowHandle {
-        RawWindowHandle::Xlib(self.handle)
+    fn raw_window_handle(&self) -> RawWindowHandle {
+        RawWindowHandle::Xlib(self.window)
+    }
+
+    fn raw_display_handle(&self) -> RawDisplayHandle {
+        RawDisplayHandle::Xlib(self.display)
     }
 
     fn post(&self, command: PlatformCommand) {
