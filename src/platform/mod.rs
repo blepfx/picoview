@@ -8,6 +8,11 @@ pub mod x11;
 #[cfg(target_os = "linux")]
 pub use x11::Window;
 
+#[cfg(target_os = "windows")]
+pub mod win;
+#[cfg(target_os = "windows")]
+pub use win::Window;
+
 pub trait PlatformWindow: Send + Sync + Clone + Sized {
     fn open(
         options: Options,
