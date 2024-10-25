@@ -1,4 +1,6 @@
 mod event_loop;
+mod pacer;
+mod util;
 
 use self::event_loop::{EventLoop, SharedData};
 use crate::{

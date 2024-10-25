@@ -1,30 +1,30 @@
-use super::Window;
+use super::{pacer::PacerThread, util::to_widestring, Window};
 use crate::{platform::PlatformCommand, Error, Event, EventResponse, Options, Point};
 use raw_window_handle::{RawWindowHandle, Win32WindowHandle};
 use std::{
     cell::RefCell,
-    ffi::OsString,
-    mem::size_of,
+    mem::{self, size_of},
     num::NonZeroIsize,
-    os::windows::ffi::OsStrExt,
     ptr::{null, null_mut},
     rc::Rc,
     sync::Arc,
     time::SystemTime,
 };
+use uuid::Uuid;
 use windows::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
     Graphics::Gdi::{ScreenToClient, HBRUSH},
-    System::SystemServices::IMAGE_DOS_HEADER,
+    System::{SystemServices::IMAGE_DOS_HEADER, Threading::GetCurrentThreadId},
     UI::{
         Controls::WM_MOUSELEAVE,
         Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT},
         WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, LoadCursorW, PostMessageW,
-            RegisterClassW, SetWindowLongPtrW, UnregisterClassW, CS_OWNDC, GWLP_USERDATA, HICON,
-            HMENU, IDC_ARROW, WHEEL_DELTA, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-            WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SHOWWINDOW,
+            CallNextHookEx, CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, LoadCursorW,
+            PostMessageW, RegisterClassW, SetWindowLongPtrW, SetWindowsHookExW, UnregisterClassW,
+            CS_OWNDC, GWLP_USERDATA, HHOOK, HICON, HMENU, IDC_ARROW, MOUSEHOOKSTRUCTEX,
+            WHEEL_DELTA, WH_MOUSE, WINDOW_EX_STYLE, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+            WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SHOWWINDOW, WM_USER,
             WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_CLIPSIBLINGS,
             WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUPWINDOW, WS_SIZEBOX, WS_VISIBLE,
         },
@@ -32,11 +32,16 @@ use windows::Win32::{
 };
 use windows_core::PCWSTR;
 
+pub const WM_USER_FRAME_TIMER: u32 = WM_USER + 1;
+pub const WM_USER_KEY_DOWN: u32 = WM_USER + 2;
+pub const WM_USER_KEY_UP: u32 = WM_USER + 3;
+pub const WM_USER_MESSAGE: u32 = WM_USER + 4;
+
 pub struct EventLoop {
     window: Window,
     handler: Box<dyn FnMut(&Window, Event) -> EventResponse + Send>,
-
     window_class: u16,
+    pacer: PacerThread,
 }
 
 pub struct SharedData {
@@ -55,13 +60,7 @@ impl EventLoop {
                 _ => unreachable!(),
             };
 
-            let class_name = to_widestring(&format!(
-                "picoview-{}",
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ));
+            let class_name = to_widestring(&format!("picoview-{}", Uuid::new_v4()));
 
             let window_class_attributes = WNDCLASSW {
                 style: CS_OWNDC,
@@ -117,8 +116,18 @@ impl EventLoop {
             })
             .unwrap();
 
-            let window_handle = Win32WindowHandle::new(NonZeroIsize::new(hwnd.0 as _).unwrap());
+            let hook_handle = unsafe {
+                SetWindowsHookExW(
+                    WH_MOUSE,
+                    Some(hook_proc),
+                    HINSTANCE(null_mut()),
+                    GetCurrentThreadId(),
+                )
+                .unwrap()
+            };
 
+            let pacer = PacerThread::new(hwnd);
+            let window_handle = Win32WindowHandle::new(NonZeroIsize::new(hwnd.0 as _).unwrap());
             let window = Window {
                 shared: Arc::new(SharedData {
                     handle: window_handle,
@@ -128,8 +137,8 @@ impl EventLoop {
             let event_loop = Rc::new(RefCell::new(Self {
                 window: window.clone(),
                 handler,
-
                 window_class,
+                pacer,
             }));
 
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(event_loop) as _);
@@ -149,6 +158,7 @@ impl Drop for EventLoop {
             let hwnd = HWND(self.window.shared.handle.hwnd.get() as _);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             UnregisterClassW(PCWSTR(self.window_class as _), hinstance()).unwrap();
+            self.pacer.mark_dead();
         }
     }
 }
@@ -236,6 +246,11 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
 
+        WM_MOVE => {
+            window.pacer.mark_moved();
+            LRESULT(0)
+        }
+
         // WM_USER_KEY_DOWN => {
         //     let string = OsString::from_wide(&[wparam.0 as _]);
         //     window.send_event(Event::KeyDown {
@@ -251,32 +266,58 @@ unsafe extern "system" fn wnd_proc(
         //     });
         //     LRESULT(0)
         // }
+        WM_USER_FRAME_TIMER => {
+            // Check modifiers
+            // for &key in MODIFIERS.iter() {
+            //     let pressed = GetAsyncKeyState(key.0 as _) != 0;
+            //     let was_pressed = window.modifier_pressed[&key.0];
 
-        // WM_USER_FRAME_TIMER => {
-        //     // Check modifiers
-        //     for &key in MODIFIERS.iter() {
-        //         let pressed = GetAsyncKeyState(key.0 as _) != 0;
-        //         let was_pressed = window.modifier_pressed[&key.0];
+            //     if pressed != was_pressed {
+            //         window.modifier_pressed.insert(key.0, pressed);
 
-        //         if pressed != was_pressed {
-        //             window.modifier_pressed.insert(key.0, pressed);
+            //         let string = OsString::from_wide(&[key.0 as _]);
+            //         let text = string.to_string_lossy().to_string();
 
-        //             let string = OsString::from_wide(&[key.0 as _]);
-        //             let text = string.to_string_lossy().to_string();
+            //         if pressed {
+            //             window.send_event(Event::KeyDown { text });
+            //         } else {
+            //             window.send_event(Event::KeyUp { text });
+            //         }
+            //     }
+            // }
 
-        //             if pressed {
-        //                 window.send_event(Event::KeyDown { text });
-        //             } else {
-        //                 window.send_event(Event::KeyUp { text });
-        //             }
-        //         }
-        //     }
+            window.send_event(Event::Frame);
+            LRESULT(0)
+        }
 
-        //     window.send_event(Event::Draw);
-        //     LRESULT(0)
-        // }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code < 0 {
+        return CallNextHookEx(HHOOK(null_mut()), code, wparam, lparam);
+    }
+
+    let mouse_hook_struct_ptr: *const MOUSEHOOKSTRUCTEX = lparam.0 as _;
+    let mouse_hook_struct = unsafe { &*mouse_hook_struct_ptr };
+    let hwnd = mouse_hook_struct.Base.hwnd;
+
+    match wparam.0 as u32 {
+        WM_MOUSEWHEEL => {
+            let position = &mouse_hook_struct.Base.pt;
+            let x: u16 = mem::transmute(position.x as i16);
+            let y: u16 = mem::transmute(position.y as i16);
+
+            // TODO: Convert modifiers
+            let wparam = WPARAM(mouse_hook_struct.mouseData as usize & 0xFFFF0000);
+            let lparam = LPARAM(mem::transmute(x as usize + (y as usize) << 16));
+            PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam).unwrap();
+        }
+        _ => {}
+    }
+
+    CallNextHookEx(HHOOK(null_mut()), code, wparam, lparam)
 }
 
 // magic stuff
@@ -287,10 +328,6 @@ extern "C" {
 
 fn hinstance() -> HINSTANCE {
     unsafe { HINSTANCE(&__ImageBase as *const IMAGE_DOS_HEADER as _) }
-}
-
-fn to_widestring(str: &str) -> Vec<u16> {
-    OsString::from(str).encode_wide().chain([0]).collect()
 }
 
 fn lparam2point(lparam: LPARAM) -> Point {
