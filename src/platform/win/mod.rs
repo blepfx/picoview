@@ -3,10 +3,7 @@ mod pacer;
 mod util;
 
 use self::event_loop::{EventLoop, SharedData};
-use crate::{
-    platform::{PlatformCommand, PlatformWindow},
-    Error, Event, EventResponse, Options,
-};
+use crate::{platform::PlatformWindow, Command, Error, Options};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, WindowsDisplayHandle};
 use std::sync::Arc;
 
@@ -16,14 +13,13 @@ pub struct Window {
 }
 
 impl PlatformWindow for Window {
-    fn open(
-        options: Options,
-        handler: Box<dyn FnMut(&Self, Event) -> EventResponse + Send>,
-    ) -> Result<Self, Error> {
-        EventLoop::open(options, handler)
+    fn open(options: Options) -> Result<Self, Error> {
+        Ok(Self {
+            shared: EventLoop::open(options)?,
+        })
     }
 
-    fn post(&self, command: PlatformCommand) {
+    fn post(&self, command: Command) {
         self.shared.post(command);
     }
 

@@ -1,6 +1,6 @@
 use crate::{
     raw_window_handle::{RawDisplayHandle, RawWindowHandle},
-    Error, Event, EventResponse, MouseCursor, Options, Point, Size,
+    Command, Error, Options,
 };
 
 #[cfg(target_os = "linux")]
@@ -14,23 +14,8 @@ pub mod win;
 pub use win::Window;
 
 pub trait PlatformWindow: Send + Sync + Clone + Sized {
-    fn open(
-        options: Options,
-        handler: Box<dyn FnMut(&Self, Event) -> EventResponse + Send>,
-    ) -> Result<Self, Error>;
-    fn post(&self, command: PlatformCommand);
-
+    fn open(options: Options) -> Result<Self, Error>;
+    fn post(&self, command: Command);
     fn raw_window_handle(&self) -> RawWindowHandle;
     fn raw_display_handle(&self) -> RawDisplayHandle;
-}
-
-pub enum PlatformCommand {
-    SetCursorIcon(MouseCursor),
-    SetCursorPosition(Point),
-    SetSize(Size),
-    SetTitle(String),
-    SetPosition(Point),
-    SetVisible(bool),
-    SetKeyboardInput(bool),
-    Close,
 }

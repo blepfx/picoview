@@ -65,8 +65,10 @@ impl PacerThread {
     pub fn mark_moved(&self) {
         self.0.running.store(true, Ordering::Relaxed);
     }
+}
 
-    pub fn mark_dead(&self) {
+impl Drop for PacerThread {
+    fn drop(&mut self) {
         self.0.running.store(false, Ordering::Relaxed);
     }
 }

@@ -1,4 +1,6 @@
 use bitflags::bitflags;
+use raw_window_handle::RawWindowHandle;
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Hash)]
 pub enum MouseCursor {
@@ -202,4 +204,74 @@ pub enum Key {
     F10,
     F11,
     F12,
+}
+
+#[derive(Debug)]
+pub enum Event<'a> {
+    WindowFocus,
+    WindowBlur,
+    WindowClose,
+
+    MouseMove(Option<Point>),
+    MouseDown(MouseButton),
+    MouseUp(MouseButton),
+    MouseScroll { x: f32, y: f32 },
+
+    KeyModifiers(Modifiers),
+    KeyDown(Key),
+    KeyUp(Key),
+
+    Frame,
+
+    DragHover { files: &'a [PathBuf] },
+    DragAccept { files: &'a [PathBuf] },
+    DragCancel,
+}
+
+pub enum Command {
+    SetCursorIcon(MouseCursor),
+    SetCursorPosition(Point),
+    SetSize(Size),
+    SetTitle(String),
+    SetPosition(Point),
+    SetVisible(bool),
+    SetKeyboardInput(bool),
+    Close,
+}
+
+#[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Decoration {
+    #[default]
+    Normal,
+    Borderless,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum EventResponse {
+    Ignored,
+    Captured,
+    AcceptDrop(DropOperation),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum DropOperation {
+    None,
+    Copy,
+    Move,
+    Link,
+}
+
+unsafe impl Send for Options {}
+pub struct Options {
+    pub visible: bool,
+    pub parent: Option<RawWindowHandle>,
+    pub decoration: Decoration,
+    pub size: Size,
+    pub position: Point,
+    pub handler: Box<dyn FnMut(Event) -> EventResponse + Send>,
+}
+
+#[derive(Debug)]
+pub enum Error {
+    PlatformError(String),
 }
