@@ -34,3 +34,9 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging"
 ]}
+
+[profile.dev]
+panic = 'abort'
+
+[profile.release]
+panic = 'abort'

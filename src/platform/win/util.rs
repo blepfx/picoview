@@ -1,6 +1,6 @@
 use std::{ffi::OsString, mem::size_of, os::windows::ffi::OsStrExt};
 use windows::Win32::{
-    Foundation::HINSTANCE,
+    Foundation::{HINSTANCE, HWND},
     System::{
         Com::CoCreateGuid,
         SystemInformation::{
@@ -9,8 +9,8 @@ use windows::Win32::{
         },
         SystemServices::{IMAGE_DOS_HEADER, VER_GREATER_EQUAL},
     },
+    UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, TranslateMessage, MSG},
 };
-use windows_core::GUID;
 
 pub fn is_windows10_or_greater() -> bool {
     is_windows_version_or_greater(_WIN32_WINNT_WIN10)
@@ -59,6 +59,19 @@ pub fn generate_guid() -> String {
             guid.data4[6],
             guid.data4[7]
         )
+    }
+}
+
+pub unsafe fn run_event_loop(hwnd: HWND) {
+    let mut msg: MSG = std::mem::zeroed();
+    loop {
+        let status = GetMessageW(&mut msg, hwnd, 0, 0);
+        if !status.as_bool() {
+            break;
+        }
+
+        let _ = TranslateMessage(&msg);
+        DispatchMessageW(&msg);
     }
 }
 

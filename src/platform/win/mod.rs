@@ -1,30 +1,27 @@
-mod event_loop;
+mod cursor;
 mod pacer;
 mod util;
+mod window_hook;
+mod window_main;
 
-use self::event_loop::{EventLoop, SharedData};
+use self::window_main::{WindowHandle, WindowMain};
 use crate::{platform::PlatformWindow, Command, Error, Options};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, WindowsDisplayHandle};
-use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct Window {
-    shared: Arc<SharedData>,
-}
+pub struct Window(WindowHandle);
 
 impl PlatformWindow for Window {
     fn open(options: Options) -> Result<Self, Error> {
-        Ok(Self {
-            shared: EventLoop::open(options)?,
-        })
+        Ok(Self(WindowMain::open(options)?))
     }
 
     fn post(&self, command: Command) {
-        self.shared.post(command);
+        self.0.post(command);
     }
 
     fn raw_window_handle(&self) -> RawWindowHandle {
-        RawWindowHandle::Win32(self.shared.handle())
+        RawWindowHandle::Win32(self.0.handle())
     }
 
     fn raw_display_handle(&self) -> RawDisplayHandle {

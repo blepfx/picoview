@@ -218,6 +218,7 @@ pub enum Event<'a> {
     MouseScroll { x: f32, y: f32 },
 
     KeyModifiers(Modifiers),
+    KeyChar(&'a str),
     KeyDown(Key),
     KeyUp(Key),
 
@@ -232,18 +233,18 @@ pub enum Command {
     SetCursorIcon(MouseCursor),
     SetCursorPosition(Point),
     SetSize(Size),
-    SetTitle(String),
     SetPosition(Point),
-    SetVisible(bool),
+    SetStyle(Style),
     SetKeyboardInput(bool),
     Close,
 }
 
-#[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
-pub enum Decoration {
-    #[default]
-    Normal,
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Style {
+    Decorated,
     Borderless,
+    BorderlessShadow,
+    Hidden,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -263,11 +264,10 @@ pub enum DropOperation {
 
 unsafe impl Send for Options {}
 pub struct Options {
-    pub visible: bool,
+    pub style: Style,
     pub parent: Option<RawWindowHandle>,
-    pub decoration: Decoration,
     pub size: Size,
-    pub position: Point,
+    pub position: Option<Point>,
     pub handler: Box<dyn FnMut(Event) -> EventResponse + Send>,
 }
 

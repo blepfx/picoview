@@ -1,16 +1,15 @@
-use picoview::{Decoration, Event, Options, Point, Size, Window};
+use picoview::{Command, Event, MouseCursor, Options, Size, Style, Window};
 use std::{thread, time::Duration};
 
 fn main() {
     let window = Window::open(Options {
-        visible: true,
         parent: None,
-        decoration: Decoration::Normal,
+        style: Style::Decorated,
         size: Size {
-            width: 100.0,
+            width: 200.0,
             height: 200.0,
         },
-        position: Point { x: 100.0, y: 100.0 },
+        position: None,
         handler: Box::new(move |event| {
             if !matches!(event, Event::Frame) {
                 println!("{:?}", event);
@@ -42,7 +41,12 @@ fn main() {
     // window2.set_visible(true);
     // window2.set_cursor_icon(picoview::MouseCursor::Default);
 
-    loop {
-        thread::sleep(Duration::from_millis(10));
-    }
+    window.post(Command::SetKeyboardInput(true));
+    window.post(Command::SetCursorIcon(MouseCursor::Move));
+
+    thread::sleep(Duration::from_millis(20000));
+
+    window.post(Command::Close);
+
+    thread::sleep(Duration::from_millis(2000));
 }

@@ -1,4 +1,4 @@
-use super::{event_loop::WM_USER_FRAME_TIMER, util::is_windows10_or_greater};
+use super::{util::is_windows10_or_greater, window_main::WM_USER_FRAME_TIMER};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
