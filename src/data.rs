@@ -1,8 +1,9 @@
+use crate::{GlConfig, GlContext, RawHandle, Window};
 use bitflags::bitflags;
-use raw_window_handle::RawWindowHandle;
-use std::path::PathBuf;
+use std::{fmt::Debug, path::PathBuf};
 
 #[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Hash)]
+#[repr(u8)]
 pub enum MouseCursor {
     #[default]
     Default,
@@ -62,6 +63,15 @@ bitflags! {
     }
 }
 
+bitflags! {
+    #[derive(Clone, Copy, Eq, PartialEq, Debug)]
+    pub struct Style: u16 {
+        const VISIBLE = 1 << 0;
+        const BORDER = 1 << 1;
+        const TRANSPARENT = 1 << 2;
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Point {
     pub x: f32,
@@ -70,8 +80,8 @@ pub struct Point {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Size {
-    pub width: f32,
-    pub height: f32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -207,71 +217,86 @@ pub enum Key {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Event<'a> {
+    WindowOpen,
     WindowFocus,
     WindowBlur,
     WindowClose,
+    WindowScale {
+        scale: f32,
+    },
 
-    MouseMove(Option<Point>),
-    MouseDown(MouseButton),
-    MouseUp(MouseButton),
-    MouseScroll { x: f32, y: f32 },
+    MouseMove {
+        cursor: Option<Point>,
+    },
+    MouseDown {
+        button: MouseButton,
+    },
+    MouseUp {
+        button: MouseButton,
+    },
+    MouseScroll {
+        x: f32,
+        y: f32,
+    },
 
-    KeyModifiers(Modifiers),
-    KeyChar(&'a str),
-    KeyDown(Key),
-    KeyUp(Key),
+    GestureRotate {
+        rotate: f32,
+    },
+    GestureZoom {
+        zoom: f32,
+    },
 
-    Frame,
+    KeyModifiers {
+        modifiers: Modifiers,
+    },
 
-    DragHover { files: &'a [PathBuf] },
-    DragAccept { files: &'a [PathBuf] },
+    KeyDown {
+        key: Key,
+    },
+    KeyUp {
+        key: Key,
+    },
+
+    WindowInvalidate {
+        top: u32,
+        left: u32,
+        bottom: u32,
+        right: u32,
+    },
+    WindowFrame {
+        gl: Option<&'a dyn GlContext>,
+    },
+
+    DragHover {
+        files: &'a [PathBuf],
+    },
+    DragAccept {
+        files: &'a [PathBuf],
+    },
     DragCancel,
-}
-
-pub enum Command {
-    SetCursorIcon(MouseCursor),
-    SetCursorPosition(Point),
-    SetSize(Size),
-    SetPosition(Point),
-    SetStyle(Style),
-    SetKeyboardInput(bool),
-    Close,
-}
-
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum Style {
-    Decorated,
-    Borderless,
-    BorderlessShadow,
-    Hidden,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum EventResponse {
-    Ignored,
+    Rejected,
     Captured,
-    AcceptDrop(DropOperation),
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum DropOperation {
-    None,
-    Copy,
-    Move,
-    Link,
-}
-
-unsafe impl Send for Options {}
 pub struct Options {
+    pub parent: Option<RawHandle>,
+    pub handler: EventHandler,
     pub style: Style,
-    pub parent: Option<RawWindowHandle>,
     pub size: Size,
     pub position: Option<Point>,
-    pub handler: Box<dyn FnMut(Event) -> EventResponse + Send>,
+    pub opengl: Option<GlConfig>,
 }
+
+pub type EventHandler = Box<dyn FnMut(Event, &mut Window) -> EventResponse + Send>;
 
 #[derive(Debug)]
 pub enum Error {
     PlatformError(String),
+    OpenGlError(String),
 }

@@ -1,5 +1,62 @@
 use crate::{Key, Modifiers};
+use std::{
+    os::unix::process::CommandExt,
+    process::{Command, Stdio},
+};
 use x11rb::protocol::xproto::KeyButMask;
+
+macro_rules! cstr {
+    ($str:literal) => {
+        #[allow(unused_unsafe)]
+        unsafe {
+            std::ffi::CStr::from_bytes_with_nul_unchecked(concat!($str, "\0").as_bytes())
+        }
+    };
+}
+
+pub(crate) use cstr;
+
+pub fn open_url(path: &str) -> bool {
+    if let Ok(()) = spawn_detached(Command::new("xdg-open").arg(&path)) {
+        return true;
+    }
+
+    if let Ok(()) = spawn_detached(Command::new("gio").args(&["open", &path])) {
+        return true;
+    }
+
+    if let Ok(()) = spawn_detached(Command::new("gnome-open").arg(&path)) {
+        return true;
+    }
+
+    if let Ok(()) = spawn_detached(Command::new("kde-open").arg(&path)) {
+        return true;
+    }
+
+    false
+}
+
+pub fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+
+    unsafe {
+        cmd.pre_exec(move || {
+            match libc::fork() {
+                -1 => return Err(std::io::Error::last_os_error()),
+                0 => (),
+                _ => libc::_exit(0),
+            }
+
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            Ok(())
+        });
+    }
+
+    cmd.spawn().map(|_| ())
+}
 
 pub fn hwcode2key(code: u8) -> Option<Key> {
     Some(match code {
@@ -127,8 +184,8 @@ pub fn keymask2mods(mods: KeyButMask) -> Modifiers {
         (KeyButMask::SHIFT, Modifiers::SHIFT),
         (KeyButMask::CONTROL, Modifiers::CTRL),
         (KeyButMask::MOD1, Modifiers::ALT),
-        (KeyButMask::MOD2, Modifiers::NUM_LOCK),
         (KeyButMask::MOD4, Modifiers::META),
+        (KeyButMask::MOD2, Modifiers::NUM_LOCK),
         (KeyButMask::LOCK, Modifiers::CAPS_LOCK),
     ];
 

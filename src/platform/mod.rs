@@ -1,21 +1,34 @@
-use crate::{
-    raw_window_handle::{RawDisplayHandle, RawWindowHandle},
-    Command, Error, Options,
-};
-
 #[cfg(target_os = "linux")]
 pub mod x11;
 #[cfg(target_os = "linux")]
-pub use x11::Window;
+pub use x11::*;
 
 #[cfg(target_os = "windows")]
 pub mod win;
 #[cfg(target_os = "windows")]
-pub use win::Window;
+pub use win::*;
 
-pub trait PlatformWindow: Send + Sync + Clone + Sized {
-    fn open(options: Options) -> Result<Self, Error>;
-    fn post(&self, command: Command);
-    fn raw_window_handle(&self) -> RawWindowHandle;
-    fn raw_display_handle(&self) -> RawDisplayHandle;
+#[cfg(target_os = "macos")]
+pub mod mac;
+#[cfg(target_os = "macos")]
+pub use mac::*;
+
+use crate::{MouseCursor, Point, RawHandle, Size};
+
+pub trait OsWindow {
+    fn close(&mut self);
+    fn handle(&self) -> RawHandle;
+
+    fn set_title(&mut self, title: &str);
+    fn set_cursor_icon(&mut self, icon: MouseCursor);
+    fn set_cursor_position(&mut self, pos: Point);
+    fn set_size(&mut self, size: Size);
+    fn set_position(&mut self, pos: Point);
+    fn set_visible(&mut self, visible: bool);
+    fn set_keyboard_input(&mut self, focus: bool);
+
+    fn open_url(&mut self, url: &str) -> bool;
+
+    fn get_clipboard_text(&mut self) -> Option<String>;
+    fn set_clipboard_text(&mut self, text: &str) -> bool;
 }
