@@ -35,15 +35,9 @@ impl RawHandle {
 }
 
 #[repr(transparent)]
-pub struct Window(dyn platform::OsWindow);
+pub struct Window<'a>(&'a mut dyn platform::OsWindow);
 
-impl Window {
-    pub(crate) fn from_inner(inner: &mut dyn platform::OsWindow) -> &mut Window {
-        unsafe { std::mem::transmute(inner) }
-    }
-}
-
-impl Window {
+impl<'a> Window<'a> {
     pub fn close(&mut self) {
         self.0.close();
     }

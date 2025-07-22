@@ -204,10 +204,7 @@ impl OsWindow {
         if let Some(gl) = self.gl_context.as_mut() {
             unsafe {
                 if gl.set_current(true) {
-                    (self.handler)(
-                        Event::WindowFrame { gl: Some(gl) },
-                        Window::from_inner(&mut self.inner),
-                    );
+                    (self.handler)(Event::WindowFrame { gl: Some(gl) }, Window(&mut self.inner));
                     gl.set_current(false);
                 } else {
                     self.send_event(Event::WindowFrame { gl: None });
@@ -368,7 +365,7 @@ impl OsWindow {
     }
 
     fn send_event(&mut self, e: Event) -> EventResponse {
-        (self.handler)(e, Window::from_inner(&mut self.inner))
+        (self.handler)(e, Window(&mut self.inner))
     }
 }
 

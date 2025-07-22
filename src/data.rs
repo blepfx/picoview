@@ -293,7 +293,7 @@ pub struct Options {
     pub opengl: Option<GlConfig>,
 }
 
-pub type EventHandler = Box<dyn FnMut(Event, &mut Window) -> EventResponse + Send>;
+pub type EventHandler = Box<dyn FnMut(Event, Window) -> EventResponse + Send>;
 
 #[derive(Debug)]
 pub enum Error {

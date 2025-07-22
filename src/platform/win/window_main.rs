@@ -207,7 +207,7 @@ impl WindowMain {
     fn send_event(&self, event: Event) -> EventResponse {
         if let Ok(mut handler) = self.handler.try_borrow_mut() {
             let mut handle = self;
-            handler(event, crate::Window::from_inner(&mut handle))
+            handler(event, crate::Window(&mut handle))
         } else {
             println!("what the fuck do we do here??");
             EventResponse::Rejected
