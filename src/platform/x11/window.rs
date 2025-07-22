@@ -1,7 +1,9 @@
 use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
-use crate::{Error, Event, EventResponse, MouseButton, MouseCursor, Options, Point, RawHandle, Window};
+use crate::{
+    Error, Event, EventResponse, MouseButton, MouseCursor, Options, Point, RawHandle, Window,
+};
 use crate::{EventHandler, Size};
 use crate::{Modifiers, Style};
 use std::mem::replace;
@@ -16,8 +18,8 @@ use x11rb::{
     protocol::{
         Event as XEvent,
         xproto::{
-            AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, CreateWindowAux, EventMask,
-            GrabMode, PropMode, WindowClass,
+            AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt,
+            CreateWindowAux, EventMask, GrabMode, PropMode, WindowClass,
         },
     },
     wrapper::ConnectionExt as ConnectionExt2,
@@ -51,7 +53,8 @@ impl OsWindow {
 
             let parent_window_id = match options.parent {
                 Some(RawHandle::X11 { window, .. }) => window,
-                _ => connection.default_root().root,
+                Some(_) => return Err(Error::PlatformError("invalid parent handle".into())),
+                None => connection.default_root().root,
             };
 
             let window_id = connection
@@ -201,7 +204,10 @@ impl OsWindow {
         if let Some(gl) = self.gl_context.as_mut() {
             unsafe {
                 if gl.set_current(true) {
-                    (self.handler)(Event::WindowFrame { gl: Some(gl) }, Window::from_inner(&mut self.inner));
+                    (self.handler)(
+                        Event::WindowFrame { gl: Some(gl) },
+                        Window::from_inner(&mut self.inner),
+                    );
                     gl.set_current(false);
                 } else {
                     self.send_event(Event::WindowFrame { gl: None });
@@ -219,7 +225,9 @@ impl OsWindow {
 
         match event {
             XEvent::ClientMessage(event) => {
-                if event.format == 32 && event.data.as_data32()[0] == self.inner.connection.atoms().WM_DELETE_WINDOW {
+                if event.format == 32
+                    && event.data.as_data32()[0] == self.inner.connection.atoms().WM_DELETE_WINDOW
+                {
                     self.send_event(Event::WindowClose);
                 }
             }
@@ -255,7 +263,9 @@ impl OsWindow {
                     _ => return,
                 };
 
-                self.send_event(Event::MouseMove { cursor: Some(position) });
+                self.send_event(Event::MouseMove {
+                    cursor: Some(position),
+                });
                 self.send_event(event);
             }
 
@@ -276,7 +286,9 @@ impl OsWindow {
                     _ => return,
                 };
 
-                self.send_event(Event::MouseMove { cursor: Some(position) });
+                self.send_event(Event::MouseMove {
+                    cursor: Some(position),
+                });
                 self.send_event(Event::MouseUp { button });
             }
 
@@ -372,7 +384,9 @@ impl crate::platform::OsWindow for OsWindowInner {
     }
 
     fn handle(&self) -> RawHandle {
-        RawHandle::X11 { window: self.window_id }
+        RawHandle::X11 {
+            window: self.window_id,
+        }
     }
 
     fn set_title(&mut self, title: &str) {
@@ -394,10 +408,10 @@ impl crate::platform::OsWindow for OsWindowInner {
 
         let xid = self.connection.load_cursor(cursor);
         if xid != 0 {
-            let _ = self
-                .connection
-                .xcb()
-                .change_window_attributes(self.window_id, &ChangeWindowAttributesAux::new().cursor(xid));
+            let _ = self.connection.xcb().change_window_attributes(
+                self.window_id,
+                &ChangeWindowAttributesAux::new().cursor(xid),
+            );
             self.connection.flush();
         }
     }
@@ -436,7 +450,11 @@ impl crate::platform::OsWindow for OsWindowInner {
         size_hints.base_size = Some((size.width as _, size.height as _));
         size_hints.max_size = size_hints.base_size;
         size_hints.min_size = size_hints.base_size;
-        let _ = size_hints.set(self.connection.xcb(), self.window_id, AtomEnum::WM_NORMAL_HINTS);
+        let _ = size_hints.set(
+            self.connection.xcb(),
+            self.window_id,
+            AtomEnum::WM_NORMAL_HINTS,
+        );
 
         self.connection.flush();
     }
@@ -448,7 +466,9 @@ impl crate::platform::OsWindow for OsWindowInner {
 
         let _ = self.connection.xcb().configure_window(
             self.window_id,
-            &ConfigureWindowAux::new().x(point.x as i32).y(point.y as i32),
+            &ConfigureWindowAux::new()
+                .x(point.x as i32)
+                .y(point.y as i32),
         );
         self.connection.flush();
         self.last_window_position = Some(point);
@@ -464,7 +484,9 @@ impl crate::platform::OsWindow for OsWindowInner {
             if let Some(point) = self.last_window_position {
                 let _ = self.connection.xcb().configure_window(
                     self.window_id,
-                    &ConfigureWindowAux::new().x(point.x as i32).y(point.y as i32),
+                    &ConfigureWindowAux::new()
+                        .x(point.x as i32)
+                        .y(point.y as i32),
                 );
             }
         } else {

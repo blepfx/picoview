@@ -1,12 +1,14 @@
 use super::{
     connection::Connection,
     gl::GlContext,
-    util::{assert, generate_guid, get_modifiers_async, hinstance, scan_code_to_key, to_widestring},
+    util::{
+        assert, generate_guid, get_modifiers_async, hinstance, scan_code_to_key, to_widestring,
+    },
     window_hook::WindowKeyboardHook,
 };
 use crate::{
-    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Options, Point, RawHandle, Size,
-    Style,
+    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Options, Point,
+    RawHandle, Size, Style,
     platform::win::util::{from_widestring, run_event_loop},
 };
 use std::{
@@ -21,24 +23,30 @@ use windows_sys::Win32::{
     Graphics::Gdi::ClientToScreen,
     System::{
         Com::CoInitialize,
-        DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData},
+        DataExchange::{
+            CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
+        },
         Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
         Ole::CF_UNICODETEXT,
     },
     UI::{
         Controls::WM_MOUSELEAVE,
-        Input::KeyboardAndMouse::{GetFocus, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
+        Input::KeyboardAndMouse::{
+            GetFocus, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+        },
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
-            AdjustWindowRectEx, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_EXSTYLE, GWL_STYLE,
-            GWLP_USERDATA, GetWindowLongPtrW, GetWindowLongW, HCURSOR, HTCLIENT, IDC_ARROW, LWA_ALPHA, LoadCursorW,
-            PostMessageW, RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes, SetWindowLongPtrW,
-            SetWindowPos, ShowCursor, USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA, WM_CLOSE, WM_DESTROY,
-            WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-            WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_USER,
-            WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_MINIMIZEBOX,
-            WS_POPUP, WS_SYSMENU, WS_VISIBLE, XBUTTON1, XBUTTON2,
+            AdjustWindowRectEx, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
+            GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetWindowLongPtrW, GetWindowLongW, HCURSOR,
+            HTCLIENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, PostMessageW, RegisterClassW,
+            SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes, SetWindowLongPtrW,
+            SetWindowPos, ShowCursor, USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA,
+            WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_USER, WM_XBUTTONDOWN,
+            WM_XBUTTONUP, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_LAYERED,
+            WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE, XBUTTON1, XBUTTON2,
         },
     },
 };
@@ -69,6 +77,12 @@ pub struct WindowMain {
 impl WindowMain {
     pub fn open(options: Options) -> Result<(), Error> {
         unsafe {
+            let parent = match option.parent {
+                Some(RawHandle::Win { hwnd }) => hwnd,
+                Some(_) => return Err(Error::PlatformError("invalid parent handle".into())),
+                None => null_mut(),
+            };
+
             let connection = Connection::get()?;
 
             let com_init = CoInitialize(null());
@@ -135,7 +149,7 @@ impl WindowMain {
                 options.position.map(|_| rect.top).unwrap_or(CW_USEDEFAULT),
                 rect.right - rect.left,
                 rect.bottom - rect.top,
-                options.parent.and_then(|x| x.as_win()).unwrap_or(null_mut()) as _,
+                parent as _,
                 null_mut(),
                 hinstance(),
                 null(),
@@ -175,7 +189,8 @@ impl WindowMain {
 
             event_loop.send_event(Event::WindowOpen);
             event_loop.send_event(Event::WindowScale {
-                scale: connection.try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
+                scale: connection.try_get_dpi_for_window(hwnd) as f32
+                    / USER_DEFAULT_SCREEN_DPI as f32,
             });
 
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(event_loop) as _);
@@ -218,11 +233,14 @@ impl<'a> crate::platform::OsWindow for &'a WindowMain {
     }
 
     fn handle(&self) -> RawHandle {
-        RawHandle::Win { hwnd: self.window_hwnd }
+        RawHandle::Win {
+            hwnd: self.window_hwnd,
+        }
     }
 
     fn set_cursor_icon(&mut self, cursor: MouseCursor) {
-        self.state_current_cursor.set(self.connection.load_cursor(cursor));
+        self.state_current_cursor
+            .set(self.connection.load_cursor(cursor));
     }
 
     fn set_cursor_position(&mut self, point: Point) {
@@ -290,7 +308,11 @@ impl<'a> crate::platform::OsWindow for &'a WindowMain {
                     | SWP_NOSIZE
                     | SWP_NOMOVE
                     | SWP_NOACTIVATE
-                    | if visible { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW },
+                    | if visible {
+                        SWP_SHOWWINDOW
+                    } else {
+                        SWP_HIDEWINDOW
+                    },
             );
         }
     }
@@ -374,7 +396,12 @@ impl<'a> crate::platform::OsWindow for &'a WindowMain {
     }
 }
 
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     unsafe {
         let window_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowMain;
         if window_ptr.is_null() {
@@ -419,7 +446,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     window.send_event(Event::MouseDown { button });
                 };
 
-                if window.state_mouse_capture.replace(window.state_mouse_capture.get() + 1) == 0 {
+                if window
+                    .state_mouse_capture
+                    .replace(window.state_mouse_capture.get() + 1)
+                    == 0
+                {
                     SetCapture(window.window_hwnd);
                 }
 
@@ -461,8 +492,16 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let wheel_delta = wheel_delta as f32 / WHEEL_DELTA as f32;
 
                 (*window_ptr).send_event(Event::MouseScroll {
-                    x: if msg == WM_MOUSEWHEEL { 0.0 } else { wheel_delta },
-                    y: if msg == WM_MOUSEWHEEL { wheel_delta } else { 0.0 },
+                    x: if msg == WM_MOUSEWHEEL {
+                        0.0
+                    } else {
+                        wheel_delta
+                    },
+                    y: if msg == WM_MOUSEWHEEL {
+                        wheel_delta
+                    } else {
+                        0.0
+                    },
                 });
                 0
             }
@@ -485,7 +524,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     y: ((lparam >> 16) & 0xFFFF) as i16 as f32,
                 };
 
-                (*window_ptr).send_event(Event::MouseMove { cursor: Some(point) });
+                (*window_ptr).send_event(Event::MouseMove {
+                    cursor: Some(point),
+                });
                 0
             }
 
