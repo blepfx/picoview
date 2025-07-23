@@ -1,6 +1,7 @@
 use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
+use crate::platform::OpenMode;
 use crate::{
     Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point,
     RawHandle, Size, Window, WindowBuilder,
@@ -25,9 +26,9 @@ use x11rb::{
     wrapper::ConnectionExt as ConnectionExt2,
 };
 
-unsafe impl Send for OsWindow {}
+unsafe impl Send for WindowImpl {}
 
-struct OsWindowInner {
+struct WindowInner {
     window_id: u32,
     connection: Arc<Connection>,
 
@@ -40,21 +41,23 @@ struct OsWindowInner {
     last_keyboard_focus: bool,
 }
 
-pub struct OsWindow {
-    inner: OsWindowInner,
+pub struct WindowImpl {
+    inner: WindowInner,
     handler: EventHandler,
     gl_context: Option<GlContext>,
 }
 
-impl OsWindow {
-    pub unsafe fn open(options: WindowBuilder) -> Result<(), Error> {
+impl WindowImpl {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
         unsafe {
             let connection = Connection::get()?;
 
-            let parent_window_id = match options.parent {
-                Some(RawHandle::X11 { window, .. }) => window,
-                Some(_) => return Err(Error::PlatformError("invalid parent handle".into())),
-                None => connection.default_root().root,
+            let parent_window_id = match mode {
+                OpenMode::Embedded(RawHandle::X11 { window, .. }) => window,
+                OpenMode::Embedded(_) => {
+                    return Err(Error::PlatformError("invalid parent handle".into()));
+                }
+                OpenMode::Blocking => connection.default_root().root,
             };
 
             let window_id = connection
@@ -168,7 +171,7 @@ impl OsWindow {
                 handler: options.handler,
                 gl_context,
 
-                inner: OsWindowInner {
+                inner: WindowInner {
                     window_id,
                     connection: connection.clone(),
 
@@ -196,7 +199,7 @@ impl OsWindow {
                 }),
             );
 
-            if options.parent.is_none() {
+            if matches!(mode, OpenMode::Blocking) {
                 let _ = when_closed.recv();
             }
 
@@ -389,7 +392,7 @@ impl OsWindow {
     }
 }
 
-impl crate::platform::OsWindow for OsWindowInner {
+impl crate::platform::OsWindow for WindowInner {
     fn close(&mut self) {
         if replace(&mut self.is_closed, true) {
             return;

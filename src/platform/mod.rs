@@ -15,6 +15,12 @@ pub use mac::*;
 
 use crate::{MouseCursor, Point, RawHandle, Size};
 
+#[derive(Clone, Copy)]
+pub enum OpenMode {
+    Blocking,
+    Embedded(RawHandle),
+}
+
 pub trait OsWindow {
     fn close(&mut self);
     fn handle(&self) -> RawHandle;

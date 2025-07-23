@@ -326,8 +326,6 @@ pub struct WindowBuilder {
     pub size: Size,
     pub position: Option<Point>,
     pub opengl: Option<GlConfig>,
-
-    pub(crate) parent: Option<RawHandle>,
 }
 
 impl WindowBuilder {
@@ -338,7 +336,6 @@ impl WindowBuilder {
             transparent: false,
             blur: false,
             title: String::new(),
-            parent: None,
             size: Size {
                 width: 200,
                 height: 200,
@@ -400,21 +397,11 @@ impl WindowBuilder {
     }
 
     pub fn open_blocking(self) -> Result<(), Error> {
-        unsafe {
-            platform::open_window(Self {
-                parent: None,
-                ..self
-            })
-        }
+        unsafe { platform::open_window(self, platform::OpenMode::Blocking) }
     }
 
     pub unsafe fn open_parented(self, parent: RawHandle) -> Result<(), Error> {
-        unsafe {
-            platform::open_window(Self {
-                parent: Some(parent),
-                ..self
-            })
-        }
+        unsafe { platform::open_window(self, platform::OpenMode::Embedded(parent)) }
     }
 }
 

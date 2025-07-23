@@ -9,7 +9,10 @@ use super::{
 use crate::{
     Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point,
     RawHandle, Size, WindowBuilder,
-    platform::win::util::{from_widestring, run_event_loop},
+    platform::{
+        OpenMode,
+        win::util::{from_widestring, run_event_loop},
+    },
 };
 use std::{
     cell::{Cell, RefCell},
@@ -75,12 +78,14 @@ pub struct WindowMain {
 }
 
 impl WindowMain {
-    pub unsafe fn open(options: WindowBuilder) -> Result<(), Error> {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
         unsafe {
             let parent = match options.parent {
-                Some(RawHandle::Win { hwnd }) => hwnd,
-                Some(_) => return Err(Error::PlatformError("invalid parent handle".into())),
-                None => null_mut(),
+                OpenMode::Embedded(RawHandle::Win { hwnd }) => hwnd,
+                OpenMode::Embedded(_) => {
+                    return Err(Error::PlatformError("invalid parent handle".into()));
+                }
+                OpenMode::Blocking => null_mut(),
             };
 
             let connection = Connection::get()?;
@@ -200,7 +205,7 @@ impl WindowMain {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(event_loop) as _);
             connection.register_pacer(hwnd);
 
-            if parent.is_null() {
+            if matches!(mode, OpenMode::Blocking) {
                 run_event_loop(null_mut());
             }
 
