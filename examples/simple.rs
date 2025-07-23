@@ -11,6 +11,7 @@ fn main() {
 
         move |event, mut window| {
             if matches!(event, Event::WindowOpen) {
+                window.set_keyboard_input(true);
                 window.set_cursor_icon(MouseCursor::Move);
                 window.set_title("picoview - simple");
                 println!("clipboard contents: {:?}", window.get_clipboard_text());

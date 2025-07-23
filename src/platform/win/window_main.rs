@@ -75,7 +75,7 @@ pub struct WindowMain {
 }
 
 impl WindowMain {
-    pub fn open(options: WindowBuilder) -> Result<(), Error> {
+    pub unsafe fn open(options: WindowBuilder) -> Result<(), Error> {
         unsafe {
             let parent = match option.parent {
                 Some(RawHandle::Win { hwnd }) => hwnd,

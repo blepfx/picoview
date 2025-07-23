@@ -47,7 +47,7 @@ pub struct OsWindow {
 }
 
 impl OsWindow {
-    pub fn open(options: WindowBuilder) -> Result<(), Error> {
+    pub unsafe fn open(options: WindowBuilder) -> Result<(), Error> {
         unsafe {
             let connection = Connection::get()?;
 

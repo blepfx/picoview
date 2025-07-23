@@ -306,6 +306,7 @@ pub enum Error {
 pub enum RawHandle {
     X11 { window: std::ffi::c_uint },
     Win { hwnd: *mut std::ffi::c_void },
+    Cocoa { ns_view: *mut std::ffi::c_void },
 }
 
 unsafe impl Send for RawHandle {}
@@ -399,17 +400,21 @@ impl WindowBuilder {
     }
 
     pub fn open_blocking(self) -> Result<(), Error> {
-        platform::open_window(Self {
-            parent: None,
-            ..self
-        })
+        unsafe {
+            platform::open_window(Self {
+                parent: None,
+                ..self
+            })
+        }
     }
 
-    pub fn open_parented(self, parent: RawHandle) -> Result<(), Error> {
-        platform::open_window(Self {
-            parent: Some(parent),
-            ..self
-        })
+    pub unsafe fn open_parented(self, parent: RawHandle) -> Result<(), Error> {
+        unsafe {
+            platform::open_window(Self {
+                parent: Some(parent),
+                ..self
+            })
+        }
     }
 }
 
