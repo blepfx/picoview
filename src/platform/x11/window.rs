@@ -106,6 +106,14 @@ impl OsWindow {
             size_hints.min_size = size_hints.base_size;
             let _ = size_hints.set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS);
 
+            let _ = connection.xcb().change_property8(
+                PropMode::REPLACE,
+                window_id,
+                AtomEnum::WM_NAME,
+                AtomEnum::STRING,
+                options.title.as_bytes(),
+            );
+
             if !options.decorations {
                 connection
                     .xcb()

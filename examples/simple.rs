@@ -1,4 +1,4 @@
-use picoview::{Event, MouseCursor, Point, Size, WindowBuilder};
+use picoview::{Event, EventResponse, MouseCursor, Point, Size, WindowBuilder};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -11,9 +11,7 @@ fn main() {
 
         move |event, mut window| {
             if matches!(event, Event::WindowOpen) {
-                window.set_keyboard_input(true);
                 window.set_cursor_icon(MouseCursor::Move);
-                window.set_title("picoview - simple");
                 println!("clipboard contents: {:?}", window.get_clipboard_text());
                 window.set_clipboard_text("delta");
             } else if matches!(event, Event::WindowFrame { .. }) {
@@ -29,6 +27,18 @@ fn main() {
                         width: 300,
                         height: 300,
                     });
+
+                    unsafe {
+                        WindowBuilder::new(|event, _| {
+                            if !matches!(event, Event::WindowFrame { .. }) {
+                                println!("child {:?}", event);
+                            }
+
+                            EventResponse::Captured
+                        })
+                        .open_parented(window.handle())
+                        .unwrap();
+                    }
                 }
 
                 if passed(15000) {
@@ -53,6 +63,7 @@ fn main() {
             picoview::EventResponse::Rejected
         }
     })
+    .with_title("picoview - simple")
     .with_size((200, 200))
     .open_blocking()
     .unwrap();

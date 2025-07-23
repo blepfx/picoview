@@ -13,16 +13,16 @@ use windows_sys::{
         System::{
             Com::CoCreateGuid,
             Diagnostics::Debug::{
-                FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
-                FormatMessageW,
+                FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
+                FORMAT_MESSAGE_IGNORE_INSERTS, FormatMessageW,
             },
             LibraryLoader::{GetProcAddress, LoadLibraryA},
             SystemServices::IMAGE_DOS_HEADER,
         },
         UI::{
             Input::KeyboardAndMouse::{
-                GetAsyncKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU, VK_NUMLOCK, VK_RWIN,
-                VK_SCROLL, VK_SHIFT,
+                GetAsyncKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU,
+                VK_NUMLOCK, VK_RWIN, VK_SCROLL, VK_SHIFT,
             },
             WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage},
         },
@@ -30,7 +30,10 @@ use windows_sys::{
     core::{GUID, PWSTR},
 };
 
-pub unsafe fn load_function_dynamic<A, R>(module: &str, function: &str) -> Option<unsafe fn(A) -> R> {
+pub unsafe fn load_function_dynamic<A, R>(
+    module: &str,
+    function: &str,
+) -> Option<unsafe fn(A) -> R> {
     unsafe {
         let lib = LoadLibraryA(CString::new(module).unwrap().as_ptr() as *const _);
         if lib.is_null() {
@@ -68,7 +71,7 @@ pub unsafe fn run_event_loop(hwnd: HWND) {
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
         loop {
-            if GetMessageW(&mut msg, hwnd, 0, 0) == 0 {
+            if GetMessageW(&mut msg, hwnd, 0, 0) == -1 {
                 break;
             }
 
@@ -111,7 +114,9 @@ pub fn assert(assert: bool, message: &'static str) -> Result<(), crate::Error> {
             let error = GetLastError();
             let mut buffer = null_mut::<u16>();
             let chars = FormatMessageW(
-                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                FORMAT_MESSAGE_ALLOCATE_BUFFER
+                    | FORMAT_MESSAGE_FROM_SYSTEM
+                    | FORMAT_MESSAGE_IGNORE_INSERTS,
                 null_mut(),
                 error,
                 0,
@@ -277,11 +282,13 @@ pub unsafe fn get_modifiers_async() -> Modifiers {
         (VK_SCROLL, Modifiers::SCROLL_LOCK),
     ];
 
-    MODIFIERS.iter().fold(Modifiers::empty(), |state, (key, mods)| unsafe {
-        if GetAsyncKeyState(*key as _) != 0 {
-            state | *mods
-        } else {
-            state
-        }
-    })
+    MODIFIERS
+        .iter()
+        .fold(Modifiers::empty(), |state, (key, mods)| unsafe {
+            if GetAsyncKeyState(*key as _) != 0 {
+                state | *mods
+            } else {
+                state
+            }
+        })
 }

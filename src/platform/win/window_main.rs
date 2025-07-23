@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point,
-    RawHandle, Size, Style, WindowBuilder,
+    RawHandle, Size, WindowBuilder,
     platform::win::util::{from_widestring, run_event_loop},
 };
 use std::{
@@ -41,12 +41,12 @@ use windows_sys::Win32::{
             HTCLIENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, PostMessageW, RegisterClassW,
             SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
             SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes, SetWindowLongPtrW,
-            SetWindowPos, ShowCursor, USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA,
-            WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-            WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_USER, WM_XBUTTONDOWN,
-            WM_XBUTTONUP, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_LAYERED,
-            WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE, XBUTTON1, XBUTTON2,
+            SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI, UnregisterClassW,
+            WHEEL_DELTA, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+            WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_USER,
+            WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+            WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE, XBUTTON1, XBUTTON2,
         },
     },
 };
@@ -77,7 +77,7 @@ pub struct WindowMain {
 impl WindowMain {
     pub unsafe fn open(options: WindowBuilder) -> Result<(), Error> {
         unsafe {
-            let parent = match option.parent {
+            let parent = match options.parent {
                 Some(RawHandle::Win { hwnd }) => hwnd,
                 Some(_) => return Err(Error::PlatformError("invalid parent handle".into())),
                 None => null_mut(),
@@ -85,12 +85,16 @@ impl WindowMain {
 
             let connection = Connection::get()?;
 
-            let com_init = CoInitialize(null());
-            assert(com_init == 0, "com sta init")?;
+            if parent.is_null() {
+                let com_init = CoInitialize(null());
+                assert(com_init == 0, "com sta init")?;
+            }
 
             connection.try_set_thread_dpi_awareness_monitor_aware();
 
             let class_name = to_widestring(&format!("picoview-{}", generate_guid()));
+            let window_title = to_widestring(&options.title);
+
             let window_class = RegisterClassW(&WNDCLASSW {
                 style: 0,
                 lpfnWndProc: Some(wnd_proc),
@@ -143,7 +147,7 @@ impl WindowMain {
             let hwnd = CreateWindowExW(
                 dwexstyle,
                 window_class as _,
-                null(),
+                window_title.as_ptr() as _,
                 dwstyle,
                 options.position.map(|_| rect.left).unwrap_or(CW_USEDEFAULT),
                 options.position.map(|_| rect.top).unwrap_or(CW_USEDEFAULT),
@@ -196,7 +200,7 @@ impl WindowMain {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(event_loop) as _);
             connection.register_pacer(hwnd);
 
-            if options.parent.is_none() {
+            if parent.is_null() {
                 run_event_loop(null_mut());
             }
 
@@ -209,7 +213,6 @@ impl WindowMain {
             let mut handle = self;
             handler(event, crate::Window(&mut handle))
         } else {
-            println!("what the fuck do we do here??");
             EventResponse::Rejected
         }
     }
@@ -235,6 +238,13 @@ impl<'a> crate::platform::OsWindow for &'a WindowMain {
     fn handle(&self) -> RawHandle {
         RawHandle::Win {
             hwnd: self.window_hwnd,
+        }
+    }
+
+    fn set_title(&mut self, title: &str) {
+        unsafe {
+            let window_title = to_widestring(title);
+            SetWindowTextW(self.window_hwnd, window_title.as_ptr() as _);
         }
     }
 

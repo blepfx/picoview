@@ -5,15 +5,19 @@ use super::{
 use crate::{Error, MouseCursor};
 use std::{
     ptr::null_mut,
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        Arc, Mutex, Weak,
+        mpsc::{Receiver, Sender, TryRecvError, channel},
+    },
     thread::spawn,
 };
 use windows_sys::{
     Win32::{
         Foundation::HWND,
         UI::WindowsAndMessaging::{
-            HCURSOR, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW,
-            IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, LoadCursorW, SendMessageW, USER_DEFAULT_SCREEN_DPI,
+            HCURSOR, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
+            IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, LoadCursorW,
+            SendMessageW, USER_DEFAULT_SCREEN_DPI,
         },
     },
     core::PCWSTR,
@@ -23,7 +27,8 @@ unsafe impl Send for Connection {}
 unsafe impl Sync for Connection {}
 pub struct Connection {
     cursor_cache: CursorCache,
-    window_pacer: Mutex<Vec<HWND>>,
+
+    loop_sender: Sender<(usize, bool)>,
 
     dl_set_thread_dpi_awareness_context: Option<unsafe fn(usize) -> usize>,
     dl_get_dpi_for_window: Option<unsafe fn(HWND) -> u32>,
@@ -67,21 +72,21 @@ impl Connection {
     }
 
     pub fn register_pacer(&self, window: HWND) {
-        self.window_pacer.lock().unwrap().push(window);
+        let _ = self.loop_sender.send((window as usize, true));
     }
 
     pub fn unregister_pacer(&self, window: HWND) {
-        let mut pacers = self.window_pacer.lock().unwrap();
-        if let Some(index) = pacers.iter().position(|x| *x == window) {
-            pacers.swap_remove(index);
-        }
+        let _ = self.loop_sender.send((window as usize, false));
     }
 
     fn create() -> Result<Arc<Self>, Error> {
         unsafe {
+            let (loop_sender, loop_receiver) = channel();
+
             let conn = Arc::new(Self {
                 cursor_cache: CursorCache::load(),
-                window_pacer: Mutex::new(vec![]),
+                loop_sender,
+
                 dl_set_thread_dpi_awareness_context: load_function_dynamic(
                     "user32.dll",
                     "SetThreadDpiAwarenessContext",
@@ -89,22 +94,34 @@ impl Connection {
                 dl_get_dpi_for_window: load_function_dynamic("user32.dll", "GetDpiForWindow"),
             });
 
-            run_pacer_loop(Arc::downgrade(&conn));
+            run_pacer_loop(loop_receiver);
             Ok(conn)
         }
     }
 }
 
-fn run_pacer_loop(connection: Weak<Connection>) {
+fn run_pacer_loop(loop_receiver: Receiver<(usize, bool)>) {
+    let mut pacers = vec![];
+
     spawn(move || {
-        while let Some(connection) = connection.upgrade() {
-            {
-                let pacers = connection.window_pacer.lock().unwrap();
-                for hwnd in pacers.iter() {
-                    let hwnd = *hwnd as HWND;
-                    unsafe {
-                        SendMessageW(hwnd, WM_USER_FRAME_PACER, 0, 0);
+        loop {
+            match loop_receiver.try_recv() {
+                Ok((hwnd, true)) => {
+                    pacers.push(hwnd);
+                }
+                Ok((hwnd, false)) => {
+                    if let Some(index) = pacers.iter().position(|x| *x == hwnd) {
+                        pacers.swap_remove(index);
                     }
+                }
+                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => {}
+            }
+
+            for hwnd in pacers.iter() {
+                let hwnd = *hwnd as HWND;
+                unsafe {
+                    SendMessageW(hwnd, WM_USER_FRAME_PACER, 0, 0);
                 }
             }
 
