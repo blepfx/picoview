@@ -7,8 +7,8 @@ use super::{
     window_hook::WindowKeyboardHook,
 };
 use crate::{
-    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Options, Point,
-    RawHandle, Size, Style,
+    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point,
+    RawHandle, Size, Style, WindowBuilder,
     platform::win::util::{from_widestring, run_event_loop},
 };
 use std::{
@@ -75,7 +75,7 @@ pub struct WindowMain {
 }
 
 impl WindowMain {
-    pub fn open(options: Options) -> Result<(), Error> {
+    pub fn open(options: WindowBuilder) -> Result<(), Error> {
         unsafe {
             let parent = match option.parent {
                 Some(RawHandle::Win { hwnd }) => hwnd,
@@ -109,17 +109,17 @@ impl WindowMain {
                 let mut dwstyle = 0;
                 let mut dwexstyle = 0;
 
-                if options.style.contains(Style::VISIBLE) {
+                if options.visible {
                     dwstyle |= WS_VISIBLE;
                 }
 
-                if options.style.contains(Style::BORDER) {
+                if options.decorations {
                     dwstyle |= WS_POPUP | WS_CAPTION | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX;
                 } else if options.parent.is_none() {
                     dwstyle |= WS_POPUP;
                 }
 
-                if options.style.contains(Style::TRANSPARENT) {
+                if options.transparent {
                     dwexstyle |= WS_EX_LAYERED;
                 }
 
@@ -156,7 +156,7 @@ impl WindowMain {
             );
             assert(!hwnd.is_null(), "main window create")?;
 
-            if options.style.contains(Style::TRANSPARENT) {
+            if options.transparent {
                 SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
             }
 

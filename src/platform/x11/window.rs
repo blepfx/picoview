@@ -2,10 +2,9 @@ use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
 use crate::{
-    Error, Event, EventResponse, MouseButton, MouseCursor, Options, Point, RawHandle, Window,
+    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point,
+    RawHandle, Size, Window, WindowBuilder,
 };
-use crate::{EventHandler, Size};
-use crate::{Modifiers, Style};
 use std::mem::replace;
 use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, sync_channel};
@@ -13,6 +12,7 @@ use x11rb::connection::Connection as XConnection;
 use x11rb::properties::WmSizeHints;
 use x11rb::protocol::present::CompleteKind;
 use x11rb::protocol::present::{self, ConnectionExt as ConnectionExt3};
+use x11rb::protocol::xproto::KeyButMask;
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
     protocol::{
@@ -47,7 +47,7 @@ pub struct OsWindow {
 }
 
 impl OsWindow {
-    pub fn open(options: Options) -> Result<(), Error> {
+    pub fn open(options: WindowBuilder) -> Result<(), Error> {
         unsafe {
             let connection = Connection::get()?;
 
@@ -106,7 +106,7 @@ impl OsWindow {
             size_hints.min_size = size_hints.base_size;
             let _ = size_hints.set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS);
 
-            if !options.style.contains(Style::BORDER) {
+            if !options.decorations {
                 connection
                     .xcb()
                     .change_property32(
@@ -119,7 +119,7 @@ impl OsWindow {
                     .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
             }
 
-            if options.style.contains(Style::VISIBLE) {
+            if options.visible {
                 connection
                     .xcb()
                     .map_window(window_id)
@@ -315,7 +315,19 @@ impl OsWindow {
                 });
             }
 
-            XEvent::LeaveNotify(_) => {
+            XEvent::LeaveNotify(e) => {
+                let grabbed = e.state.intersects(
+                    KeyButMask::BUTTON1
+                        | KeyButMask::BUTTON2
+                        | KeyButMask::BUTTON3
+                        | KeyButMask::BUTTON4
+                        | KeyButMask::BUTTON5,
+                );
+
+                if grabbed {
+                    return;
+                }
+
                 self.send_event(Event::MouseMove { cursor: None });
             }
 
