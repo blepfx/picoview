@@ -1,4 +1,4 @@
-use crate::{Key, MouseCursor};
+use crate::{Key, Modifiers, MouseCursor};
 use objc2::runtime::ProtocolObject;
 use objc2::sel;
 use objc2::{
@@ -7,7 +7,8 @@ use objc2::{
     runtime::{MessageReceiver, Sel},
 };
 use objc2_app_kit::{
-    NSCursor, NSHorizontalDirections, NSPasteboard, NSPasteboardTypeString, NSVerticalDirections,
+    NSCursor, NSEventModifierFlags, NSHorizontalDirections, NSPasteboard, NSPasteboardTypeString,
+    NSVerticalDirections,
 };
 use objc2_foundation::{NSArray, NSString};
 use std::os::unix::process::CommandExt;
@@ -162,6 +163,25 @@ pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
             MouseCursor::ZoomOut => NSCursor::zoomOutCursor(),
         })
     }
+}
+
+pub fn flags2mods(flags: NSEventModifierFlags) -> Modifiers {
+    const MODMAP: &[(NSEventModifierFlags, Modifiers)] = &[
+        (NSEventModifierFlags::CapsLock, Modifiers::CAPS_LOCK),
+        (NSEventModifierFlags::Command, Modifiers::META),
+        (NSEventModifierFlags::Control, Modifiers::CTRL),
+        (NSEventModifierFlags::Option, Modifiers::ALT),
+        (NSEventModifierFlags::Shift, Modifiers::SHIFT),
+    ];
+
+    let mut modifiers = Modifiers::empty();
+    for (flag, modifier) in MODMAP {
+        if flags.contains(*flag) {
+            modifiers.insert(*modifier);
+        }
+    }
+
+    modifiers
 }
 
 pub fn keycode2key(key: u16) -> Option<Key> {
