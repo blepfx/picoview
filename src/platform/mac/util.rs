@@ -2,12 +2,13 @@ use crate::{Key, MouseCursor};
 use objc2::runtime::ProtocolObject;
 use objc2::sel;
 use objc2::{
-    msg_send,
-    rc::{autoreleasepool, Retained},
+    ClassType, msg_send,
+    rc::{Retained, autoreleasepool},
     runtime::{MessageReceiver, Sel},
-    ClassType,
 };
-use objc2_app_kit::{NSCursor, NSHorizontalDirections, NSPasteboard, NSPasteboardTypeString, NSVerticalDirections};
+use objc2_app_kit::{
+    NSCursor, NSHorizontalDirections, NSPasteboard, NSPasteboardTypeString, NSVerticalDirections,
+};
 use objc2_foundation::{NSArray, NSString};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -56,7 +57,8 @@ pub fn random_id() -> u32 {
 pub fn get_clipboard_text() -> Option<String> {
     unsafe {
         autoreleasepool(|_| {
-            let pasteboard: Option<Retained<NSPasteboard>> = msg_send![NSPasteboard::class(), generalPasteboard];
+            let pasteboard: Option<Retained<NSPasteboard>> =
+                msg_send![NSPasteboard::class(), generalPasteboard];
             let pasteboard = pasteboard?;
             let contents = pasteboard.pasteboardItems()?;
 
@@ -73,20 +75,25 @@ pub fn get_clipboard_text() -> Option<String> {
 
 pub fn set_clipboard_text(text: &str) -> bool {
     unsafe {
-        let pasteboard: Option<Retained<NSPasteboard>> = msg_send![NSPasteboard::class(), generalPasteboard];
+        let pasteboard: Option<Retained<NSPasteboard>> =
+            msg_send![NSPasteboard::class(), generalPasteboard];
         let pasteboard = match pasteboard {
             Some(pb) => pb,
             None => return false,
         };
 
         pasteboard.clearContents();
-        let string_array = NSArray::from_retained_slice(&[ProtocolObject::from_retained(NSString::from_str(text))]);
+        let string_array = NSArray::from_retained_slice(&[ProtocolObject::from_retained(
+            NSString::from_str(text),
+        )]);
         pasteboard.writeObjects(&string_array)
     }
 }
 
 pub fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     unsafe {
         cmd.pre_exec(move || {
@@ -114,6 +121,7 @@ pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
             MouseCursor::Default => NSCursor::arrowCursor(),
             MouseCursor::Help => try_get_cursor(sel!(_helpCursor)),
             MouseCursor::Working => try_get_cursor(sel!(_waitCursor)),
+            MouseCursor::PtrWorking => try_get_cursor(sel!(_busyButClickableCursor)),
             MouseCursor::Cell => NSCursor::crosshairCursor(),
             MouseCursor::Crosshair => NSCursor::crosshairCursor(),
             MouseCursor::Text => NSCursor::IBeamCursor(),
@@ -122,20 +130,29 @@ pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
             MouseCursor::Copy => NSCursor::dragCopyCursor(),
             MouseCursor::Move => NSCursor::openHandCursor(),
             MouseCursor::NotAllowed => NSCursor::operationNotAllowedCursor(),
-            MouseCursor::PtrWorking => try_get_cursor(sel!(_waitCursor)),
             MouseCursor::PtrNotAllowed => NSCursor::operationNotAllowedCursor(),
             MouseCursor::Hand => NSCursor::openHandCursor(),
             MouseCursor::HandGrabbing => NSCursor::closedHandCursor(),
-            MouseCursor::EResize => NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::Right),
+            MouseCursor::EResize => {
+                NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::Right)
+            }
             MouseCursor::NResize => NSCursor::rowResizeCursorInDirections(NSVerticalDirections::Up),
             MouseCursor::NeResize => try_get_cursor(sel!(_windowResizeNorthEastCursor)),
             MouseCursor::NwResize => try_get_cursor(sel!(_windowResizeNorthWestCursor)),
-            MouseCursor::SResize => NSCursor::rowResizeCursorInDirections(NSVerticalDirections::Down),
+            MouseCursor::SResize => {
+                NSCursor::rowResizeCursorInDirections(NSVerticalDirections::Down)
+            }
             MouseCursor::SeResize => try_get_cursor(sel!(_windowResizeSouthEastCursor)),
             MouseCursor::SwResize => try_get_cursor(sel!(_windowResizeSouthWestCursor)),
-            MouseCursor::WResize => NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::Left),
-            MouseCursor::EwResize => NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::All),
-            MouseCursor::NsResize => NSCursor::rowResizeCursorInDirections(NSVerticalDirections::All),
+            MouseCursor::WResize => {
+                NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::Left)
+            }
+            MouseCursor::EwResize => {
+                NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::All)
+            }
+            MouseCursor::NsResize => {
+                NSCursor::rowResizeCursorInDirections(NSVerticalDirections::All)
+            }
             MouseCursor::NeswResize => try_get_cursor(sel!(_windowResizeNorthEastSouthWestCursor)),
             MouseCursor::NwseResize => try_get_cursor(sel!(_windowResizeNorthWestSouthEastCursor)),
             MouseCursor::ColResize => NSCursor::columnResizeCursor(),
