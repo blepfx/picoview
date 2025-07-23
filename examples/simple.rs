@@ -17,8 +17,8 @@ fn main() {
                 window.set_clipboard_text("delta");
             } else if matches!(event, Event::WindowFrame { .. }) {
                 let passed = |d| {
-                    start.elapsed() > Duration::from_millis(d)
-                        && (last - start) <= Duration::from_millis(d)
+                    start.elapsed() >= Duration::from_millis(d)
+                        && (last - start) < Duration::from_millis(d)
                 };
 
                 if passed(5000) {

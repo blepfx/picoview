@@ -433,16 +433,16 @@ impl<'a> Window<'a> {
         self.0.set_cursor_icon(icon);
     }
 
-    pub fn set_cursor_position(&mut self, pos: Point) {
-        self.0.set_cursor_position(pos);
+    pub fn set_cursor_position(&mut self, pos: impl Into<Point>) {
+        self.0.set_cursor_position(pos.into());
     }
 
-    pub fn set_size(&mut self, size: Size) {
-        self.0.set_size(size);
+    pub fn set_size(&mut self, size: impl Into<Size>) {
+        self.0.set_size(size.into());
     }
 
-    pub fn set_position(&mut self, pos: Point) {
-        self.0.set_position(pos);
+    pub fn set_position(&mut self, pos: impl Into<Point>) {
+        self.0.set_position(pos.into());
     }
 
     pub fn set_visible(&mut self, visible: bool) {
