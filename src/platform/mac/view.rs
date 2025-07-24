@@ -8,7 +8,7 @@ use crate::{
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{ProtocolObject, Sel};
-use objc2::{AllocAnyThread, MainThreadMarker};
+use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2::{
     ClassType, Encoding, Message, RefEncode,
     declare::ClassBuilder,
@@ -18,10 +18,14 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSCursor, NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen,
-    NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSApp, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor, NSDragOperation,
+    NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSInvocationOperation, NSOperationQueue, NSPoint, NSRect, NSSize};
+use objc2_foundation::{
+    NSArray, NSAutoreleasePool, NSInvocationOperation, NSOperationQueue, NSPoint, NSRect, NSSize,
+    NSString,
+};
 use std::cell::{Cell, RefCell};
 use std::{
     ffi::{CString, c_void},
@@ -40,6 +44,9 @@ struct OsWindowViewInner {
     event_handler: RefCell<EventHandler>,
     input_focus: Cell<bool>,
     current_cursor: Cell<MouseCursor>,
+
+    is_embedded: bool,
+    is_closed: Cell<bool>,
 }
 
 unsafe impl RefEncode for OsWindowView {
@@ -50,13 +57,86 @@ unsafe impl Message for OsWindowView {}
 pub struct OsWindowClass(&'static AnyClass);
 
 impl OsWindowView {
-    pub unsafe fn open(options: WindowBuilder) -> Result<(), Error> {
-        let parent_window_view = match options.parent {
-            Some(RawHandle::Cocoa { ns_view }) => Some(ns_view),
-            Some(_) => return Err(Error::PlatformError("invalid parent handle".into())),
-            None => None,
-        };
+    pub unsafe fn open_blocking(options: WindowBuilder) -> Result<(), Error> {
+        unsafe {
+            let main_thread = MainThreadMarker::new()
+                .ok_or_else(|| Error::PlatformError("not in main thread".into()))?;
 
+            let pool = NSAutoreleasePool::new();
+            let app = NSApp(main_thread);
+            app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+
+            let window = Self::create_window(&options, main_thread)?;
+            let view = Self::create_view(options, false)?;
+
+            window.setContentView(Some(&view));
+
+            pool.drain();
+            app.run();
+
+            Ok(())
+        }
+    }
+
+    pub unsafe fn open_embedded(options: WindowBuilder, parent: RawHandle) -> Result<(), Error> {
+        unsafe {
+            let parent_view = match parent {
+                RawHandle::Cocoa { ns_view } => &*(ns_view as *mut NSView),
+                _ => return Err(Error::PlatformError("invalid parent handle".into())),
+            };
+
+            let pool = NSAutoreleasePool::new();
+            let view = Self::create_view(options, true)?;
+
+            parent_view.addSubview(&view);
+            pool.drain();
+
+            Ok(())
+        }
+    }
+
+    unsafe fn create_window(
+        options: &WindowBuilder,
+        main_thread: MainThreadMarker,
+    ) -> Result<Retained<NSWindow>, Error> {
+        unsafe {
+            let rect = NSRect::new(
+                NSPoint::new(
+                    options.position.map(|x| x.x).unwrap_or(0.0) as f64,
+                    options.position.map(|x| x.y).unwrap_or(0.0) as f64,
+                ),
+                NSSize::new(options.size.width as f64, options.size.height as f64),
+            );
+
+            let ns_window = NSWindow::alloc(main_thread);
+            let ns_window = NSWindow::initWithContentRect_styleMask_backing_defer(
+                ns_window,
+                rect,
+                NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable,
+                NSBackingStoreType::Buffered,
+                false,
+            );
+
+            if options.position.is_none() {
+                ns_window.center();
+            }
+
+            if options.visible {
+                ns_window.makeKeyAndOrderFront(None);
+            }
+
+            ns_window.setTitle(&NSString::from_str(&options.title));
+
+            Ok(ns_window)
+        }
+    }
+
+    unsafe fn create_view(
+        options: WindowBuilder,
+        is_embedded: bool,
+    ) -> Result<Retained<Self>, Error> {
         let class = OsWindowClass::register_class()?;
 
         let rect = NSRect::new(
@@ -89,11 +169,6 @@ impl OsWindowView {
             view.addTrackingArea(&tracking_area);
             view.registerForDraggedTypes(&dragged_types);
 
-            if let Some(parent_view) = parent_window_view {
-                let parent_view = &*(parent_view as *const NSView);
-                parent_view.addSubview(&view);
-            }
-
             view
         };
 
@@ -113,9 +188,11 @@ impl OsWindowView {
             event_handler: RefCell::new(options.handler),
             input_focus: Cell::new(false),
             current_cursor: Cell::new(MouseCursor::Default),
+            is_closed: Cell::new(false),
+            is_embedded,
         }));
 
-        Ok(())
+        Ok(view)
     }
 
     fn has_input_focus(&self) -> bool {
@@ -356,7 +433,9 @@ impl<'a> OsWindow for &'a OsWindowView {
     }
 
     fn set_title(&mut self, title: &str) {
-        let _ = title; //TODO: skdfjkld
+        if let Some(window) = self.window() {
+            window.setTitle(&NSString::from_str(title));
+        }
     }
 
     fn set_cursor_icon(&mut self, cursor: MouseCursor) {
