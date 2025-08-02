@@ -13,7 +13,8 @@ use x11_dl::xlib;
 const GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20B2;
 const CONTEXT_ES2_PROFILE_BIT_EXT: i32 = 0x00000004;
 
-type GlXSwapIntervalEXT = unsafe extern "C" fn(dpy: *mut xlib::Display, drawable: glx::GLXDrawable, interval: i32);
+type GlXSwapIntervalEXT =
+    unsafe extern "C" fn(dpy: *mut xlib::Display, drawable: glx::GLXDrawable, interval: i32);
 type GlXCreateContextAttribsARB = unsafe extern "C" fn(
     dpy: *mut xlib::Display,
     fbc: glx::GLXFBConfig,
@@ -31,17 +32,25 @@ pub struct GlContext {
 
 impl GlContext {
     #[allow(non_snake_case)]
-    pub unsafe fn new(connection: Arc<Connection>, window: c_ulong, config: GlConfig) -> Result<GlContext, Error> {
+    pub unsafe fn new(
+        connection: Arc<Connection>,
+        window: c_ulong,
+        config: GlConfig,
+    ) -> Result<GlContext, Error> {
         unsafe {
             let lib_glx = glx::Glx::open().map_err(|e| Error::OpenGlError(e.to_string()))?;
 
             let (version, extensions) = {
                 let (mut major, mut minor) = (0, 0);
-                if (lib_glx.glXQueryVersion)(connection.display(), &mut major, &mut minor) == 0 {
+                if (lib_glx.glXQueryVersion)(connection.raw_display(), &mut major, &mut minor) == 0
+                {
                     return Err(Error::OpenGlError("glXQueryVersion failed".into()));
                 }
 
-                let extensions = (lib_glx.glXGetClientString)(connection.display(), glx::GLX_EXTENSIONS as i32);
+                let extensions = (lib_glx.glXGetClientString)(
+                    connection.raw_display(),
+                    glx::GLX_EXTENSIONS as i32,
+                );
                 let extensions = if extensions.is_null() {
                     HashSet::new()
                 } else {
@@ -63,8 +72,8 @@ impl GlContext {
                 || extensions.contains("GLX_SGI_swap_control")
                 || extensions.contains("GLX_MESA_swap_control");
             let ext_multisample = version >= (1, 4) || extensions.contains("GLX_ARB_multisample");
-            let ext_framebuffer_srgb =
-                extensions.contains("GLX_ARB_framebuffer_sRGB") || extensions.contains("GLX_EXT_framebuffer_sRGB");
+            let ext_framebuffer_srgb = extensions.contains("GLX_ARB_framebuffer_sRGB")
+                || extensions.contains("GLX_EXT_framebuffer_sRGB");
 
             let (fb_config, fb_visual) = {
                 let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
@@ -108,15 +117,17 @@ impl GlContext {
                 }
 
                 if config.debug {
-                    fb_attribs
-                        .extend_from_slice(&[glx::arb::GLX_CONTEXT_FLAGS_ARB, glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB]);
+                    fb_attribs.extend_from_slice(&[
+                        glx::arb::GLX_CONTEXT_FLAGS_ARB,
+                        glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB,
+                    ]);
                 }
 
                 fb_attribs.push(0);
 
                 let mut n_configs = 0;
                 let fb_config = (lib_glx.glXChooseFBConfig)(
-                    connection.display(),
+                    connection.raw_display(),
                     connection.default_screen_index(),
                     fb_attribs.as_ptr(),
                     &mut n_configs,
@@ -127,7 +138,8 @@ impl GlContext {
                 }
 
                 let fb_config = *fb_config;
-                let fb_visual = (lib_glx.glXGetVisualFromFBConfig)(connection.display(), fb_config);
+                let fb_visual =
+                    (lib_glx.glXGetVisualFromFBConfig)(connection.raw_display(), fb_config);
                 if fb_visual.is_null() {
                     return Err(Error::OpenGlError("no matching config".into()));
                 }
@@ -137,9 +149,10 @@ impl GlContext {
                 (fb_config, fb_visual)
             };
 
-            let glXCreateContextAttribsARB =
-                (lib_glx.glXGetProcAddress)(cstr!("glXCreateContextAttribsARB").as_ptr() as *const _)
-                    .map(|addr| std::mem::transmute::<_, GlXCreateContextAttribsARB>(addr));
+            let glXCreateContextAttribsARB = (lib_glx.glXGetProcAddress)(
+                cstr!("glXCreateContextAttribsARB").as_ptr() as *const _,
+            )
+            .map(|addr| std::mem::transmute::<_, GlXCreateContextAttribsARB>(addr));
 
             let context = if let Some(glXCreateContextAttribsARB) = glXCreateContextAttribsARB {
                 #[rustfmt::skip]
@@ -166,14 +179,19 @@ impl GlContext {
             };
 
                 glXCreateContextAttribsARB(
-                    connection.display(),
+                    connection.raw_display(),
                     fb_config,
                     std::ptr::null_mut(),
                     1,
                     ctx_attribs.as_ptr(),
                 )
             } else {
-                (lib_glx.glXCreateContext)(connection.display(), fb_visual, std::ptr::null_mut(), 1)
+                (lib_glx.glXCreateContext)(
+                    connection.raw_display(),
+                    fb_visual,
+                    std::ptr::null_mut(),
+                    1,
+                )
             };
 
             check_error(&connection)?;
@@ -183,13 +201,14 @@ impl GlContext {
             }
 
             if ext_swap_control {
-                let glXSwapIntervalEXT = (lib_glx.glXGetProcAddress)(cstr!("glXSwapIntervalEXT").as_ptr() as *const _)
-                    .map(|addr| std::mem::transmute::<_, GlXSwapIntervalEXT>(addr));
+                let glXSwapIntervalEXT =
+                    (lib_glx.glXGetProcAddress)(cstr!("glXSwapIntervalEXT").as_ptr() as *const _)
+                        .map(|addr| std::mem::transmute::<_, GlXSwapIntervalEXT>(addr));
 
                 if let Some(glXSwapIntervalEXT) = glXSwapIntervalEXT {
-                    if (lib_glx.glXMakeCurrent)(connection.display(), window, context) != 0 {
-                        glXSwapIntervalEXT(connection.display(), window, 0);
-                        (lib_glx.glXMakeCurrent)(connection.display(), 0, null_mut());
+                    if (lib_glx.glXMakeCurrent)(connection.raw_display(), window, context) != 0 {
+                        glXSwapIntervalEXT(connection.raw_display(), window, 0);
+                        (lib_glx.glXMakeCurrent)(connection.raw_display(), 0, null_mut());
                     }
                 }
             }
@@ -209,9 +228,17 @@ impl GlContext {
         unsafe {
             let result = {
                 if current {
-                    (self.lib_glx.glXMakeCurrent)(self.connection.display(), self.window, self.context)
+                    (self.lib_glx.glXMakeCurrent)(
+                        self.connection.raw_display(),
+                        self.window,
+                        self.context,
+                    )
                 } else {
-                    (self.lib_glx.glXMakeCurrent)(self.connection.display(), 0, std::ptr::null_mut())
+                    (self.lib_glx.glXMakeCurrent)(
+                        self.connection.raw_display(),
+                        0,
+                        std::ptr::null_mut(),
+                    )
                 }
             };
 
@@ -231,7 +258,7 @@ impl crate::GlContext for GlContext {
 
     fn swap_buffers(&self) {
         unsafe {
-            (self.lib_glx.glXSwapBuffers)(self.connection.display(), self.window);
+            (self.lib_glx.glXSwapBuffers)(self.connection.raw_display(), self.window);
         }
     }
 }
@@ -248,8 +275,8 @@ impl Debug for GlContext {
 impl Drop for GlContext {
     fn drop(&mut self) {
         unsafe {
-            (self.lib_glx.glXMakeCurrent)(self.connection.display(), 0, std::ptr::null_mut());
-            (self.lib_glx.glXDestroyContext)(self.connection.display(), self.context);
+            (self.lib_glx.glXMakeCurrent)(self.connection.raw_display(), 0, std::ptr::null_mut());
+            (self.lib_glx.glXDestroyContext)(self.connection.raw_display(), self.context);
         }
     }
 }

@@ -3,10 +3,12 @@ use super::gl::GlContext;
 use super::util;
 use crate::platform::OpenMode;
 use crate::{
-    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point,
-    RawHandle, Size, Window, WindowBuilder,
+    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point, Size,
+    Window, WindowBuilder, rwh_06,
 };
 use std::mem::replace;
+use std::num::NonZero;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use x11rb::connection::Connection as XConnection;
@@ -54,9 +56,10 @@ impl WindowImpl {
             let connection = Connection::get()?;
 
             let parent_window_id = match mode {
-                OpenMode::Embedded(RawHandle::X11 { window, .. }) => window,
+                OpenMode::Embedded(rwh_06::RawWindowHandle::Xcb(window)) => window.window.get(),
+                OpenMode::Embedded(rwh_06::RawWindowHandle::Xlib(window)) => window.window as u32,
                 OpenMode::Embedded(_) => {
-                    return Err(Error::PlatformError("invalid parent handle".into()));
+                    return Err(Error::InvalidParent);
                 }
                 OpenMode::Blocking => connection.default_root().root,
             };
@@ -430,10 +433,19 @@ impl crate::platform::OsWindow for WindowInner {
         self.is_closed = true;
     }
 
-    fn handle(&self) -> RawHandle {
-        RawHandle::X11 {
-            window: self.window_id,
+    fn window_handle(&self) -> rwh_06::RawWindowHandle {
+        unsafe {
+            rwh_06::RawWindowHandle::Xcb(rwh_06::XcbWindowHandle::new(NonZero::new_unchecked(
+                self.window_id,
+            )))
         }
+    }
+
+    fn display_handle(&self) -> rwh_06::RawDisplayHandle {
+        rwh_06::RawDisplayHandle::Xcb(rwh_06::XcbDisplayHandle::new(
+            NonNull::new(self.connection.raw_connection()),
+            self.connection.default_screen_index(),
+        ))
     }
 
     fn set_title(&mut self, title: &str) {

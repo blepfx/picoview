@@ -13,17 +13,19 @@ pub mod mac;
 #[cfg(target_os = "macos")]
 pub use mac::*;
 
-use crate::{MouseCursor, Point, RawHandle, Size};
+use crate::{MouseCursor, Point, Size, rwh_06};
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
     Blocking,
-    Embedded(RawHandle),
+    Embedded(rwh_06::RawWindowHandle),
 }
 
 pub trait OsWindow {
+    fn window_handle(&self) -> rwh_06::RawWindowHandle;
+    fn display_handle(&self) -> rwh_06::RawDisplayHandle;
+
     fn close(&mut self);
-    fn handle(&self) -> RawHandle;
 
     fn set_title(&mut self, title: &str);
     fn set_cursor_icon(&mut self, icon: MouseCursor);

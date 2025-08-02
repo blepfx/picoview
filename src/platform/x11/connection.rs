@@ -2,7 +2,7 @@ use crate::{Error, MouseCursor};
 use std::{
     cell::RefCell,
     collections::{HashMap, hash_map::Entry},
-    ffi::{CStr, c_int},
+    ffi::{CStr, c_int, c_void},
     os::fd::{AsFd, AsRawFd},
     sync::{
         Arc, Mutex, Weak,
@@ -122,7 +122,11 @@ impl Connection {
         &self.xcb().setup().roots[self.default_screen_index() as usize]
     }
 
-    pub fn display(&self) -> *mut Display {
+    pub fn raw_connection(&self) -> *mut c_void {
+        self.connection.get_raw_xcb_connection()
+    }
+
+    pub fn raw_display(&self) -> *mut Display {
         self.display
     }
 

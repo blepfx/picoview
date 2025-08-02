@@ -28,17 +28,15 @@ fn main() {
                         height: 300,
                     });
 
-                    unsafe {
-                        WindowBuilder::new(|event, _| {
-                            if !matches!(event, Event::WindowFrame { .. }) {
-                                println!("child {:?}", event);
-                            }
+                    WindowBuilder::new(|event, _| {
+                        if !matches!(event, Event::WindowFrame { .. }) {
+                            println!("child {:?}", event);
+                        }
 
-                            EventResponse::Captured
-                        })
-                        .open_parented(window.handle())
-                        .unwrap();
-                    }
+                        EventResponse::Captured
+                    })
+                    .open_parented(&window)
+                    .unwrap();
                 }
 
                 if passed(15000) {

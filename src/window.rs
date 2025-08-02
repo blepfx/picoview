@@ -1,4 +1,4 @@
-use crate::{GlConfig, GlContext, platform};
+use crate::{GlConfig, GlContext, platform, rwh_06};
 use bitflags::bitflags;
 use std::{fmt::Debug, path::PathBuf};
 
@@ -300,17 +300,8 @@ pub enum EventResponse {
 pub enum Error {
     PlatformError(String),
     OpenGlError(String),
+    InvalidParent,
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RawHandle {
-    X11 { window: std::ffi::c_uint },
-    Win { hwnd: *mut std::ffi::c_void },
-    Cocoa { ns_view: *mut std::ffi::c_void },
-}
-
-unsafe impl Send for RawHandle {}
-unsafe impl Sync for RawHandle {}
 
 pub type EventHandler = Box<dyn FnMut(Event, Window) -> EventResponse + Send>;
 
@@ -400,8 +391,13 @@ impl WindowBuilder {
         unsafe { platform::open_window(self, platform::OpenMode::Blocking) }
     }
 
-    pub unsafe fn open_parented(self, parent: RawHandle) -> Result<(), Error> {
-        unsafe { platform::open_window(self, platform::OpenMode::Embedded(parent)) }
+    pub fn open_parented(self, parent: impl rwh_06::HasWindowHandle) -> Result<(), Error> {
+        let handle = parent
+            .window_handle()
+            .map_err(|_| Error::InvalidParent)?
+            .as_raw();
+
+        unsafe { platform::open_window(self, platform::OpenMode::Embedded(handle)) }
     }
 }
 
@@ -411,10 +407,6 @@ pub struct Window<'a>(pub(crate) &'a mut dyn platform::OsWindow);
 impl<'a> Window<'a> {
     pub fn close(&mut self) {
         self.0.close();
-    }
-
-    pub fn handle(&self) -> RawHandle {
-        self.0.handle()
     }
 
     pub fn set_title(&mut self, title: &str) {
@@ -455,5 +447,17 @@ impl<'a> Window<'a> {
 
     pub fn set_clipboard_text(&mut self, text: &str) -> bool {
         self.0.set_clipboard_text(text)
+    }
+}
+
+impl<'a> rwh_06::HasWindowHandle for Window<'a> {
+    fn window_handle(&self) -> Result<rwh_06::WindowHandle<'_>, rwh_06::HandleError> {
+        unsafe { Ok(rwh_06::WindowHandle::borrow_raw(self.0.window_handle())) }
+    }
+}
+
+impl<'a> rwh_06::HasDisplayHandle for Window<'a> {
+    fn display_handle(&self) -> Result<rwh_06::DisplayHandle<'_>, rwh_06::HandleError> {
+        unsafe { Ok(rwh_06::DisplayHandle::borrow_raw(self.0.display_handle())) }
     }
 }
