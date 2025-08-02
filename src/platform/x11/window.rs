@@ -33,6 +33,7 @@ struct WindowInner {
     connection: Arc<Connection>,
 
     is_closed: bool,
+    is_destroyed: bool,
     on_closed: SyncSender<()>,
 
     last_modifiers: Modifiers,
@@ -107,15 +108,21 @@ impl WindowImpl {
             size_hints.base_size = Some((options.size.width as _, options.size.height as _));
             size_hints.max_size = size_hints.base_size;
             size_hints.min_size = size_hints.base_size;
-            let _ = size_hints.set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS);
 
-            let _ = connection.xcb().change_property8(
-                PropMode::REPLACE,
-                window_id,
-                AtomEnum::WM_NAME,
-                AtomEnum::STRING,
-                options.title.as_bytes(),
-            );
+            size_hints
+                .set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS)
+                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+
+            connection
+                .xcb()
+                .change_property8(
+                    PropMode::REPLACE,
+                    window_id,
+                    AtomEnum::WM_NAME,
+                    AtomEnum::STRING,
+                    options.title.as_bytes(),
+                )
+                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
 
             if !options.decorations {
                 connection
@@ -177,6 +184,7 @@ impl WindowImpl {
 
                     on_closed,
                     is_closed: false,
+                    is_destroyed: false,
 
                     last_modifiers: Modifiers::empty(),
                     last_cursor: MouseCursor::Default,
@@ -187,7 +195,7 @@ impl WindowImpl {
 
             window.send_event(Event::WindowOpen);
 
-            connection.add_window(
+            connection.add_window_pacer(
                 window_id,
                 Box::new(move |event| match event {
                     Some(event) => {
@@ -224,6 +232,8 @@ impl WindowImpl {
         } else {
             self.send_event(Event::WindowFrame { gl: None });
         }
+
+        self.handle_destroy();
     }
 
     fn handle_event(&mut self, event: &XEvent) {
@@ -373,11 +383,14 @@ impl WindowImpl {
 
             XEvent::DestroyNotify(_) => {
                 self.inner.is_closed = true;
+                self.inner.is_destroyed = true;
                 self.inner.on_closed.try_send(()).ok();
             }
 
             _ => {}
         }
+
+        self.handle_destroy();
     }
 
     fn handle_modifiers(&mut self, modifiers: Modifiers) {
@@ -387,6 +400,26 @@ impl WindowImpl {
         }
     }
 
+    fn handle_destroy(&mut self) {
+        if !self.inner.is_closed {
+            return;
+        }
+
+        if replace(&mut self.inner.is_destroyed, true) {
+            return;
+        }
+
+        self.inner
+            .connection
+            .remove_window_pacer(self.inner.window_id);
+        let _ = self
+            .inner
+            .connection
+            .xcb()
+            .destroy_window(self.inner.window_id);
+        self.inner.connection.flush();
+    }
+
     fn send_event(&mut self, e: Event) -> EventResponse {
         (self.handler)(e, Window(&mut self.inner))
     }
@@ -394,13 +427,7 @@ impl WindowImpl {
 
 impl crate::platform::OsWindow for WindowInner {
     fn close(&mut self) {
-        if replace(&mut self.is_closed, true) {
-            return;
-        }
-
-        self.connection.remove_window(self.window_id);
-        let _ = self.connection.xcb().destroy_window(self.window_id);
-        self.connection.flush();
+        self.is_closed = true;
     }
 
     fn handle(&self) -> RawHandle {

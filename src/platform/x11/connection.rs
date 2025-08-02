@@ -3,7 +3,6 @@ use std::{
     cell::RefCell,
     collections::{HashMap, hash_map::Entry},
     ffi::{CStr, c_int},
-    mem::ManuallyDrop,
     os::fd::{AsFd, AsRawFd},
     sync::{
         Arc, Mutex, Weak,
@@ -55,7 +54,7 @@ unsafe impl Sync for Connection {}
 
 pub type WindowHandler = Box<dyn FnMut(Option<&Event>) + Send + 'static>;
 pub struct Connection {
-    conn: ManuallyDrop<XCBConnection>,
+    connection: XCBConnection,
     display: *mut Display,
     screen: c_int,
 
@@ -95,12 +94,16 @@ impl Connection {
                 (buf.len() - 1) as i32,
             );
             buf[buf.len() - 1] = 0;
-            Some(CStr::from_ptr(buf.as_mut_ptr().cast()).to_string_lossy().into())
+            Some(
+                CStr::from_ptr(buf.as_mut_ptr().cast())
+                    .to_string_lossy()
+                    .into(),
+            )
         }
     }
 
     pub fn xcb(&self) -> &XCBConnection {
-        &self.conn
+        &self.connection
     }
 
     pub fn atoms(&self) -> &Atoms {
@@ -108,7 +111,7 @@ impl Connection {
     }
 
     pub fn flush(&self) -> bool {
-        self.conn.flush().is_ok()
+        self.connection.flush().is_ok()
     }
 
     pub fn default_screen_index(&self) -> c_int {
@@ -124,21 +127,23 @@ impl Connection {
     }
 
     pub fn load_cursor(&self, cursor: MouseCursor) -> u32 {
-        self.cursor_cache
-            .lock()
-            .unwrap()
-            .get(&self.conn, self.screen as usize, &self.cursor_handle, cursor)
+        self.cursor_cache.lock().unwrap().get(
+            &self.connection,
+            self.screen as usize,
+            &self.cursor_handle,
+            cursor,
+        )
     }
 
     pub fn is_manual_tick(&self) -> bool {
         self.loop_manual
     }
 
-    pub fn add_window(&self, window: Window, handler: WindowHandler) {
+    pub fn add_window_pacer(&self, window: Window, handler: WindowHandler) {
         let _ = self.loop_sender.send((window, Some(handler)));
     }
 
-    pub fn remove_window(&self, window: Window) {
+    pub fn remove_window_pacer(&self, window: Window) {
         let _ = self.loop_sender.send((window, None));
     }
 
@@ -159,10 +164,15 @@ impl Connection {
         }
         unsafe {
             let xlib_xcb = x11_dl::xlib_xcb::Xlib_xcb::open().map_err(|_| {
-                Error::PlatformError("No libx11-xcb found, you might need to install a dependency".into())
+                Error::PlatformError(
+                    "No libx11-xcb found, you might need to install a dependency".into(),
+                )
             })?;
-            let xlib = x11_dl::xlib::Xlib::open()
-                .map_err(|_| Error::PlatformError("No libx11 found, you might need to install a dependency".into()))?;
+            let xlib = x11_dl::xlib::Xlib::open().map_err(|_| {
+                Error::PlatformError(
+                    "No libx11 found, you might need to install a dependency".into(),
+                )
+            })?;
 
             let display = (xlib.XOpenDisplay)(std::ptr::null());
             if display.is_null() {
@@ -175,10 +185,13 @@ impl Connection {
             }
 
             (xlib.XSetErrorHandler)(Some(error_handler));
-            (xlib_xcb.XSetEventQueueOwner)(display, x11_dl::xlib_xcb::XEventQueueOwner::XCBOwnsEventQueue);
+            (xlib_xcb.XSetEventQueueOwner)(
+                display,
+                x11_dl::xlib_xcb::XEventQueueOwner::XCBOwnsEventQueue,
+            );
             let screen = (xlib.XDefaultScreen)(display);
 
-            let connection = XCBConnection::from_raw_xcb_connection(xcb_connection as _, true)
+            let connection = XCBConnection::from_raw_xcb_connection(xcb_connection as _, false)
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
             let atoms = Atoms::new(&connection)
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?
@@ -201,7 +214,7 @@ impl Connection {
             let connection = Arc::new(Self {
                 xlib: Box::new(xlib),
 
-                conn: ManuallyDrop::new(connection),
+                connection,
                 display,
                 screen,
 
@@ -219,13 +232,16 @@ impl Connection {
         }
     }
 
-    fn poll_event_single(&self, timeout: Option<Duration>) -> Result<Option<Event>, ConnectionError> {
-        if let Some(event) = self.conn.poll_for_event()? {
+    fn poll_event_single(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Event>, ConnectionError> {
+        if let Some(event) = self.connection.poll_for_event()? {
             return Ok(Some(event));
         }
 
         let mut fd = libc::pollfd {
-            fd: self.conn.as_fd().as_raw_fd(),
+            fd: self.connection.as_fd().as_raw_fd(),
             events: libc::POLLIN,
             revents: 0,
         };
@@ -243,7 +259,7 @@ impl Connection {
         }
 
         if fd.revents & libc::POLLIN != 0 {
-            self.conn.poll_for_event()
+            self.connection.poll_for_event()
         } else {
             Ok(None)
         }
@@ -258,7 +274,10 @@ impl Drop for Connection {
     }
 }
 
-fn run_event_loop(connection: Weak<Connection>, handler_receiver: Receiver<(Window, Option<WindowHandler>)>) {
+fn run_event_loop(
+    connection: Weak<Connection>,
+    handler_receiver: Receiver<(Window, Option<WindowHandler>)>,
+) {
     const FRAME_INTERVAL: Duration = Duration::from_micros(16_666);
     const FRAME_PADDING: Duration = Duration::from_micros(200);
 
@@ -269,14 +288,18 @@ fn run_event_loop(connection: Weak<Connection>, handler_receiver: Receiver<(Wind
         while let Some(connection) = connection.upgrade() {
             let deadline = if connection.is_manual_tick() {
                 if Instant::now() >= event_timer {
-                    event_timer = Instant::max(event_timer + FRAME_INTERVAL, Instant::now() - FRAME_INTERVAL);
+                    event_timer = Instant::max(
+                        event_timer + FRAME_INTERVAL,
+                        Instant::now() - FRAME_INTERVAL,
+                    );
                 }
                 Some(event_timer)
             } else {
                 None
             };
 
-            let timeout = deadline.map(|t| t.saturating_duration_since(Instant::now()) + FRAME_PADDING);
+            let timeout =
+                deadline.map(|t| t.saturating_duration_since(Instant::now()) + FRAME_PADDING);
             let event = match connection.poll_event_single(timeout) {
                 Ok(event) => event,
                 Err(e) => panic!("x11 event loop error: {:?}", e),
@@ -316,7 +339,13 @@ impl CursorCache {
         }
     }
 
-    fn get(&mut self, conn: &XCBConnection, screen: usize, handle: &Handle, cursor: MouseCursor) -> u32 {
+    fn get(
+        &mut self,
+        conn: &XCBConnection,
+        screen: usize,
+        handle: &Handle,
+        cursor: MouseCursor,
+    ) -> u32 {
         match self.map.entry(cursor) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
@@ -330,7 +359,12 @@ impl CursorCache {
         }
     }
 
-    fn load(conn: &XCBConnection, screen: usize, handle: &Handle, cursor: MouseCursor) -> Option<u32> {
+    fn load(
+        conn: &XCBConnection,
+        screen: usize,
+        handle: &Handle,
+        cursor: MouseCursor,
+    ) -> Option<u32> {
         macro_rules! load {
             ($($l:literal),*) => {
                 Self::load_named(conn, handle, &[$($l),*])
