@@ -9,11 +9,12 @@ use super::{
 };
 use crate::{
     Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point, Size,
-    WindowBuilder, platform::OpenMode,
+    WindowBuilder, platform::OpenMode, rwh_06,
 };
 use std::{
     cell::{Cell, RefCell},
     mem::size_of,
+    num::NonZeroIsize,
     ptr::{copy_nonoverlapping, null, null_mut},
     rc::Rc,
     sync::Arc,
@@ -77,7 +78,7 @@ pub struct WindowMain {
 impl WindowMain {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
         unsafe {
-            let parent = match options.parent {
+            let parent = match mode {
                 OpenMode::Embedded(rwh_06::RawWindowHandle::Win32(window)) => {
                     window.hwnd.get() as HWND
                 }
@@ -123,7 +124,7 @@ impl WindowMain {
 
                 if options.decorations {
                     dwstyle |= WS_POPUP | WS_CAPTION | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX;
-                } else if options.parent.is_none() {
+                } else if parent.is_null() {
                     dwstyle |= WS_POPUP;
                 }
 
@@ -131,7 +132,7 @@ impl WindowMain {
                     dwexstyle |= WS_EX_LAYERED;
                 }
 
-                if options.parent.is_some() {
+                if !parent.is_null() {
                     dwstyle |= WS_CHILD;
                 }
 
