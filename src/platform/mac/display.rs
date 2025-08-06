@@ -14,7 +14,12 @@ pub fn get_displays_with_rect(rect: NSRect) -> Result<Vec<u32>, Error> {
         // needed to properly initialize coregraphics
         CGMainDisplayID();
 
-        let result = CGGetDisplaysWithRect(rect, MAX_DISPLAYS as u32, displays.as_mut_ptr(), &mut matching_displays);
+        let result = CGGetDisplaysWithRect(
+            rect,
+            MAX_DISPLAYS as u32,
+            displays.as_mut_ptr(),
+            &mut matching_displays,
+        );
         if result != 0 {
             return Err(Error::PlatformError(format!(
                 "CGGetDisplaysWithRect failed: {result:?}"
@@ -81,7 +86,9 @@ impl CVDisplayLink {
         unsafe {
             let result = CVDisplayLinkStart(self.0.as_ptr());
             if result != 0 {
-                return Err(Error::PlatformError(format!("CVDisplayLinkStart failed: {result:?}")));
+                return Err(Error::PlatformError(format!(
+                    "CVDisplayLinkStart failed: {result:?}"
+                )));
             }
 
             Ok(())

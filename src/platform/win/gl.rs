@@ -15,15 +15,16 @@ use windows_sys::{
         Graphics::{
             Gdi::{GetDC, HDC, ReleaseDC},
             OpenGL::{
-                ChoosePixelFormat, DescribePixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW, PFD_MAIN_PLANE,
-                PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR, SetPixelFormat, SwapBuffers,
-                wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent,
+                ChoosePixelFormat, DescribePixelFormat, HGLRC, PFD_DOUBLEBUFFER,
+                PFD_DRAW_TO_WINDOW, PFD_MAIN_PLANE, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA,
+                PIXELFORMATDESCRIPTOR, SetPixelFormat, SwapBuffers, wglCreateContext,
+                wglDeleteContext, wglGetProcAddress, wglMakeCurrent,
             },
         },
         System::LibraryLoader::{GetProcAddress, LoadLibraryA},
         UI::WindowsAndMessaging::{
-            CS_OWNDC, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, UnregisterClassW,
-            WNDCLASSW,
+            CS_OWNDC, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
+            RegisterClassW, UnregisterClassW, WNDCLASSW,
         },
     },
     core::PCWSTR,
@@ -58,7 +59,8 @@ const WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20A9;
 const WGL_TRANSPARENT_ARB: i32 = 0x200A;
 
 type WglCreateContextAttribsARB = unsafe extern "system" fn(HDC, HGLRC, *const i32) -> HGLRC;
-type WglChoosePixelFormatARB = unsafe extern "system" fn(HDC, *const i32, *const f32, u32, *mut i32, *mut u32) -> i32;
+type WglChoosePixelFormatARB =
+    unsafe extern "system" fn(HDC, *const i32, *const f32, u32, *mut i32, *mut u32) -> i32;
 type WglSwapIntervalEXT = unsafe extern "system" fn(i32) -> i32;
 type WglGetExtensionsStringEXT = unsafe extern "system" fn() -> *const c_char;
 type WglGetExtensionsStringARB = unsafe extern "system" fn(HDC) -> *const c_char;
@@ -92,7 +94,9 @@ impl GlContext {
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
-                    Error::OpenGlError("Failed to create a context with given requirements".to_owned())
+                    Error::OpenGlError(
+                        "Failed to create a context with given requirements".to_owned(),
+                    )
                 })?;
 
             if ext.extensions.contains(Extensions::SWAP_CONTROL) {
@@ -229,19 +233,26 @@ impl WglExtensions {
 
             macro_rules! load_fn {
                 ($type:ident, $lit:literal) => {
-                    std::mem::transmute::<_, Option<$type>>(wglGetProcAddress(concat!($lit, "\0").as_ptr() as *const _))
-                        .filter(|&ptr| check_ptr(ptr as *const _))
+                    std::mem::transmute::<_, Option<$type>>(wglGetProcAddress(
+                        concat!($lit, "\0").as_ptr() as *const _,
+                    ))
+                    .filter(|&ptr| check_ptr(ptr as *const _))
                 };
             }
 
             let context = Self {
-                create_context_attribs: load_fn!(WglCreateContextAttribsARB, "wglCreateContextAttribsARB"),
+                create_context_attribs: load_fn!(
+                    WglCreateContextAttribsARB,
+                    "wglCreateContextAttribsARB"
+                ),
                 choose_pixel_format: load_fn!(WglChoosePixelFormatARB, "wglChoosePixelFormatARB"),
                 swap_interval: load_fn!(WglSwapIntervalEXT, "wglSwapIntervalEXT"),
 
                 extensions: {
-                    let get_extensions_string_ext = load_fn!(WglGetExtensionsStringEXT, "wglGetExtensionsStringEXT");
-                    let get_extensions_string_arb = load_fn!(WglGetExtensionsStringARB, "wglGetExtensionsStringARB");
+                    let get_extensions_string_ext =
+                        load_fn!(WglGetExtensionsStringEXT, "wglGetExtensionsStringEXT");
+                    let get_extensions_string_arb =
+                        load_fn!(WglGetExtensionsStringARB, "wglGetExtensionsStringARB");
 
                     let extension_str = get_extensions_string_ext
                         .map(|f| f())
@@ -254,12 +265,11 @@ impl WglExtensions {
                     for extension in extension_str.split(' ') {
                         extensions |= match extension {
                             "WGL_ARB_multisample" => Extensions::MULTISAMPLE,
-                            "WGL_ARB_framebuffer_sRGB" | "WGL_EXT_framebuffer_sRGB" | "WGL_EXT_colorspace" => {
-                                Extensions::FRAMEBUFFER_SRGB
-                            }
-                            "WGL_EXT_create_context_es2_profile" | "WGL_EXT_create_context_es_profile" => {
-                                Extensions::ES_CONTEXT
-                            }
+                            "WGL_ARB_framebuffer_sRGB"
+                            | "WGL_EXT_framebuffer_sRGB"
+                            | "WGL_EXT_colorspace" => Extensions::FRAMEBUFFER_SRGB,
+                            "WGL_EXT_create_context_es2_profile"
+                            | "WGL_EXT_create_context_es_profile" => Extensions::ES_CONTEXT,
                             "WGL_EXT_swap_control" => Extensions::SWAP_CONTROL,
                             "WGL_ARB_create_context" => Extensions::CREATE_CONTEXT,
                             "WGL_ARB_pixel_format" => Extensions::PIXEL_FORMAT,
@@ -361,18 +371,27 @@ fn create_context_arb(hdc: HDC, config: &crate::GlConfig, ext: &WglExtensions) -
         };
 
         let context = (create_context_attribs)(hdc, null_mut(), ctx_attribs.as_ptr());
-        if context.is_null() { None } else { Some(context) }
+        if context.is_null() {
+            None
+        } else {
+            Some(context)
+        }
     }
 }
 
-fn create_pixel_format_fallback(hdc: HDC, config: &crate::GlConfig) -> Option<(i32, PIXELFORMATDESCRIPTOR)> {
+fn create_pixel_format_fallback(
+    hdc: HDC,
+    config: &crate::GlConfig,
+) -> Option<(i32, PIXELFORMATDESCRIPTOR)> {
     unsafe {
         let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
 
         let pfd = PIXELFORMATDESCRIPTOR {
             nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
             nVersion: 1,
-            dwFlags: PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | (PFD_DOUBLEBUFFER * config.double_buffer as u32),
+            dwFlags: PFD_DRAW_TO_WINDOW
+                | PFD_SUPPORT_OPENGL
+                | (PFD_DOUBLEBUFFER * config.double_buffer as u32),
             iPixelType: PFD_TYPE_RGBA,
             cColorBits: (red + green + blue + alpha) as _,
             cAlphaBits: alpha as _,
@@ -430,7 +449,8 @@ fn create_pixel_format_arb(
             }
 
             if ext.extensions.contains(Extensions::FRAMEBUFFER_SRGB) {
-                pixel_format_attribs.extend_from_slice(&[WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, config.srgb as i32]);
+                pixel_format_attribs
+                    .extend_from_slice(&[WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, config.srgb as i32]);
             }
 
             if config.transparent {
@@ -457,7 +477,13 @@ fn create_pixel_format_arb(
         }
 
         let mut pfd: PIXELFORMATDESCRIPTOR = zeroed();
-        if DescribePixelFormat(hdc, format_id, size_of::<PIXELFORMATDESCRIPTOR>() as u32, &mut pfd) == 0 {
+        if DescribePixelFormat(
+            hdc,
+            format_id,
+            size_of::<PIXELFORMATDESCRIPTOR>() as u32,
+            &mut pfd,
+        ) == 0
+        {
             return None;
         }
 

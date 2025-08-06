@@ -2,17 +2,14 @@ use super::{
     connection::Connection,
     gl::GlContext,
     util::{
-        assert, generate_guid, get_modifiers_async, hinstance, scan_code_to_key, to_widestring,
+        assert, from_widestring, generate_guid, get_modifiers_async, hinstance, run_event_loop,
+        scan_code_to_key, to_widestring,
     },
     window_hook::WindowKeyboardHook,
 };
 use crate::{
-    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point,
-    RawHandle, Size, WindowBuilder,
-    platform::{
-        OpenMode,
-        win::util::{from_widestring, run_event_loop},
-    },
+    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point, Size,
+    WindowBuilder, platform::OpenMode,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -81,7 +78,9 @@ impl WindowMain {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
         unsafe {
             let parent = match options.parent {
-                OpenMode::Embedded(RawHandle::Win { hwnd }) => hwnd,
+                OpenMode::Embedded(rwh_06::RawWindowHandle::Win32(window)) => {
+                    window.hwnd.get() as HWND
+                }
                 OpenMode::Embedded(_) => {
                     return Err(Error::PlatformError("invalid parent handle".into()));
                 }
@@ -240,10 +239,17 @@ impl<'a> crate::platform::OsWindow for &'a WindowMain {
         }
     }
 
-    fn handle(&self) -> RawHandle {
-        RawHandle::Win {
-            hwnd: self.window_hwnd,
+    fn window_handle(&self) -> rwh_06::RawWindowHandle {
+        unsafe {
+            rwh_06::RawWindowHandle::Win32WindowHandle(rwh_06::XcbWindowHandle {
+                hwnd: NonZeroIsize::new_unchecked(self.window_hwnd as isize),
+                hinstance: NonZeroIsize::new(hinstance() as isize),
+            })
         }
+    }
+
+    fn display_handle(&self) -> rwh_06::RawDisplayHandle {
+        rwh_06::RawDisplayHandle::Win32(rwh_06::Win32DisplayHandle::new())
     }
 
     fn set_title(&mut self, title: &str) {

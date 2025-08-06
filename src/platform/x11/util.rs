@@ -37,7 +37,9 @@ pub fn open_url(path: &str) -> bool {
 }
 
 pub fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     unsafe {
         cmd.pre_exec(move || {

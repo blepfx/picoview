@@ -10,9 +10,9 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     UI::WindowsAndMessaging::{
-        CS_OWNDC, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, PostMessageW,
-        RegisterClassW, SetWindowLongPtrW, UnregisterClassW, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_SYSKEYDOWN,
-        WM_SYSKEYUP, WNDCLASSW, WS_CHILD, WS_EX_NOACTIVATE,
+        CS_OWNDC, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
+        PostMessageW, RegisterClassW, SetWindowLongPtrW, UnregisterClassW, WM_KEYDOWN, WM_KEYUP,
+        WM_KILLFOCUS, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WS_CHILD, WS_EX_NOACTIVATE,
     },
 };
 
@@ -78,7 +78,12 @@ impl Drop for WindowKeyboardHook {
     }
 }
 
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     unsafe {
         let hwnd_main = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as HWND;
 
