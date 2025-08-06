@@ -242,7 +242,7 @@ impl<'a> crate::platform::OsWindow for &'a WindowMain {
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
         unsafe {
-            rwh_06::RawWindowHandle::Win32WindowHandle(rwh_06::XcbWindowHandle {
+            rwh_06::RawWindowHandle::Win32(rwh_06::Win32WindowHandle {
                 hwnd: NonZeroIsize::new_unchecked(self.window_hwnd as isize),
                 hinstance: NonZeroIsize::new(hinstance() as isize),
             })
@@ -250,7 +250,7 @@ impl<'a> crate::platform::OsWindow for &'a WindowMain {
     }
 
     fn display_handle(&self) -> rwh_06::RawDisplayHandle {
-        rwh_06::RawDisplayHandle::Win32(rwh_06::Win32DisplayHandle::new())
+        rwh_06::RawDisplayHandle::Windows(rwh_06::WindowsDisplayHandle::new())
     }
 
     fn set_title(&mut self, title: &str) {
