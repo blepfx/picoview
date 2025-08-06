@@ -242,10 +242,11 @@ impl<'a> crate::platform::OsWindow for &'a WindowMain {
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
         unsafe {
-            rwh_06::RawWindowHandle::Win32(rwh_06::Win32WindowHandle {
-                hwnd: NonZeroIsize::new_unchecked(self.window_hwnd as isize),
-                hinstance: NonZeroIsize::new(hinstance() as isize),
-            })
+            let mut handle = rwh_06::Win32WindowHandle::new(NonZeroIsize::new_unchecked(
+                self.window_hwnd as isize,
+            ));
+            handle.hinstance = NonZeroIsize::new(hinstance() as isize);
+            rwh_06::RawWindowHandle::Win32(handle)
         }
     }
 
