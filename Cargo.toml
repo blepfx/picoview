@@ -17,6 +17,7 @@ libc = "0.2"
 objc2 = { version = "0.6", features = ["verify"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSView", "NSWindow", "NSResponder", "NSCursor", "NSDragging", "NSEvent", "NSPasteboard", "NSPasteboardItem", "NSScreen", "NSTrackingArea"] }
 objc2-foundation = { version = "0.3", features = ["NSThread", "NSOperation"] }
+objc2-core-foundation = { version = "0.3", features = ["CFRunLoop"] }
 
 [target.'cfg(target_os="windows")'.dependencies]
 windows-sys = { version = "0.60", features = [

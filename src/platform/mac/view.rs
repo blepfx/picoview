@@ -1,12 +1,12 @@
-use super::display::{self, CGResult, CVDisplayLink, CVTimeStamp, get_displays_with_rect};
+use super::display::*;
 use super::util::{cstr, get_cursor, keycode2key, random_id};
 use crate::platform::OsWindow;
 use crate::platform::mac::util::{self, flags2mods};
 use crate::{
-    Error, Event, EventHandler, EventResponse, MouseButton, MouseCursor, Point, RawHandle, Size,
-    Window, WindowBuilder,
+    Error, Event, EventHandler, EventResponse, MouseButton, MouseCursor, Point, Size, Window,
+    WindowBuilder, rwh_06,
 };
-use objc2::rc::{Allocated, Retained};
+use objc2::rc::{Allocated, Retained, Weak};
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2::{
@@ -22,11 +22,10 @@ use objc2_app_kit::{
     NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{
-    NSArray, NSAutoreleasePool, NSInvocationOperation, NSOperationQueue, NSPoint, NSRect, NSSize,
-    NSString,
-};
+use objc2_foundation::{NSArray, NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
 use std::cell::{Cell, RefCell};
+use std::ptr::NonNull;
+use std::rc::Rc;
 use std::{
     ffi::{CString, c_void},
     ops::{Deref, DerefMut},
@@ -39,13 +38,15 @@ pub struct OsWindowView {
 
 struct OsWindowViewInner {
     _class: OsWindowClass,
-    _display_link: CVDisplayLink,
+    _display_link: DisplayLink,
 
     event_handler: RefCell<EventHandler>,
     input_focus: Cell<bool>,
     current_cursor: Cell<MouseCursor>,
 
+    #[allow(unused)] //TODO: stuff!
     is_embedded: bool,
+    #[allow(unused)] //TODO: stuff!
     is_closed: Cell<bool>,
 }
 
@@ -78,17 +79,20 @@ impl OsWindowView {
         }
     }
 
-    pub unsafe fn open_embedded(options: WindowBuilder, parent: RawHandle) -> Result<(), Error> {
+    pub unsafe fn open_embedded(
+        options: WindowBuilder,
+        parent: rwh_06::RawWindowHandle,
+    ) -> Result<(), Error> {
         unsafe {
             let parent_view = match parent {
-                RawHandle::Cocoa { ns_view } => &*(ns_view as *mut NSView),
-                _ => return Err(Error::PlatformError("invalid parent handle".into())),
+                rwh_06::RawWindowHandle::AppKit(window) => window.ns_view.as_ptr() as *mut NSView,
+                _ => return Err(Error::InvalidParent),
             };
 
             let pool = NSAutoreleasePool::new();
             let view = Self::create_view(options, true)?;
 
-            parent_view.addSubview(&view);
+            (*parent_view).addSubview(&view);
             pool.drain();
 
             Ok(())
@@ -173,13 +177,15 @@ impl OsWindowView {
         };
 
         let display = {
-            let displays = get_displays_with_rect(rect)?;
-            let mut cv_display_link = CVDisplayLink::create_with_active_cg_displays()?;
-            cv_display_link
-                .set_output_callback(display_link_callback, (&*view) as *const _ as *mut _)?;
-            cv_display_link.set_current_display(displays[0])?;
-            cv_display_link.start()?;
-            cv_display_link
+            let view = Weak::from_retained(&view);
+            DisplayLink::new(
+                Rc::new(move |_| {
+                    if let Some(view) = view.load() {
+                        view.send_event(Event::WindowFrame { gl: None });
+                    }
+                }),
+                unsafe { CGMainDisplayID() }, //TODO:: multi display support
+            )?
         };
 
         view.set_context(Box::new(OsWindowViewInner {
@@ -426,12 +432,6 @@ impl<'a> OsWindow for &'a OsWindowView {
         }
     }
 
-    fn handle(&self) -> RawHandle {
-        RawHandle::Cocoa {
-            ns_view: &self.superclass as *const _ as *mut _,
-        }
-    }
-
     fn set_title(&mut self, title: &str) {
         if let Some(window) = self.window() {
             window.setTitle(&NSString::from_str(title));
@@ -460,17 +460,21 @@ impl<'a> OsWindow for &'a OsWindowView {
     fn set_cursor_position(&mut self, point: Point) {
         unsafe {
             if let Some(window) = self.window() {
+                let main_thread = MainThreadMarker::new_unchecked();
                 let window_position =
                     self.convertPoint_toView(NSPoint::new(point.x as _, point.y as _), None);
                 let screen_position = window.convertPointToScreen(window_position);
-                let screen_height = NSScreen::mainScreen(MainThreadMarker::new_unchecked())
+                let screen_height = NSScreen::mainScreen(main_thread)
                     .map(|screen| screen.frame().size.height)
                     .unwrap_or_default();
 
-                display::warp_mouse_cursor_position(NSPoint::new(
-                    screen_position.x as _,
-                    (screen_height - screen_position.y) as _,
-                ));
+                warp_mouse_cursor_position(
+                    NSPoint::new(
+                        screen_position.x as _,
+                        (screen_height - screen_position.y) as _,
+                    ),
+                    main_thread,
+                );
             }
         }
     }
@@ -517,6 +521,18 @@ impl<'a> OsWindow for &'a OsWindowView {
 
     fn set_clipboard_text(&mut self, text: &str) -> bool {
         util::set_clipboard_text(text)
+    }
+
+    fn window_handle(&self) -> rwh_06::RawWindowHandle {
+        unsafe {
+            rwh_06::RawWindowHandle::AppKit(rwh_06::AppKitWindowHandle::new(
+                NonNull::new_unchecked(&self.superclass as *const _ as *mut _),
+            ))
+        }
+    }
+
+    fn display_handle(&self) -> rwh_06::RawDisplayHandle {
+        rwh_06::RawDisplayHandle::AppKit(rwh_06::AppKitDisplayHandle::new())
     }
 }
 
@@ -670,28 +686,5 @@ impl DerefMut for OsWindowView {
 impl Drop for OsWindowClass {
     fn drop(&mut self) {
         unsafe { objc_disposeClassPair(self.0 as *const _ as _) };
-    }
-}
-
-unsafe extern "C" fn display_link_callback(
-    _display_link: CVDisplayLink,
-    _in_now: *mut CVTimeStamp,
-    _in_output_time: *mut CVTimeStamp,
-    _flags_in: u64,
-    _flags_out: *mut u64,
-    display_link_context: *mut c_void,
-) -> CGResult {
-    unsafe {
-        let view = display_link_context as *const OsWindowView;
-
-        NSInvocationOperation::initWithTarget_selector_object(
-            NSInvocationOperation::alloc(),
-            &*view,
-            sel!(picoview_drawFrame),
-            None,
-        )
-        .map(|operation| NSOperationQueue::mainQueue().addOperation(&operation));
-
-        0
     }
 }

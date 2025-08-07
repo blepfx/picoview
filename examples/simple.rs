@@ -15,6 +15,8 @@ fn main() {
                 println!("clipboard contents: {:?}", window.get_clipboard_text());
                 window.set_clipboard_text("delta");
             } else if matches!(event, Event::WindowFrame { .. }) {
+                println!("frame: {:?}", start.elapsed());
+
                 let passed = |d| {
                     start.elapsed() >= Duration::from_millis(d)
                         && (last - start) < Duration::from_millis(d)
