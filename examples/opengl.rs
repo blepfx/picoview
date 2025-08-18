@@ -25,10 +25,6 @@ fn main() {
                     }
                 }
 
-                Event::WindowClose => {
-                    window.close();
-                }
-
                 _ => {}
             }
 

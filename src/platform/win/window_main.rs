@@ -39,11 +39,11 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             AdjustWindowRectEx, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
             GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetWindowLongPtrW, GetWindowLongW, HCURSOR,
-            HTCLIENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, PostMessageW, RegisterClassW,
-            SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes, SetWindowLongPtrW,
-            SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI, UnregisterClassW,
-            WHEEL_DELTA, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN,
+            HTCLIENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, PostMessageW, PostQuitMessage,
+            RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes,
+            SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI,
+            UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN,
             WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
             WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_USER,
             WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
@@ -64,6 +64,8 @@ pub struct WindowMain {
     window_hwnd: HWND,
     window_class: u16,
     window_hook: WindowKeyboardHook,
+
+    owns_event_loop: bool,
 
     state_focused_user: Cell<bool>,
     state_focused_keyboard: Cell<bool>,
@@ -191,6 +193,8 @@ impl WindowMain {
                 window_class,
                 window_hook,
                 window_hwnd: hwnd,
+
+                owns_event_loop: matches!(mode, OpenMode::Blocking),
 
                 gl_context,
                 handler: RefCell::new(options.handler),
@@ -433,12 +437,12 @@ unsafe extern "system" fn wnd_proc(
 
         match msg {
             WM_DESTROY => {
-                drop(Rc::from_raw(window_ptr));
-                0
-            }
+                if (*window_ptr).owns_event_loop {
+                    PostQuitMessage(0);
+                }
 
-            WM_CLOSE => {
-                (*window_ptr).send_event(Event::WindowClose);
+                drop(Rc::from_raw(window_ptr));
+
                 0
             }
 

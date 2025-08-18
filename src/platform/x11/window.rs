@@ -249,7 +249,7 @@ impl WindowImpl {
                 if event.format == 32
                     && event.data.as_data32()[0] == self.inner.connection.atoms().WM_DELETE_WINDOW
                 {
-                    self.send_event(Event::WindowClose);
+                    self.inner.is_closed = true;
                 }
             }
 

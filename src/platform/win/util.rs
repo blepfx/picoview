@@ -71,7 +71,7 @@ pub unsafe fn run_event_loop(hwnd: HWND) {
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
         loop {
-            if GetMessageW(&mut msg, hwnd, 0, 0) == -1 {
+            if GetMessageW(&mut msg, hwnd, 0, 0) == 0 {
                 break;
             }
 

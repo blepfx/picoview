@@ -234,7 +234,6 @@ pub enum Event<'a> {
     WindowOpen,
     WindowFocus,
     WindowBlur,
-    WindowClose,
     WindowScale {
         scale: f32,
     },

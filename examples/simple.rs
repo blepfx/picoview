@@ -57,10 +57,6 @@ fn main() {
                     println!("{:?}", event);
                 }
 
-                Event::WindowClose => {
-                    window.close();
-                }
-
                 _ => {
                     println!("{:?}", event);
                 }
