@@ -6,9 +6,11 @@ use crate::{
     Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point, Size,
     Window, WindowBuilder, rwh_06,
 };
+use std::cell::{Ref, RefCell, RefMut};
 use std::mem::replace;
 use std::num::NonZero;
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use x11rb::connection::Connection as XConnection;
@@ -30,7 +32,7 @@ use x11rb::{
 
 unsafe impl Send for WindowImpl {}
 
-struct WindowInner {
+pub(crate) struct WindowInner {
     window_id: u32,
     connection: Arc<Connection>,
 
@@ -45,7 +47,6 @@ struct WindowInner {
 }
 
 pub struct WindowImpl {
-    inner: WindowInner,
     handler: EventHandler,
     gl_context: Option<GlContext>,
 }
@@ -177,23 +178,26 @@ impl WindowImpl {
             }
 
             let (on_closed, when_closed) = sync_channel(0);
+
+            let inner = WindowInner {
+                window_id,
+                connection: connection.clone(),
+
+                on_closed,
+                is_closed: false,
+                is_destroyed: false,
+
+                last_modifiers: Modifiers::empty(),
+                last_cursor: MouseCursor::Default,
+                last_window_position: None,
+                last_keyboard_focus: false,
+            };
+
+            let handler = (options.constructor)(Window(Rc::new(RefCell::new(inner))));
+
             let mut window = Self {
-                handler: options.handler,
+                handler,
                 gl_context,
-
-                inner: WindowInner {
-                    window_id,
-                    connection: connection.clone(),
-
-                    on_closed,
-                    is_closed: false,
-                    is_destroyed: false,
-
-                    last_modifiers: Modifiers::empty(),
-                    last_cursor: MouseCursor::Default,
-                    last_window_position: None,
-                    last_keyboard_focus: false,
-                },
             };
 
             window.send_event(Event::WindowOpen);
@@ -218,15 +222,23 @@ impl WindowImpl {
         }
     }
 
+    fn inner(&self) -> Ref<'_, WindowInner> {
+        self.handler.window().0.borrow()
+    }
+
+    fn inner_mut(&mut self) -> RefMut<'_, WindowInner> {
+        self.handler.window_mut().0.borrow_mut()
+    }
+
     fn handle_frame(&mut self) {
-        if self.inner.is_closed {
+        if self.inner().is_closed {
             return;
         }
 
         if let Some(gl) = self.gl_context.as_mut() {
             unsafe {
                 if gl.set_current(true) {
-                    (self.handler)(Event::WindowFrame { gl: Some(gl) }, Window(&mut self.inner));
+                    self.handler.on_event(Event::WindowFrame { gl: Some(gl) });
                     gl.set_current(false);
                 } else {
                     self.send_event(Event::WindowFrame { gl: None });
@@ -240,16 +252,16 @@ impl WindowImpl {
     }
 
     fn handle_event(&mut self, event: &XEvent) {
-        if self.inner.is_closed {
+        if self.inner().is_closed {
             return;
         }
 
         match event {
             XEvent::ClientMessage(event) => {
                 if event.format == 32
-                    && event.data.as_data32()[0] == self.inner.connection.atoms().WM_DELETE_WINDOW
+                    && event.data.as_data32()[0] == self.inner().connection.atoms().WM_DELETE_WINDOW
                 {
-                    self.inner.is_closed = true;
+                    self.inner_mut().is_closed = true;
                 }
             }
 
@@ -363,15 +375,15 @@ impl WindowImpl {
                 self.send_event(Event::WindowBlur);
             }
 
-            XEvent::PresentCompleteNotify(e) if !self.inner.connection.is_manual_tick() => {
+            XEvent::PresentCompleteNotify(e) if !self.inner().connection.is_manual_tick() => {
                 if e.kind == CompleteKind::NOTIFY_MSC {
                     self.handle_frame();
-                    self.inner
+                    self.inner()
                         .connection
                         .xcb()
-                        .present_notify_msc(self.inner.window_id, 0, 0, 1, 0)
+                        .present_notify_msc(self.inner().window_id, 0, 0, 1, 0)
                         .ok();
-                    self.inner.connection.flush();
+                    self.inner().connection.flush();
                 }
             }
 
@@ -385,9 +397,9 @@ impl WindowImpl {
             }
 
             XEvent::DestroyNotify(_) => {
-                self.inner.is_closed = true;
-                self.inner.is_destroyed = true;
-                self.inner.on_closed.try_send(()).ok();
+                self.inner_mut().is_closed = true;
+                self.inner_mut().is_destroyed = true;
+                self.inner().on_closed.try_send(()).ok();
             }
 
             _ => {}
@@ -397,34 +409,34 @@ impl WindowImpl {
     }
 
     fn handle_modifiers(&mut self, modifiers: Modifiers) {
-        if modifiers != self.inner.last_modifiers {
-            self.inner.last_modifiers = modifiers;
+        if modifiers != self.inner().last_modifiers {
+            self.inner_mut().last_modifiers = modifiers;
             self.send_event(Event::KeyModifiers { modifiers });
         }
     }
 
     fn handle_destroy(&mut self) {
-        if !self.inner.is_closed {
+        if !self.inner().is_closed {
             return;
         }
 
-        if replace(&mut self.inner.is_destroyed, true) {
+        if replace(&mut self.inner_mut().is_destroyed, true) {
             return;
         }
 
-        self.inner
+        self.inner()
             .connection
-            .remove_window_pacer(self.inner.window_id);
+            .remove_window_pacer(self.inner().window_id);
         let _ = self
-            .inner
+            .inner()
             .connection
             .xcb()
-            .destroy_window(self.inner.window_id);
-        self.inner.connection.flush();
+            .destroy_window(self.inner().window_id);
+        self.inner().connection.flush();
     }
 
     fn send_event(&mut self, e: Event) -> EventResponse {
-        (self.handler)(e, Window(&mut self.inner))
+        self.handler.on_event(e)
     }
 }
 

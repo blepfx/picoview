@@ -1,38 +1,53 @@
-use picoview::{Event, GlConfig, Point, WindowBuilder};
+use picoview::{Event, GlConfig, Point, Window, WindowBuilder, WindowHandler};
 use std::mem::transmute;
 
-fn main() {
-    WindowBuilder::new({
-        move |event, mut window| {
-            match event {
-                Event::WindowFrame { gl: Some(gl) } => unsafe {
-                    let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
-                        transmute(gl.get_proc_address(c"glClearColor"));
-                    let clear: unsafe extern "system" fn(i32) =
-                        transmute(gl.get_proc_address(c"glClear"));
+pub struct MyApp {
+    window: Window,
+}
 
-                    (clear_color)(1.0, 1.0, 0.0, 0.5);
-                    (clear)(0x00004000);
+impl WindowHandler for MyApp {
+    fn window<'a>(&'a self) -> &'a Window {
+        &self.window
+    }
 
-                    gl.swap_buffers();
-                },
+    fn window_mut<'a>(&'a mut self) -> &'a mut Window {
+        &mut self.window
+    }
 
-                Event::MouseMove {
-                    cursor: Some(cursor),
-                } => {
-                    if cursor.x < -10.0 {
-                        window.set_cursor_position(Point { x: 100.0, y: 100.0 });
-                    }
+    fn on_event(&mut self, event: Event) -> picoview::EventResponse {
+        match event {
+            Event::WindowFrame { gl: Some(gl) } => unsafe {
+                let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
+                    transmute(gl.get_proc_address(c"glClearColor"));
+                let clear: unsafe extern "system" fn(i32) =
+                    transmute(gl.get_proc_address(c"glClear"));
+
+                (clear_color)(1.0, 1.0, 0.0, 0.5);
+                (clear)(0x00004000);
+
+                gl.swap_buffers();
+            },
+
+            Event::MouseMove {
+                cursor: Some(cursor),
+            } => {
+                if cursor.x < -10.0 {
+                    self.window
+                        .set_cursor_position(Point { x: 100.0, y: 100.0 });
                 }
-
-                _ => {}
             }
 
-            picoview::EventResponse::Rejected
+            _ => {}
         }
-    })
-    .with_opengl(GlConfig::default())
-    .with_size((200, 200))
-    .open_blocking()
-    .unwrap();
+
+        picoview::EventResponse::Rejected
+    }
+}
+
+fn main() {
+    WindowBuilder::new(|window| MyApp { window })
+        .with_opengl(GlConfig::default())
+        .with_size((200, 200))
+        .open_blocking()
+        .unwrap();
 }

@@ -1,6 +1,15 @@
-use crate::{GlConfig, GlContext, platform, rwh_06};
+use crate::{
+    GlConfig, GlContext,
+    platform::{self, OsWindow},
+    rwh_06,
+};
 use bitflags::bitflags;
-use std::{fmt::Debug, path::PathBuf};
+use std::{
+    cell::{Cell, RefCell},
+    fmt::Debug,
+    path::PathBuf,
+    rc::{Rc, Weak},
+};
 
 #[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Hash)]
 #[repr(u8)]
@@ -302,7 +311,7 @@ pub enum Error {
     InvalidParent,
 }
 
-pub type EventHandler = Box<dyn FnMut(Event, Window) -> EventResponse + Send>;
+pub type EventHandler = Box<dyn WindowHandler>;
 
 #[non_exhaustive]
 pub struct WindowBuilder {
@@ -312,14 +321,14 @@ pub struct WindowBuilder {
     pub blur: bool,
 
     pub title: String,
-    pub handler: EventHandler,
+    pub constructor: Box<dyn FnOnce(Window) -> EventHandler>,
     pub size: Size,
     pub position: Option<Point>,
     pub opengl: Option<GlConfig>,
 }
 
 impl WindowBuilder {
-    pub fn new<T: FnMut(Event, Window) -> EventResponse + Send + 'static>(handler: T) -> Self {
+    pub fn new<W: WindowHandler + 'static, T: FnOnce(Window) -> W + 'static>(handler: T) -> Self {
         Self {
             visible: true,
             decorations: true,
@@ -332,7 +341,7 @@ impl WindowBuilder {
             },
             position: None,
             opengl: None,
-            handler: Box::new(handler),
+            constructor: Box::new(|window| Box::new((handler)(window))),
         }
     }
 
@@ -400,63 +409,90 @@ impl WindowBuilder {
     }
 }
 
-#[repr(transparent)]
-pub struct Window<'a>(pub(crate) &'a mut dyn platform::OsWindow);
+pub trait WindowHandler {
+    fn window<'a>(&'a self) -> &'a Window;
+    fn window_mut<'a>(&'a mut self) -> &'a mut Window;
+    fn on_event(&mut self, event: Event) -> EventResponse;
+}
 
-impl<'a> Window<'a> {
+#[repr(transparent)]
+pub struct Window(pub(crate) Rc<RefCell<platform::PlatformWindow>>);
+pub struct WeakHandle(pub(crate) Weak<RefCell<platform::PlatformWindow>>);
+
+impl Window {
+    pub fn handle(&self) -> WeakHandle {
+        WeakHandle(Rc::downgrade(&self.0))
+    }
+
     pub fn close(&mut self) {
-        self.0.close();
+        self.0.borrow_mut().close();
     }
 
     pub fn set_title(&mut self, title: &str) {
-        self.0.set_title(title);
+        self.0.borrow_mut().set_title(title);
     }
 
     pub fn set_cursor_icon(&mut self, icon: MouseCursor) {
-        self.0.set_cursor_icon(icon);
+        self.0.borrow_mut().set_cursor_icon(icon);
     }
 
     pub fn set_cursor_position(&mut self, pos: impl Into<Point>) {
-        self.0.set_cursor_position(pos.into());
+        self.0.borrow_mut().set_cursor_position(pos.into());
     }
 
     pub fn set_size(&mut self, size: impl Into<Size>) {
-        self.0.set_size(size.into());
+        self.0.borrow_mut().set_size(size.into());
     }
 
     pub fn set_position(&mut self, pos: impl Into<Point>) {
-        self.0.set_position(pos.into());
+        self.0.borrow_mut().set_position(pos.into());
     }
 
     pub fn set_visible(&mut self, visible: bool) {
-        self.0.set_visible(visible);
+        self.0.borrow_mut().set_visible(visible);
     }
 
     pub fn set_keyboard_input(&mut self, focus: bool) {
-        self.0.set_keyboard_input(focus);
+        self.0.borrow_mut().set_keyboard_input(focus);
     }
 
     pub fn open_url(&mut self, url: &str) -> bool {
-        self.0.open_url(url)
+        self.0.borrow_mut().open_url(url)
     }
 
     pub fn get_clipboard_text(&mut self) -> Option<String> {
-        self.0.get_clipboard_text()
+        self.0.borrow_mut().get_clipboard_text()
     }
 
     pub fn set_clipboard_text(&mut self, text: &str) -> bool {
-        self.0.set_clipboard_text(text)
+        self.0.borrow_mut().set_clipboard_text(text)
     }
 }
 
-impl<'a> rwh_06::HasWindowHandle for Window<'a> {
+impl<'a> rwh_06::HasWindowHandle for WeakHandle {
     fn window_handle(&self) -> Result<rwh_06::WindowHandle<'_>, rwh_06::HandleError> {
-        unsafe { Ok(rwh_06::WindowHandle::borrow_raw(self.0.window_handle())) }
+        let Some(inner) = self.0.upgrade() else {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        };
+
+        unsafe {
+            Ok(rwh_06::WindowHandle::borrow_raw(
+                inner.borrow().window_handle(),
+            ))
+        }
     }
 }
 
-impl<'a> rwh_06::HasDisplayHandle for Window<'a> {
+impl<'a> rwh_06::HasDisplayHandle for WeakHandle {
     fn display_handle(&self) -> Result<rwh_06::DisplayHandle<'_>, rwh_06::HandleError> {
-        unsafe { Ok(rwh_06::DisplayHandle::borrow_raw(self.0.display_handle())) }
+        let Some(inner) = self.0.upgrade() else {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        };
+
+        unsafe {
+            Ok(rwh_06::DisplayHandle::borrow_raw(
+                inner.borrow().display_handle(),
+            ))
+        }
     }
 }
