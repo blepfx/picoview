@@ -16,18 +16,19 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 use x11rb::connection::Connection as XConnection;
 use x11rb::properties::WmSizeHints;
 use x11rb::protocol::present::CompleteKind;
-use x11rb::protocol::present::{self, ConnectionExt as ConnectionExt3};
+use x11rb::protocol::present::{self, ConnectionExt as ConnectionExtPresent};
 use x11rb::protocol::xproto::KeyButMask;
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
     protocol::{
         Event as XEvent,
         xproto::{
-            AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt,
-            CreateWindowAux, EventMask, GrabMode, PropMode, WindowClass,
+            AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux,
+            ConnectionExt as ConnectionExtXProto, CreateWindowAux, EventMask, GrabMode, PropMode,
+            WindowClass,
         },
     },
-    wrapper::ConnectionExt as ConnectionExt2,
+    wrapper::ConnectionExt as ConnectionExtWrapper,
 };
 
 unsafe impl Send for WindowImpl {}

@@ -25,6 +25,7 @@ use windows_sys::{
 
 unsafe impl Send for Connection {}
 unsafe impl Sync for Connection {}
+
 pub struct Connection {
     cursor_cache: CursorCache,
 

@@ -85,7 +85,7 @@ impl WindowMain {
                     window.hwnd.get() as HWND
                 }
                 OpenMode::Embedded(_) => {
-                    return Err(Error::PlatformError("invalid parent handle".into()));
+                    return Err(Error::InvalidParent);
                 }
                 OpenMode::Blocking => null_mut(),
             };
