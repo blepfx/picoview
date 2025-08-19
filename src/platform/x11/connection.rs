@@ -214,6 +214,13 @@ impl Connection {
                 .flatten()
                 .is_some();
 
+            // TODO: find a proper way to fix frame sync on xwayland
+            let is_xwayland = connection
+                .extension_information("XWAYLAND")
+                .ok()
+                .flatten()
+                .is_some();
+
             let (loop_sender, loop_receiver) = channel();
             let connection = Arc::new(Self {
                 xlib: Box::new(xlib),
@@ -222,13 +229,15 @@ impl Connection {
                 display,
                 screen,
 
-                loop_manual: !ext_present,
+                loop_manual: !ext_present || is_xwayland,
                 loop_sender,
 
                 atoms,
                 cursor_handle,
                 cursor_cache: Mutex::new(CursorCache::new()),
             });
+
+            println!("{:?}", connection.is_manual_tick());
 
             run_event_loop(Arc::downgrade(&connection), loop_receiver);
 

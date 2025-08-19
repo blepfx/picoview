@@ -252,13 +252,6 @@ pub enum Event<'a> {
         y: f32,
     },
 
-    GestureRotate {
-        rotate: f32,
-    },
-    GestureZoom {
-        zoom: f32,
-    },
-
     KeyModifiers {
         modifiers: Modifiers,
     },
@@ -309,7 +302,6 @@ pub struct WindowBuilder {
     pub visible: bool,
     pub decorations: bool,
     pub transparent: bool,
-    pub blur: bool,
 
     pub title: String,
     pub handler: EventHandler,
@@ -324,7 +316,6 @@ impl WindowBuilder {
             visible: true,
             decorations: true,
             transparent: false,
-            blur: false,
             title: String::new(),
             size: Size {
                 width: 200,
@@ -334,10 +325,6 @@ impl WindowBuilder {
             opengl: None,
             handler: Box::new(handler),
         }
-    }
-
-    pub fn with_blur(self, blur: bool) -> Self {
-        Self { blur, ..self }
     }
 
     pub fn with_transparency(self, transparent: bool) -> Self {
