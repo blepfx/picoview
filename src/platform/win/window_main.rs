@@ -12,7 +12,7 @@ use crate::{
     WindowBuilder, platform::OpenMode, rwh_06,
 };
 use std::{
-    cell::{Cell, Ref, RefCell},
+    cell::{Cell, RefCell},
     collections::VecDeque,
     mem::size_of,
     num::NonZeroIsize,
