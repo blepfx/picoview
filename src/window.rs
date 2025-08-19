@@ -455,7 +455,7 @@ impl Window {
     }
 }
 
-impl<'a> rwh_06::HasWindowHandle for WeakHandle {
+impl rwh_06::HasWindowHandle for WeakHandle {
     fn window_handle(&self) -> Result<rwh_06::WindowHandle<'_>, rwh_06::HandleError> {
         let Some(inner) = self.0.upgrade() else {
             return Err(raw_window_handle::HandleError::Unavailable);
@@ -465,7 +465,7 @@ impl<'a> rwh_06::HasWindowHandle for WeakHandle {
     }
 }
 
-impl<'a> rwh_06::HasDisplayHandle for WeakHandle {
+impl rwh_06::HasDisplayHandle for WeakHandle {
     fn display_handle(&self) -> Result<rwh_06::DisplayHandle<'_>, rwh_06::HandleError> {
         let Some(inner) = self.0.upgrade() else {
             return Err(raw_window_handle::HandleError::Unavailable);
