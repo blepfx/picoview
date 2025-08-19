@@ -10,10 +10,6 @@ impl WindowHandler for MyApp {
         &self.window
     }
 
-    fn window_mut<'a>(&'a mut self) -> &'a mut Window {
-        &mut self.window
-    }
-
     fn on_event(&mut self, event: Event) -> picoview::EventResponse {
         match event {
             Event::WindowFrame { gl: Some(gl) } => unsafe {

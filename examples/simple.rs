@@ -12,10 +12,6 @@ impl WindowHandler for Child {
         &self.window
     }
 
-    fn window_mut<'a>(&'a mut self) -> &'a mut Window {
-        &mut self.window
-    }
-
     fn on_event(&mut self, event: Event) -> EventResponse {
         if !matches!(event, Event::WindowFrame { .. }) {
             println!("child {:?}", event);
@@ -34,10 +30,6 @@ pub struct MyApp {
 impl WindowHandler for MyApp {
     fn window<'a>(&'a self) -> &'a Window {
         &self.window
-    }
-
-    fn window_mut<'a>(&'a mut self) -> &'a mut Window {
-        &mut self.window
     }
 
     fn on_event(&mut self, event: Event) -> EventResponse {

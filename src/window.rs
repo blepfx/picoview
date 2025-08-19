@@ -397,7 +397,6 @@ impl WindowBuilder {
 
 pub trait WindowHandler {
     fn window<'a>(&'a self) -> &'a Window;
-    fn window_mut<'a>(&'a mut self) -> &'a mut Window;
     fn on_event(&mut self, event: Event) -> EventResponse;
 }
 
