@@ -5,7 +5,6 @@ use crate::{
 };
 use bitflags::bitflags;
 use std::{
-    cell::{Cell, RefCell},
     fmt::Debug,
     path::PathBuf,
     rc::{Rc, Weak},
@@ -462,11 +461,7 @@ impl<'a> rwh_06::HasWindowHandle for WeakHandle {
             return Err(raw_window_handle::HandleError::Unavailable);
         };
 
-        unsafe {
-            Ok(rwh_06::WindowHandle::borrow_raw(
-                inner.window_handle(),
-            ))
-        }
+        unsafe { Ok(rwh_06::WindowHandle::borrow_raw(inner.window_handle())) }
     }
 }
 
@@ -476,10 +471,6 @@ impl<'a> rwh_06::HasDisplayHandle for WeakHandle {
             return Err(raw_window_handle::HandleError::Unavailable);
         };
 
-        unsafe {
-            Ok(rwh_06::DisplayHandle::borrow_raw(
-                inner.display_handle(),
-            ))
-        }
+        unsafe { Ok(rwh_06::DisplayHandle::borrow_raw(inner.display_handle())) }
     }
 }

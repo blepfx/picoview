@@ -6,7 +6,7 @@ use crate::{
     Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point, Size,
     Window, WindowBuilder, rwh_06,
 };
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::Cell;
 use std::mem::replace;
 use std::num::NonZero;
 use std::ptr::NonNull;
@@ -37,14 +37,14 @@ pub(crate) struct WindowInner {
     window_id: u32,
     connection: Arc<Connection>,
 
-    is_closed: bool,
-    is_destroyed: bool,
+    is_closed: Cell<bool>,
+    is_destroyed: Cell<bool>,
     on_closed: SyncSender<()>,
 
-    last_modifiers: Modifiers,
-    last_cursor: MouseCursor,
-    last_window_position: Option<Point>,
-    last_keyboard_focus: bool,
+    last_modifiers: Cell<Modifiers>,
+    last_cursor: Cell<MouseCursor>,
+    last_window_position: Cell<Option<Point>>,
+    last_keyboard_focus: Cell<bool>,
 }
 
 pub struct WindowImpl {
@@ -185,16 +185,16 @@ impl WindowImpl {
                 connection: connection.clone(),
 
                 on_closed,
-                is_closed: false,
-                is_destroyed: false,
+                is_closed: Cell::new(false),
+                is_destroyed: Cell::new(false),
 
-                last_modifiers: Modifiers::empty(),
-                last_cursor: MouseCursor::Default,
-                last_window_position: None,
-                last_keyboard_focus: false,
+                last_modifiers: Cell::new(Modifiers::empty()),
+                last_cursor: Cell::new(MouseCursor::Default),
+                last_window_position: Cell::new(None),
+                last_keyboard_focus: Cell::new(false),
             };
 
-            let handler = (options.constructor)(Window(Rc::new(RefCell::new(inner))));
+            let handler = (options.constructor)(Window(Rc::new(inner)));
 
             let mut window = Self {
                 handler,
@@ -223,16 +223,12 @@ impl WindowImpl {
         }
     }
 
-    fn inner(&self) -> Ref<'_, WindowInner> {
-        self.handler.window().0.borrow()
-    }
-
-    fn inner_mut(&mut self) -> RefMut<'_, WindowInner> {
-        self.handler.window_mut().0.borrow_mut()
+    fn inner(&self) -> &WindowInner {
+        self.handler.window().0.as_ref()
     }
 
     fn handle_frame(&mut self) {
-        if self.inner().is_closed {
+        if self.inner().is_closed.get() {
             return;
         }
 
@@ -253,7 +249,7 @@ impl WindowImpl {
     }
 
     fn handle_event(&mut self, event: &XEvent) {
-        if self.inner().is_closed {
+        if self.inner().is_closed.get() {
             return;
         }
 
@@ -262,7 +258,7 @@ impl WindowImpl {
                 if event.format == 32
                     && event.data.as_data32()[0] == self.inner().connection.atoms().WM_DELETE_WINDOW
                 {
-                    self.inner_mut().is_closed = true;
+                    self.inner().is_closed.set(true);
                 }
             }
 
@@ -398,9 +394,10 @@ impl WindowImpl {
             }
 
             XEvent::DestroyNotify(_) => {
-                self.inner_mut().is_closed = true;
-                self.inner_mut().is_destroyed = true;
-                self.inner().on_closed.try_send(()).ok();
+                let inner = self.inner();
+                inner.is_closed.set(true);
+                inner.is_destroyed.set(true);
+                inner.on_closed.try_send(()).ok();
             }
 
             _ => {}
@@ -410,18 +407,18 @@ impl WindowImpl {
     }
 
     fn handle_modifiers(&mut self, modifiers: Modifiers) {
-        if modifiers != self.inner().last_modifiers {
-            self.inner_mut().last_modifiers = modifiers;
+        if modifiers != self.inner().last_modifiers.get() {
+            self.inner().last_modifiers.set(modifiers);
             self.send_event(Event::KeyModifiers { modifiers });
         }
     }
 
     fn handle_destroy(&mut self) {
-        if !self.inner().is_closed {
+        if !self.inner().is_closed.get() {
             return;
         }
 
-        if replace(&mut self.inner_mut().is_destroyed, true) {
+        if replace(&mut self.inner().is_destroyed.get(), true) {
             return;
         }
 
@@ -442,8 +439,8 @@ impl WindowImpl {
 }
 
 impl crate::platform::OsWindow for WindowInner {
-    fn close(&mut self) {
-        self.is_closed = true;
+    fn close(&self) {
+        self.is_closed.set(true);
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -461,7 +458,7 @@ impl crate::platform::OsWindow for WindowInner {
         ))
     }
 
-    fn set_title(&mut self, title: &str) {
+    fn set_title(&self, title: &str) {
         let _ = self.connection.xcb().change_property8(
             PropMode::REPLACE,
             self.window_id,
@@ -473,8 +470,8 @@ impl crate::platform::OsWindow for WindowInner {
         self.connection.flush();
     }
 
-    fn set_cursor_icon(&mut self, cursor: MouseCursor) {
-        if self.is_closed || replace(&mut self.last_cursor, cursor) == cursor {
+    fn set_cursor_icon(&self, cursor: MouseCursor) {
+        if self.is_closed.get() || self.last_cursor.replace(cursor) == cursor {
             return;
         }
 
@@ -488,8 +485,8 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn set_cursor_position(&mut self, point: Point) {
-        if self.is_closed {
+    fn set_cursor_position(&self, point: Point) {
+        if self.is_closed.get() {
             return;
         }
 
@@ -506,8 +503,8 @@ impl crate::platform::OsWindow for WindowInner {
         self.connection.flush();
     }
 
-    fn set_size(&mut self, size: Size) {
-        if self.is_closed {
+    fn set_size(&self, size: Size) {
+        if self.is_closed.get() {
             return;
         }
 
@@ -531,8 +528,8 @@ impl crate::platform::OsWindow for WindowInner {
         self.connection.flush();
     }
 
-    fn set_position(&mut self, point: Point) {
-        if self.is_closed {
+    fn set_position(&self, point: Point) {
+        if self.is_closed.get() {
             return;
         }
 
@@ -543,17 +540,17 @@ impl crate::platform::OsWindow for WindowInner {
                 .y(point.y as i32),
         );
         self.connection.flush();
-        self.last_window_position = Some(point);
+        self.last_window_position.set(Some(point));
     }
 
-    fn set_visible(&mut self, visible: bool) {
-        if self.is_closed {
+    fn set_visible(&self, visible: bool) {
+        if self.is_closed.get() {
             return;
         }
 
         if visible {
             let _ = self.connection.xcb().map_window(self.window_id);
-            if let Some(point) = self.last_window_position {
+            if let Some(point) = self.last_window_position.get() {
                 let _ = self.connection.xcb().configure_window(
                     self.window_id,
                     &ConfigureWindowAux::new()
@@ -568,8 +565,8 @@ impl crate::platform::OsWindow for WindowInner {
         self.connection.flush();
     }
 
-    fn set_keyboard_input(&mut self, focus: bool) {
-        if self.is_closed || replace(&mut self.last_keyboard_focus, focus) == focus {
+    fn set_keyboard_input(&self, focus: bool) {
+        if self.is_closed.get() || self.last_keyboard_focus.replace(focus) == focus {
             return;
         }
 
@@ -588,15 +585,15 @@ impl crate::platform::OsWindow for WindowInner {
         self.connection.flush();
     }
 
-    fn open_url(&mut self, url: &str) -> bool {
+    fn open_url(&self, url: &str) -> bool {
         util::open_url(url)
     }
 
-    fn get_clipboard_text(&mut self) -> Option<String> {
+    fn get_clipboard_text(&self) -> Option<String> {
         None
     }
 
-    fn set_clipboard_text(&mut self, _text: &str) -> bool {
+    fn set_clipboard_text(&self, _text: &str) -> bool {
         false
     }
 }
