@@ -1,3 +1,7 @@
+use objc2::rc::Retained;
+
+use crate::platform::mac::view::OsWindowView;
+
 mod display;
 mod util;
 mod view;
@@ -13,3 +17,5 @@ pub unsafe fn open_window(
         }
     }
 }
+
+pub(crate) type PlatformWindow = Retained<OsWindowView>;

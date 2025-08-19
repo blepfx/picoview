@@ -188,10 +188,12 @@ impl OsWindowView {
             )?
         };
 
+        let handler = (options.constructor)(Window(Rc::new(view.clone())));
+
         view.set_context(Box::new(OsWindowViewInner {
             _class: class,
             _display_link: display,
-            event_handler: RefCell::new(options.handler),
+            event_handler: RefCell::new(handler),
             input_focus: Cell::new(false),
             current_cursor: Cell::new(MouseCursor::Default),
             is_closed: Cell::new(false),
@@ -207,8 +209,7 @@ impl OsWindowView {
 
     fn send_event(&self, event: Event) -> EventResponse {
         if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
-            let mut handle = self;
-            handler(event, Window(&mut handle))
+            handler.on_event(event)
         } else {
             EventResponse::Rejected
         }
@@ -425,20 +426,20 @@ impl OsWindowView {
     }
 }
 
-impl<'a> OsWindow for &'a OsWindowView {
-    fn close(&mut self) {
+impl OsWindow for OsWindowView {
+    fn close(& self) {
         if let Some(window) = self.window() {
             window.close();
         }
     }
 
-    fn set_title(&mut self, title: &str) {
+    fn set_title(& self, title: &str) {
         if let Some(window) = self.window() {
             window.setTitle(&NSString::from_str(title));
         }
     }
 
-    fn set_cursor_icon(&mut self, cursor: MouseCursor) {
+    fn set_cursor_icon(& self, cursor: MouseCursor) {
         unsafe {
             let old_cursor = self.inner().current_cursor.replace(cursor);
             if old_cursor != cursor {
@@ -457,7 +458,7 @@ impl<'a> OsWindow for &'a OsWindowView {
         }
     }
 
-    fn set_cursor_position(&mut self, point: Point) {
+    fn set_cursor_position(& self, point: Point) {
         unsafe {
             if let Some(window) = self.window() {
                 let main_thread = MainThreadMarker::new_unchecked();
@@ -479,7 +480,7 @@ impl<'a> OsWindow for &'a OsWindowView {
         }
     }
 
-    fn set_size(&mut self, size: Size) {
+    fn set_size(& self, size: Size) {
         unsafe {
             self.setFrameSize(NSSize {
                 width: size.width as _,
@@ -488,7 +489,7 @@ impl<'a> OsWindow for &'a OsWindowView {
         }
     }
 
-    fn set_position(&mut self, point: Point) {
+    fn set_position(& self, point: Point) {
         unsafe {
             self.setFrameOrigin(NSPoint {
                 x: point.x as _,
@@ -497,7 +498,7 @@ impl<'a> OsWindow for &'a OsWindowView {
         }
     }
 
-    fn set_visible(&mut self, visible: bool) {
+    fn set_visible(& self, visible: bool) {
         if let Some(window) = self.window() {
             if visible {
                 window.orderFront(None);
@@ -507,19 +508,19 @@ impl<'a> OsWindow for &'a OsWindowView {
         }
     }
 
-    fn set_keyboard_input(&mut self, focus: bool) {
+    fn set_keyboard_input(& self, focus: bool) {
         self.inner().input_focus.set(focus);
     }
 
-    fn open_url(&mut self, url: &str) -> bool {
+    fn open_url(& self, url: &str) -> bool {
         util::spawn_detached(std::process::Command::new("/usr/bin/open").arg(url)).is_ok()
     }
 
-    fn get_clipboard_text(&mut self) -> Option<String> {
+    fn get_clipboard_text(& self) -> Option<String> {
         util::get_clipboard_text()
     }
 
-    fn set_clipboard_text(&mut self, text: &str) -> bool {
+    fn set_clipboard_text(& self, text: &str) -> bool {
         util::set_clipboard_text(text)
     }
 

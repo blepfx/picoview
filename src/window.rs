@@ -403,8 +403,8 @@ pub trait WindowHandler {
 }
 
 #[repr(transparent)]
-pub struct Window(pub(crate) Rc<RefCell<platform::PlatformWindow>>);
-pub struct WeakHandle(pub(crate) Weak<RefCell<platform::PlatformWindow>>);
+pub struct Window(pub(crate) Rc<platform::PlatformWindow>);
+pub struct WeakHandle(pub(crate) Weak<platform::PlatformWindow>);
 
 impl Window {
     pub fn handle(&self) -> WeakHandle {
@@ -412,47 +412,47 @@ impl Window {
     }
 
     pub fn close(&mut self) {
-        self.0.borrow_mut().close();
+        self.0.close();
     }
 
     pub fn set_title(&mut self, title: &str) {
-        self.0.borrow_mut().set_title(title);
+        self.0.set_title(title);
     }
 
     pub fn set_cursor_icon(&mut self, icon: MouseCursor) {
-        self.0.borrow_mut().set_cursor_icon(icon);
+        self.0.set_cursor_icon(icon);
     }
 
     pub fn set_cursor_position(&mut self, pos: impl Into<Point>) {
-        self.0.borrow_mut().set_cursor_position(pos.into());
+        self.0.set_cursor_position(pos.into());
     }
 
     pub fn set_size(&mut self, size: impl Into<Size>) {
-        self.0.borrow_mut().set_size(size.into());
+        self.0.set_size(size.into());
     }
 
     pub fn set_position(&mut self, pos: impl Into<Point>) {
-        self.0.borrow_mut().set_position(pos.into());
+        self.0.set_position(pos.into());
     }
 
     pub fn set_visible(&mut self, visible: bool) {
-        self.0.borrow_mut().set_visible(visible);
+        self.0.set_visible(visible);
     }
 
     pub fn set_keyboard_input(&mut self, focus: bool) {
-        self.0.borrow_mut().set_keyboard_input(focus);
+        self.0.set_keyboard_input(focus);
     }
 
     pub fn open_url(&mut self, url: &str) -> bool {
-        self.0.borrow_mut().open_url(url)
+        self.0.open_url(url)
     }
 
     pub fn get_clipboard_text(&mut self) -> Option<String> {
-        self.0.borrow_mut().get_clipboard_text()
+        self.0.get_clipboard_text()
     }
 
     pub fn set_clipboard_text(&mut self, text: &str) -> bool {
-        self.0.borrow_mut().set_clipboard_text(text)
+        self.0.set_clipboard_text(text)
     }
 }
 
@@ -464,7 +464,7 @@ impl<'a> rwh_06::HasWindowHandle for WeakHandle {
 
         unsafe {
             Ok(rwh_06::WindowHandle::borrow_raw(
-                inner.borrow().window_handle(),
+                inner.window_handle(),
             ))
         }
     }
@@ -478,7 +478,7 @@ impl<'a> rwh_06::HasDisplayHandle for WeakHandle {
 
         unsafe {
             Ok(rwh_06::DisplayHandle::borrow_raw(
-                inner.borrow().display_handle(),
+                inner.display_handle(),
             ))
         }
     }
