@@ -12,12 +12,13 @@ use crate::{
     WindowBuilder, platform::OpenMode, rwh_06,
 };
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, Ref, RefCell},
+    collections::VecDeque,
     mem::size_of,
     num::NonZeroIsize,
     ptr::{copy_nonoverlapping, null, null_mut},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
@@ -57,24 +58,33 @@ pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
 pub const WM_USER_HOOK_KEYUP: u32 = WM_USER + 3;
 pub const WM_USER_HOOK_KEYDOWN: u32 = WM_USER + 4;
 pub const WM_USER_HOOK_KILLFOCUS: u32 = WM_USER + 5;
+pub const WM_USER_DEFERRED_EVENT: u32 = WM_USER + 6;
 
-pub struct WindowMain {
+pub struct WindowInner {
     connection: Arc<Connection>,
 
     window_hwnd: HWND,
     window_class: u16,
-    window_hook: WindowKeyboardHook,
+    window_hook: Rc<WindowKeyboardHook>,
+
+    state_focused_user: Rc<Cell<bool>>,
+    state_focused_keyboard: Rc<Cell<bool>>,
+    state_current_cursor: Rc<Cell<HCURSOR>>,
+}
+
+pub struct WindowMain {
+    state_focused_user: Rc<Cell<bool>>,
+    state_focused_keyboard: Rc<Cell<bool>>,
+    state_current_cursor: Rc<Cell<HCURSOR>>,
+    state_current_modifiers: Cell<Modifiers>,
+    state_mouse_capture: Rc<Cell<u32>>,
 
     owns_event_loop: bool,
-
-    state_focused_user: Cell<bool>,
-    state_focused_keyboard: Cell<bool>,
-    state_current_modifiers: Cell<Modifiers>,
-    state_current_cursor: Cell<HCURSOR>,
-    state_mouse_capture: Cell<u32>,
-
+    window_hwnd: HWND,
     handler: RefCell<EventHandler>,
+    window_hook: Rc<WindowKeyboardHook>,
     gl_context: Option<GlContext>,
+    event_queue: RwLock<VecDeque<Event<'static>>>,
 }
 
 impl WindowMain {
@@ -171,7 +181,7 @@ impl WindowMain {
                 SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
             }
 
-            let window_hook = WindowKeyboardHook::new(hwnd)?;
+            let window_hook = Rc::new(WindowKeyboardHook::new(hwnd)?);
             let gl_context = match options.opengl {
                 Some(config) => match GlContext::new(hwnd, config) {
                     Ok(gl) => Some(gl),
@@ -181,23 +191,37 @@ impl WindowMain {
                 None => None,
             };
 
+            let state_mouse_capture = Rc::new(Cell::new(0));
+            let state_current_cursor =
+                Rc::new(Cell::new(connection.load_cursor(MouseCursor::Default)));
+            let state_focused_user = Rc::new(Cell::new(GetFocus() == hwnd));
+            let state_focused_keyboard = Rc::new(Cell::new(false));
+
+            let handler =
+                (options.constructor)(crate::Window(Rc::new(RefCell::new(WindowInner {
+                    connection: connection.clone(),
+
+                    window_class,
+                    window_hook: window_hook.clone(),
+                    window_hwnd: hwnd,
+                    state_focused_user: state_focused_user.clone(),
+                    state_focused_keyboard: state_focused_keyboard.clone(),
+                    state_current_cursor: state_current_cursor.clone(),
+                }))));
+
             let event_loop = Rc::new(Self {
-                connection: connection.clone(),
-
-                state_mouse_capture: Cell::new(0),
-                state_current_cursor: Cell::new(connection.load_cursor(MouseCursor::Default)),
-                state_focused_user: Cell::new(GetFocus() == hwnd),
-                state_focused_keyboard: Cell::new(false),
-                state_current_modifiers: Cell::new(Modifiers::empty()),
-
-                window_class,
-                window_hook,
-                window_hwnd: hwnd,
-
                 owns_event_loop: matches!(mode, OpenMode::Blocking),
 
                 gl_context,
-                handler: RefCell::new(options.handler),
+                handler: RefCell::new(handler),
+                window_hwnd: hwnd,
+                window_hook,
+                state_focused_user,
+                state_focused_keyboard,
+                state_current_cursor,
+                state_current_modifiers: Cell::new(Modifiers::empty()),
+                state_mouse_capture,
+                event_queue: RwLock::new(VecDeque::new()),
             });
 
             event_loop.send_event(Event::WindowOpen);
@@ -217,17 +241,21 @@ impl WindowMain {
         }
     }
 
-    fn send_event(&self, event: Event) -> EventResponse {
+    fn send_event(&self, event: Event<'static>) -> EventResponse {
         if let Ok(mut handler) = self.handler.try_borrow_mut() {
-            let mut handle = self;
-            handler(event, crate::Window(&mut handle))
+            handler.on_event(event)
         } else {
+            println!("deferring event...");
+            self.event_queue.write().unwrap().push_back(event);
+            unsafe {
+                PostMessageW(self.window_hwnd, WM_USER_DEFERRED_EVENT, 0, 0);
+            }
             EventResponse::Rejected
         }
     }
 }
 
-impl Drop for WindowMain {
+impl Drop for WindowInner {
     fn drop(&mut self) {
         unsafe {
             SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
@@ -237,7 +265,7 @@ impl Drop for WindowMain {
     }
 }
 
-impl<'a> crate::platform::OsWindow for &'a WindowMain {
+impl crate::platform::OsWindow for WindowInner {
     fn close(&mut self) {
         unsafe {
             PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
@@ -644,6 +672,17 @@ unsafe extern "system" fn wnd_proc(
 
             WM_USER_KILL_WINDOW => {
                 DestroyWindow(hwnd);
+                0
+            }
+
+            WM_USER_DEFERRED_EVENT => {
+                println!("chewing through deferred events...");
+                let window = &*window_ptr;
+                let mut queue = window.event_queue.write().unwrap();
+
+                while let Some(event) = queue.pop_front() {
+                    window.send_event(event);
+                }
                 0
             }
 

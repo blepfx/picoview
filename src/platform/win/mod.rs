@@ -10,3 +10,5 @@ pub unsafe fn open_window(
 ) -> Result<(), crate::Error> {
     unsafe { window_main::WindowMain::open(options, mode) }
 }
+
+pub(crate) use window_main::WindowInner as PlatformWindow;

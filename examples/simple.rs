@@ -56,13 +56,15 @@ impl WindowHandler for MyApp {
 
                 if passed(5000) {
                     println!("Resize window");
-                    self.window.set_title("picoview - example");
+                    self.window.set_title("don't talk to me or my");
                     self.window.set_size(Size {
                         width: 300,
                         height: 300,
                     });
 
                     WindowBuilder::new(|window| Child { window })
+                        .with_title("son")
+                        .with_position((150, 150))
                         .open_parented(self.window.handle())
                         .unwrap();
                 }
@@ -103,6 +105,7 @@ fn main() {
     })
     .with_title("picoview - simple")
     .with_size((200, 200))
+    .with_position((150, 150))
     .open_blocking()
     .unwrap();
 
