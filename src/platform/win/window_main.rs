@@ -197,17 +197,16 @@ impl WindowMain {
             let state_focused_user = Rc::new(Cell::new(GetFocus() == hwnd));
             let state_focused_keyboard = Rc::new(Cell::new(false));
 
-            let handler =
-                (options.constructor)(crate::Window(Rc::new(RefCell::new(WindowInner {
-                    connection: connection.clone(),
+            let handler = (options.constructor)(crate::Window(Rc::new(WindowInner {
+                connection: connection.clone(),
 
-                    window_class,
-                    window_hook: window_hook.clone(),
-                    window_hwnd: hwnd,
-                    state_focused_user: state_focused_user.clone(),
-                    state_focused_keyboard: state_focused_keyboard.clone(),
-                    state_current_cursor: state_current_cursor.clone(),
-                }))));
+                window_class,
+                window_hook: window_hook.clone(),
+                window_hwnd: hwnd,
+                state_focused_user: state_focused_user.clone(),
+                state_focused_keyboard: state_focused_keyboard.clone(),
+                state_current_cursor: state_current_cursor.clone(),
+            })));
 
             let event_loop = Rc::new(Self {
                 owns_event_loop: matches!(mode, OpenMode::Blocking),
@@ -266,7 +265,7 @@ impl Drop for WindowInner {
 }
 
 impl crate::platform::OsWindow for WindowInner {
-    fn close(&mut self) {
+    fn close(&self) {
         unsafe {
             PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
         }
@@ -286,19 +285,19 @@ impl crate::platform::OsWindow for WindowInner {
         rwh_06::RawDisplayHandle::Windows(rwh_06::WindowsDisplayHandle::new())
     }
 
-    fn set_title(&mut self, title: &str) {
+    fn set_title(&self, title: &str) {
         unsafe {
             let window_title = to_widestring(title);
             SetWindowTextW(self.window_hwnd, window_title.as_ptr() as _);
         }
     }
 
-    fn set_cursor_icon(&mut self, cursor: MouseCursor) {
+    fn set_cursor_icon(&self, cursor: MouseCursor) {
         self.state_current_cursor
             .set(self.connection.load_cursor(cursor));
     }
 
-    fn set_cursor_position(&mut self, point: Point) {
+    fn set_cursor_position(&self, point: Point) {
         unsafe {
             let mut point = POINT {
                 x: point.x as i32,
@@ -311,7 +310,7 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn set_size(&mut self, size: Size) {
+    fn set_size(&self, size: Size) {
         unsafe {
             let dwstyle = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
             let dwexstyle = GetWindowLongW(self.window_hwnd, GWL_EXSTYLE) as u32;
@@ -336,7 +335,7 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn set_position(&mut self, point: Point) {
+    fn set_position(&self, point: Point) {
         unsafe {
             SetWindowPos(
                 self.window_hwnd,
@@ -350,7 +349,7 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn set_visible(&mut self, visible: bool) {
+    fn set_visible(&self, visible: bool) {
         unsafe {
             SetWindowPos(
                 self.window_hwnd,
@@ -372,7 +371,7 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn set_keyboard_input(&mut self, focus: bool) {
+    fn set_keyboard_input(&self, focus: bool) {
         if self.state_focused_keyboard.replace(focus) == focus {
             return;
         }
@@ -388,7 +387,7 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn open_url(&mut self, url: &str) -> bool {
+    fn open_url(&self, url: &str) -> bool {
         let path = to_widestring(url);
         let verb = to_widestring("open");
 
@@ -405,7 +404,7 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn get_clipboard_text(&mut self) -> Option<String> {
+    fn get_clipboard_text(&self) -> Option<String> {
         unsafe {
             if OpenClipboard(self.window_hwnd) != 0 {
                 let data = GetClipboardData(CF_UNICODETEXT as _);
@@ -431,7 +430,7 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn set_clipboard_text(&mut self, text: &str) -> bool {
+    fn set_clipboard_text(&self, text: &str) -> bool {
         unsafe {
             if OpenClipboard(self.window_hwnd) != 0 {
                 EmptyClipboard();
