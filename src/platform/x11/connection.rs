@@ -237,8 +237,6 @@ impl Connection {
                 cursor_cache: Mutex::new(CursorCache::new()),
             });
 
-            println!("{:?}", connection.is_manual_tick());
-
             run_event_loop(Arc::downgrade(&connection), loop_receiver);
 
             Ok(connection)
