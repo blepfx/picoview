@@ -3,8 +3,8 @@ use super::gl::GlContext;
 use super::util;
 use crate::platform::OpenMode;
 use crate::{
-    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point, Size,
-    Window, WindowBuilder, rwh_06,
+    Error, Event, EventHandler, Modifiers, MouseButton, MouseCursor, Point, Size, Window,
+    WindowBuilder, rwh_06,
 };
 use std::mem::replace;
 use std::num::NonZero;
@@ -15,7 +15,7 @@ use x11rb::connection::Connection as XConnection;
 use x11rb::properties::WmSizeHints;
 use x11rb::protocol::present::CompleteKind;
 use x11rb::protocol::present::{self, ConnectionExt as ConnectionExtPresent};
-use x11rb::protocol::xproto::KeyButMask;
+use x11rb::protocol::xproto::{ColormapAlloc, KeyButMask, VisualClass};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
     protocol::{
@@ -70,10 +70,44 @@ impl WindowImpl {
                 .generate_id()
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
 
+            let (visual, depth) = if options.transparent {
+                connection
+                    .default_root()
+                    .allowed_depths
+                    .iter()
+                    .flat_map(|depth| {
+                        depth
+                            .visuals
+                            .iter()
+                            .map(move |visual| (visual, depth.depth))
+                    })
+                    .find(|(visual, depth)| visual.class == VisualClass::TRUE_COLOR && *depth == 32)
+                    .map(|(visual, depth)| (visual.visual_id, depth))
+                    .unwrap_or((COPY_FROM_PARENT, COPY_DEPTH_FROM_PARENT))
+            } else {
+                (COPY_FROM_PARENT, COPY_DEPTH_FROM_PARENT)
+            };
+
+            let colormap = if visual != COPY_FROM_PARENT {
+                let colormap_id = connection
+                    .xcb()
+                    .generate_id()
+                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+
+                connection
+                    .xcb()
+                    .create_colormap(ColormapAlloc::NONE, colormap_id, parent_window_id, visual)
+                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+
+                colormap_id
+            } else {
+                0
+            };
+
             connection
                 .xcb()
                 .create_window(
-                    COPY_DEPTH_FROM_PARENT,
+                    depth,
                     window_id,
                     parent_window_id,
                     0,
@@ -82,8 +116,8 @@ impl WindowImpl {
                     options.size.height as _,
                     0,
                     WindowClass::INPUT_OUTPUT,
-                    COPY_FROM_PARENT,
-                    &CreateWindowAux::new().event_mask(
+                    visual,
+                    &CreateWindowAux::new().colormap(colormap).event_mask(
                         EventMask::EXPOSURE
                             | EventMask::BUTTON_PRESS
                             | EventMask::BUTTON_RELEASE
@@ -97,22 +131,10 @@ impl WindowImpl {
                 )
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
 
-            connection
-                .xcb()
-                .change_property32(
-                    PropMode::REPLACE,
-                    window_id,
-                    connection.atoms().WM_PROTOCOLS,
-                    AtomEnum::ATOM,
-                    &[connection.atoms().WM_DELETE_WINDOW],
-                )
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
-
             let mut size_hints = WmSizeHints::new();
             size_hints.base_size = Some((options.size.width as _, options.size.height as _));
             size_hints.max_size = size_hints.base_size;
             size_hints.min_size = size_hints.base_size;
-
             size_hints
                 .set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS)
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
@@ -128,24 +150,53 @@ impl WindowImpl {
                 )
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
 
-            if !options.decorations {
-                connection
-                    .xcb()
-                    .change_property32(
-                        PropMode::REPLACE,
-                        window_id,
-                        connection.atoms()._NET_WM_WINDOW_TYPE,
-                        AtomEnum::ATOM,
-                        &[connection.atoms()._NET_WM_WINDOW_TYPE_DOCK],
-                    )
-                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
-            }
+            connection
+                .xcb()
+                .change_property32(
+                    PropMode::REPLACE,
+                    window_id,
+                    connection.atoms()._NET_WM_WINDOW_TYPE,
+                    AtomEnum::ATOM,
+                    &[if options.decorations {
+                        connection.atoms()._NET_WM_WINDOW_TYPE_NORMAL
+                    } else {
+                        connection.atoms()._NET_WM_WINDOW_TYPE_DOCK
+                    }],
+                )
+                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+
+            connection
+                .xcb()
+                .change_property32(
+                    PropMode::REPLACE,
+                    window_id,
+                    connection.atoms()._MOTIF_WM_HINTS,
+                    AtomEnum::ATOM,
+                    &[0b10, 0, options.decorations as u32, 0, 0],
+                )
+                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
 
             if options.visible {
                 connection
                     .xcb()
                     .map_window(window_id)
                     .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+            }
+
+            if let Some(position) = options.position {
+                connection
+                    .xcb()
+                    .configure_window(
+                        window_id,
+                        &ConfigureWindowAux::new()
+                            .x(position.x as i32)
+                            .y(position.y as i32),
+                    )
+                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+            }
+
+            if !connection.flush() {
+                return Err(Error::PlatformError("X11 connection error".into()));
             }
 
             let gl_context = if let Some(config) = options.opengl {
@@ -246,11 +297,17 @@ impl WindowImpl {
         }
 
         match event {
-            XEvent::ClientMessage(event) => {
-                if event.format == 32
-                    && event.data.as_data32()[0] == self.inner.connection.atoms().WM_DELETE_WINDOW
-                {
-                    self.inner.is_closed = true;
+            XEvent::ConfigureNotify(e) => {
+                let is_synthetic = e.response_type & 0x80 == 0;
+                let origin = Point {
+                    x: e.x as f32,
+                    y: e.y as f32,
+                };
+
+                if !is_synthetic {
+                    if replace(&mut self.inner.last_window_position, Some(origin)) != Some(origin) {
+                        self.send_event(Event::WindowMove { origin });
+                    }
                 }
             }
 
@@ -357,11 +414,11 @@ impl WindowImpl {
             }
 
             XEvent::FocusIn(_) => {
-                self.send_event(Event::WindowFocus);
+                self.send_event(Event::WindowFocus { focus: true });
             }
 
             XEvent::FocusOut(_) => {
-                self.send_event(Event::WindowBlur);
+                self.send_event(Event::WindowFocus { focus: false });
             }
 
             XEvent::PresentCompleteNotify(e) if !self.inner.connection.is_manual_tick() => {
@@ -413,6 +470,8 @@ impl WindowImpl {
             return;
         }
 
+        // drop the handler here, so it could do clean up when the window is still alive
+        self.handler = Box::new(|_, _| {});
         self.inner
             .connection
             .remove_window_pacer(self.inner.window_id);
@@ -424,7 +483,7 @@ impl WindowImpl {
         self.inner.connection.flush();
     }
 
-    fn send_event(&mut self, e: Event) -> EventResponse {
+    fn send_event(&mut self, e: Event) {
         (self.handler)(e, Window(&mut self.inner))
     }
 }

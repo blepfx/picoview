@@ -3,8 +3,8 @@ use super::util::{cstr, get_cursor, keycode2key, random_id};
 use crate::platform::OsWindow;
 use crate::platform::mac::util::{self, flags2mods};
 use crate::{
-    Error, Event, EventHandler, EventResponse, MouseButton, MouseCursor, Point, Size, Window,
-    WindowBuilder, rwh_06,
+    Error, Event, EventHandler, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
+    rwh_06,
 };
 use objc2::rc::{Allocated, Retained, Weak};
 use objc2::runtime::{ProtocolObject, Sel};
@@ -205,12 +205,10 @@ impl OsWindowView {
         self.inner().input_focus.get()
     }
 
-    fn send_event(&self, event: Event) -> EventResponse {
+    fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
             let mut handle = self;
             handler(event, Window(&mut handle))
-        } else {
-            EventResponse::Rejected
         }
     }
 

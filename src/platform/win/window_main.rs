@@ -43,11 +43,12 @@ use windows_sys::Win32::{
             RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
             SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes,
             SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI,
-            UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-            WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_USER,
-            WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-            WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE, XBUTTON1, XBUTTON2,
+            UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP,
+            WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+            WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+            WM_SETCURSOR, WM_SETFOCUS, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER,
+            WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+            XBUTTON1, XBUTTON2,
         },
     },
 };
@@ -229,6 +230,10 @@ impl WindowMain {
 
 impl Drop for WindowMain {
     fn drop(&mut self) {
+        // drop the handler here, so it could do clean up when the window is still alive
+        self.handler
+            .replace(Box::new(|_, _| EventResponse::Rejected));
+
         unsafe {
             SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
             UnregisterClassW(self.window_class as _, hinstance());
@@ -605,7 +610,7 @@ unsafe extern "system" fn wnd_proc(
                 0
             }
 
-            WM_USER_HOOK_KEYDOWN | WM_USER_HOOK_KEYUP => {
+            WM_KEYDOWN | WM_KEYUP | WM_USER_HOOK_KEYDOWN | WM_USER_HOOK_KEYUP => {
                 let window = &*window_ptr;
 
                 let scan_code = ((lparam & 0x1ff_0000) >> 16) as u32;

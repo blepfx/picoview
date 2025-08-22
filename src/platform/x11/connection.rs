@@ -26,8 +26,10 @@ use x11rb::{
 
 x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
+        _MOTIF_WM_HINTS,
         _NET_WM_NAME,
         _NET_WM_WINDOW_TYPE,
+        _NET_WM_WINDOW_TYPE_NORMAL,
         _NET_WM_WINDOW_TYPE_DOCK,
         WM_PROTOCOLS,
         WM_DELETE_WINDOW,
@@ -452,7 +454,7 @@ fn event_window_id(event: &Event) -> Option<Window> {
         Event::CirculateRequest(e) => e.window,
         Event::ClientMessage(e) => e.window,
         Event::ColormapNotify(e) => e.window,
-        Event::ConfigureNotify(e) => e.window,
+        Event::ConfigureNotify(e) => e.event,
         Event::ConfigureRequest(e) => e.window,
         Event::CreateNotify(e) => e.window,
         Event::DestroyNotify(e) => e.window,

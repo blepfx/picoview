@@ -1,7 +1,9 @@
+mod data;
 mod opengl;
 mod platform;
 mod window;
 
+pub use data::*;
 pub use opengl::*;
 pub use window::*;
 
