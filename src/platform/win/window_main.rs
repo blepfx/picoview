@@ -582,7 +582,7 @@ unsafe extern "system" fn wnd_proc(
                 let window = &*window_ptr;
 
                 if window.state_focused_user.replace(true) == false {
-                    window.send_event(Event::WindowFocus);
+                    window.send_event(Event::WindowFocus { focus: true });
                 }
 
                 if window.state_focused_keyboard.get() {
@@ -601,7 +601,7 @@ unsafe extern "system" fn wnd_proc(
                     && target != window.window_hook.handle()
                     && window.state_focused_user.replace(false) == true
                 {
-                    window.send_event(Event::WindowBlur);
+                    window.send_event(Event::WindowFocus { focus: false });
                 }
 
                 0
