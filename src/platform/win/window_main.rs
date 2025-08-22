@@ -229,7 +229,7 @@ impl WindowMain {
 impl Drop for WindowMain {
     fn drop(&mut self) {
         // drop the handler here, so it could do clean up when the window is still alive
-        self.handler.replace(Box::new(|_, _| {}));
+        drop(self.handler.replace(Box::new(|_, _| {})));
 
         unsafe {
             SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
