@@ -8,8 +8,8 @@ use super::{
     window_hook::WindowKeyboardHook,
 };
 use crate::{
-    Error, Event, EventHandler, EventResponse, Modifiers, MouseButton, MouseCursor, Point, Size,
-    WindowBuilder, platform::OpenMode, rwh_06,
+    Error, Event, EventHandler, Modifiers, MouseButton, MouseCursor, Point, Size, WindowBuilder,
+    platform::OpenMode, rwh_06,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -218,12 +218,10 @@ impl WindowMain {
         }
     }
 
-    fn send_event(&self, event: Event) -> EventResponse {
+    fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.handler.try_borrow_mut() {
             let mut handle = self;
-            handler(event, crate::Window(&mut handle))
-        } else {
-            EventResponse::Rejected
+            handler(event, crate::Window(&mut handle));
         }
     }
 }
@@ -231,8 +229,7 @@ impl WindowMain {
 impl Drop for WindowMain {
     fn drop(&mut self) {
         // drop the handler here, so it could do clean up when the window is still alive
-        self.handler
-            .replace(Box::new(|_, _| EventResponse::Rejected));
+        self.handler.replace(Box::new(|_, _| {}));
 
         unsafe {
             SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
