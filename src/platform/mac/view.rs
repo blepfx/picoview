@@ -24,6 +24,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::{
@@ -40,6 +41,7 @@ struct OsWindowViewInner {
     _class: OsWindowClass,
     _display_link: DisplayLink,
 
+    deferred_events: RefCell<VecDeque<Event<'static>>>,
     event_handler: RefCell<Option<Box<dyn WindowHandler>>>,
     input_focus: Cell<bool>,
     current_cursor: Cell<MouseCursor>,
@@ -191,6 +193,7 @@ impl OsWindowView {
         view.set_context(Box::new(OsWindowViewInner {
             _class: class,
             _display_link: display,
+            deferred_events: RefCell::new(VecDeque::default()),
             event_handler: RefCell::new(None),
             input_focus: Cell::new(false),
             current_cursor: Cell::new(MouseCursor::Default),
@@ -212,9 +215,28 @@ impl OsWindowView {
         if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
             if let Some(handler) = handler.as_mut() {
                 handler.on_event(event, Window(&mut &*self));
+                let mut queue = self.inner().deferred_events.borrow_mut();
+                for event in queue.drain(..) {
+                    handler.on_event(event, Window(&mut &*self));
+                }
             }
         } else {
-            //TODO: deferred queue
+            eprintln!("WARNING: tried to defer nondeferrable event: {event:?}");
+        }
+    }
+
+    fn send_deferrable_event(&self, event: Event<'static>) {
+        if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
+            if let Some(handler) = handler.as_mut() {
+                handler.on_event(event, Window(&mut &*self));
+                let mut queue = self.inner().deferred_events.borrow_mut();
+                for event in queue.drain(..) {
+                    handler.on_event(event, Window(&mut &*self));
+                }
+            }
+        } else {
+            let mut queue = self.inner().deferred_events.borrow_mut();
+            queue.push_back(event);
         }
     }
 
@@ -261,7 +283,7 @@ impl OsWindowView {
             }
 
             if let Some(key) = keycode2key((*event).keyCode()) {
-                self.send_event(Event::KeyDown { key });
+                self.send_deferrable_event(Event::KeyDown { key });
             }
 
             if !self.has_input_focus() {
@@ -277,7 +299,7 @@ impl OsWindowView {
             }
 
             if let Some(key) = keycode2key((*event).keyCode()) {
-                self.send_event(Event::KeyUp { key });
+                self.send_deferrable_event(Event::KeyUp { key });
             }
 
             if !self.has_input_focus() {
@@ -288,7 +310,7 @@ impl OsWindowView {
 
     unsafe extern "C-unwind" fn flags_changed(&self, _cmd: Sel, event: *const NSEvent) {
         unsafe {
-            self.send_event(Event::KeyModifiers {
+            self.send_deferrable_event(Event::KeyModifiers {
                 modifiers: flags2mods((*event).modifierFlags()),
             });
         }
@@ -298,7 +320,7 @@ impl OsWindowView {
         unsafe {
             let point = (*event).locationInWindow();
             let point = self.convertPoint_fromView(point, None);
-            self.send_event(Event::MouseMove {
+            self.send_deferrable_event(Event::MouseMove {
                 cursor: Some(Point {
                     x: point.x as _,
                     y: point.y as _,
@@ -319,7 +341,7 @@ impl OsWindowView {
             };
 
             if let Some(button) = button {
-                self.send_event(Event::MouseDown { button });
+                self.send_deferrable_event(Event::MouseDown { button });
             }
         }
     }
@@ -336,13 +358,13 @@ impl OsWindowView {
             };
 
             if let Some(button) = button {
-                self.send_event(Event::MouseUp { button });
+                self.send_deferrable_event(Event::MouseUp { button });
             }
         }
     }
 
     unsafe extern "C-unwind" fn mouse_exited(&self, _cmd: Sel, _event: *const NSEvent) {
-        self.send_event(Event::MouseMove { cursor: None });
+        self.send_deferrable_event(Event::MouseMove { cursor: None });
     }
 
     unsafe extern "C-unwind" fn scroll_wheel(&self, _cmd: Sel, event: *const NSEvent) {
@@ -354,7 +376,7 @@ impl OsWindowView {
             let x = (*event).deltaX() as f32;
             let y = (*event).deltaY() as f32;
 
-            self.send_event(Event::MouseScroll { x, y });
+            self.send_deferrable_event(Event::MouseScroll { x, y });
         }
     }
 
