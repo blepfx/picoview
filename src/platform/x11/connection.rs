@@ -66,6 +66,7 @@ pub struct Connection {
     atoms: Atoms,
     cursor_handle: Handle,
     cursor_cache: Mutex<CursorCache>,
+    resource_manager: resource_manager::Database,
 
     xlib: Box<Xlib>,
 }
@@ -122,6 +123,14 @@ impl Connection {
 
     pub fn default_root(&self) -> &Screen {
         &self.xcb().setup().roots[self.default_screen_index() as usize]
+    }
+
+    pub fn os_scale_dpi(&self) -> u32 {
+        self.resource_manager
+            .get_value::<u32>("Xft.dpi", "")
+            .ok()
+            .flatten()
+            .unwrap_or(96)
     }
 
     pub fn raw_connection(&self) -> *mut c_void {
@@ -203,9 +212,9 @@ impl Connection {
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?
                 .reply()
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
-            let resources = resource_manager::new_from_default(&connection)
+            let resource_manager = resource_manager::new_from_default(&connection)
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
-            let cursor_handle = Handle::new(&connection, screen as usize, &resources)
+            let cursor_handle = Handle::new(&connection, screen as usize, &resource_manager)
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?
                 .reply()
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
@@ -237,6 +246,7 @@ impl Connection {
                 atoms,
                 cursor_handle,
                 cursor_cache: Mutex::new(CursorCache::new()),
+                resource_manager,
             });
 
             run_event_loop(Arc::downgrade(&connection), loop_receiver);

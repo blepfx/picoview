@@ -42,6 +42,7 @@ struct WindowInner {
     last_modifiers: Modifiers,
     last_cursor: MouseCursor,
     last_window_position: Option<Point>,
+    last_window_size: Option<Size>,
     last_keyboard_focus: bool,
 }
 
@@ -240,6 +241,7 @@ impl WindowImpl {
                 last_modifiers: Modifiers::empty(),
                 last_cursor: MouseCursor::Default,
                 last_window_position: None,
+                last_window_size: None,
                 last_keyboard_focus: false,
             };
 
@@ -248,6 +250,10 @@ impl WindowImpl {
                 gl_context,
                 inner,
             };
+
+            window.send_event(Event::WindowScale {
+                scale: connection.os_scale_dpi() as f32 / 96.0,
+            });
 
             connection.add_window_pacer(
                 window_id,
@@ -304,10 +310,19 @@ impl WindowImpl {
                     y: e.y as f32,
                 };
 
-                if !is_synthetic {
-                    if replace(&mut self.inner.last_window_position, Some(origin)) != Some(origin) {
-                        self.send_event(Event::WindowMove { origin });
-                    }
+                let size = Size {
+                    width: e.width as u32,
+                    height: e.height as u32,
+                };
+
+                if !is_synthetic
+                    && replace(&mut self.inner.last_window_position, Some(origin)) != Some(origin)
+                {
+                    self.send_event(Event::WindowMove { origin });
+                }
+
+                if replace(&mut self.inner.last_window_size, Some(size)) != Some(size) {
+                    self.send_event(Event::WindowResize { size });
                 }
             }
 

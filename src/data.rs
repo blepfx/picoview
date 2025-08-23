@@ -69,6 +69,7 @@ pub struct Point {
     pub y: f32,
 }
 
+/// size in physical pixels
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Size {
     pub width: u32,
@@ -239,6 +240,9 @@ pub enum Event<'a> {
     },
     WindowMove {
         origin: Point,
+    },
+    WindowResize {
+        size: Size,
     },
     WindowInvalidate {
         top: u32,
