@@ -48,11 +48,11 @@ fn main() {
             }
 
             Event::MouseMove { cursor } => {
-                if let Some(cursor) = cursor
-                    && cursor.x < -10.0
-                {
-                    window.set_cursor_icon(MouseCursor::Hidden);
-                    window.set_cursor_position(Point { x: 100.0, y: 100.0 });
+                if let Some(cursor) = cursor {
+                    if cursor.x < -10.0 {
+                        window.set_cursor_icon(MouseCursor::Hidden);
+                        window.set_cursor_position(Point { x: 100.0, y: 100.0 });
+                    }
                 }
 
                 println!("{:?}", event);

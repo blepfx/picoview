@@ -40,7 +40,7 @@ struct OsWindowViewInner {
     _class: OsWindowClass,
     _display_link: DisplayLink,
 
-    event_handler: RefCell<Box<dyn WindowHandler>>,
+    event_handler: RefCell<Option<Box<dyn WindowHandler>>>,
     input_focus: Cell<bool>,
     current_cursor: Cell<MouseCursor>,
 
@@ -191,12 +191,15 @@ impl OsWindowView {
         view.set_context(Box::new(OsWindowViewInner {
             _class: class,
             _display_link: display,
-            event_handler: RefCell::new(options.handler),
+            event_handler: RefCell::new(None),
             input_focus: Cell::new(false),
             current_cursor: Cell::new(MouseCursor::Default),
             is_closed: Cell::new(false),
             is_embedded,
         }));
+
+        let handler = (options.factory)(Window(&mut &*view));
+        view.inner().event_handler.replace(Some(handler));
 
         Ok(view)
     }
@@ -207,8 +210,9 @@ impl OsWindowView {
 
     fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
-            let mut handle = self;
-            handler.on_event(event, Window(&mut handle))
+            if let Some(handler) = handler.as_mut() {
+                handler.on_event(event, Window(&mut &*self));
+            }
         } else {
             //TODO: deferred queue
         }
