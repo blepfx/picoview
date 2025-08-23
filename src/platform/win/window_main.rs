@@ -8,8 +8,8 @@ use super::{
     window_hook::WindowKeyboardHook,
 };
 use crate::{
-    Error, Event, EventHandler, Modifiers, MouseButton, MouseCursor, Point, Size, Window,
-    WindowBuilder, platform::OpenMode, rwh_06,
+    Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
+    WindowHandler, platform::OpenMode, rwh_06,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -61,7 +61,7 @@ pub const WM_USER_HOOK_KILLFOCUS: u32 = WM_USER + 5;
 
 pub struct WindowMain {
     inner: WindowInner,
-    handler: RefCell<EventHandler>,
+    handler: RefCell<Box<dyn WindowHandler>>,
     gl_context: Option<GlContext>,
 }
 
@@ -70,7 +70,7 @@ pub struct WindowInner {
 
     window_hwnd: HWND,
     window_class: u16,
-    window_hook: WindowKeyboardHook,
+    window_hook: Option<WindowKeyboardHook>,
 
     owns_event_loop: bool,
 
@@ -175,7 +175,12 @@ impl WindowMain {
                 SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
             }
 
-            let window_hook = WindowKeyboardHook::new(hwnd)?;
+            let window_hook = if !parent.is_null() {
+                Some(WindowKeyboardHook::new(hwnd)?)
+            } else {
+                None
+            };
+
             let gl_context = match options.opengl {
                 Some(config) => match GlContext::new(hwnd, config) {
                     Ok(gl) => Some(gl),
@@ -231,6 +236,8 @@ impl WindowMain {
         if let Ok(mut handler) = self.handler.try_borrow_mut() {
             let mut handle = &self.inner;
             handler.on_event(event, crate::Window(&mut handle));
+        } else {
+            //TODO: deferred queue
         }
     }
 }
@@ -242,6 +249,9 @@ impl Drop for WindowMain {
             self.handler
                 .replace(Box::new(|_: Event<'_>, _: crate::Window<'_>| {})),
         );
+
+        // drop window hook here before the window is destroyed
+        self.window_hook = None;
 
         unsafe {
             SetWindowLongPtrW(self.inner.window_hwnd, GWLP_USERDATA, 0);

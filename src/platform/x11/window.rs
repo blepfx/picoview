@@ -3,8 +3,8 @@ use super::gl::GlContext;
 use super::util;
 use crate::platform::OpenMode;
 use crate::{
-    Error, Event, EventHandler, Modifiers, MouseButton, MouseCursor, Point, Size, Window,
-    WindowBuilder, rwh_06,
+    Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
+    WindowHandler, rwh_06,
 };
 use std::mem::replace;
 use std::num::NonZero;
@@ -47,7 +47,7 @@ struct WindowInner {
 
 pub struct WindowImpl {
     inner: WindowInner,
-    handler: EventHandler,
+    handler: Box<dyn WindowHandler>,
     gl_context: Option<GlContext>,
 }
 
@@ -244,12 +244,10 @@ impl WindowImpl {
             };
 
             let mut window = Self {
-                handler: (options.constructor)(Window(&mut inner)),
+                handler: (options.factory)(Window(&mut inner)),
                 gl_context,
                 inner,
             };
-
-            window.send_event(Event::WindowOpen);
 
             connection.add_window_pacer(
                 window_id,

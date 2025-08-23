@@ -1,14 +1,11 @@
 use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, platform, rwh_06};
 
-pub type EventHandler = Box<dyn WindowHandler + Send>;
-pub type Constructor = Box<dyn FnOnce(Window) -> EventHandler>;
-
 pub trait WindowHandler {
-    fn on_event<'a>(&mut self, event: Event<'a>, window: Window<'a>);
+    fn on_event(&mut self, event: Event, window: Window);
 }
 
-impl<H: for<'a> FnMut(Event<'a>, Window<'a>)> WindowHandler for H {
-    fn on_event<'a>(&mut self, event: Event<'a>, window: Window<'a>) {
+impl<H: FnMut(Event, Window)> WindowHandler for H {
+    fn on_event(&mut self, event: Event, window: Window) {
         (self)(event, window);
     }
 }
@@ -20,15 +17,16 @@ pub struct WindowBuilder {
     pub transparent: bool,
 
     pub title: String,
-    pub constructor: Constructor,
     pub size: Size,
     pub position: Option<Point>,
     pub opengl: Option<GlConfig>,
+
+    pub factory: Box<dyn (FnOnce(Window) -> Box<dyn WindowHandler>) + Send>,
 }
 
 impl WindowBuilder {
-    pub fn new<W: WindowHandler + Send + 'static>(
-        constructor: impl FnOnce(Window) -> W + 'static,
+    pub fn new<W: WindowHandler + 'static>(
+        factory: impl FnOnce(Window) -> W + Send + 'static,
     ) -> Self {
         Self {
             visible: true,
@@ -41,7 +39,7 @@ impl WindowBuilder {
             },
             position: None,
             opengl: None,
-            constructor: Box::new(|w| Box::new((constructor)(w))),
+            factory: Box::new(|w| Box::new((factory)(w))),
         }
     }
 

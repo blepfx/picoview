@@ -3,7 +3,7 @@ use super::util::{cstr, get_cursor, keycode2key, random_id};
 use crate::platform::OsWindow;
 use crate::platform::mac::util::{self, flags2mods};
 use crate::{
-    Error, Event, EventHandler, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
+    Error, Event, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder, WindowHandler,
     rwh_06,
 };
 use objc2::rc::{Allocated, Retained, Weak};
@@ -40,7 +40,7 @@ struct OsWindowViewInner {
     _class: OsWindowClass,
     _display_link: DisplayLink,
 
-    event_handler: RefCell<EventHandler>,
+    event_handler: RefCell<Box<dyn WindowHandler>>,
     input_focus: Cell<bool>,
     current_cursor: Cell<MouseCursor>,
 
@@ -208,7 +208,9 @@ impl OsWindowView {
     fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
             let mut handle = self;
-            handler(event, Window(&mut handle))
+            handler.on_event(event, Window(&mut handle))
+        } else {
+            //TODO: deferred queue
         }
     }
 

@@ -231,7 +231,6 @@ pub enum Key {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Event<'a> {
-    WindowOpen,
     WindowFocus {
         focus: bool,
     },

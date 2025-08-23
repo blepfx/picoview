@@ -2,18 +2,16 @@ use picoview::{Event, MouseCursor, Point, Size, Window, WindowBuilder};
 use std::time::{Duration, Instant};
 
 fn main() {
-    WindowBuilder::new(|_| {
+    WindowBuilder::new(|mut window| {
         let start = Instant::now();
         let mut last = Instant::now();
 
+        window.set_cursor_icon(MouseCursor::Move);
+        println!("clipboard contents: {:?}", window.get_clipboard_text());
+        window.set_clipboard_text("test");
+
         // you *have* to make both types explicit otherwise rust complains
         move |event: Event<'_>, mut window: Window<'_>| match event {
-            Event::WindowOpen => {
-                window.set_cursor_icon(MouseCursor::Move);
-                println!("clipboard contents: {:?}", window.get_clipboard_text());
-                window.set_clipboard_text("test");
-            }
-
             Event::WindowFrame { .. } => {
                 let passed = |d| {
                     start.elapsed() >= Duration::from_millis(d)
