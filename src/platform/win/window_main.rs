@@ -46,7 +46,7 @@ use windows_sys::Win32::{
             SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI,
             UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP,
             WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-            WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+            WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
             WM_SETCURSOR, WM_SETFOCUS, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER,
             WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
             XBUTTON1, XBUTTON2,
@@ -59,7 +59,6 @@ pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
 pub const WM_USER_HOOK_KEYUP: u32 = WM_USER + 3;
 pub const WM_USER_HOOK_KEYDOWN: u32 = WM_USER + 4;
 pub const WM_USER_HOOK_KILLFOCUS: u32 = WM_USER + 5;
-pub const WM_USER_DEFERRED_EVENTS: u32 = WM_USER + 6;
 
 pub struct WindowMain {
     inner: WindowInner,
@@ -239,26 +238,19 @@ impl WindowMain {
 
     fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
-            let mut handle = &self.inner;
-            handler.on_event(event, Window(&mut handle));
-        } else {
-            debug_assert!(
-                false,
-                "event reentrancy issue, use send_event_defer instead"
-            );
+            handler.on_event(event, Window(&mut &self.inner));
+
+            for event in self.event_queue.borrow_mut().drain(..) {
+                handler.on_event(event, Window(&mut &self.inner));
+            }
         }
     }
 
     fn send_event_defer(&self, event: Event<'static>) {
-        if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
-            let mut handle = &self.inner;
-            handler.on_event(event, Window(&mut handle));
+        if self.event_handler.try_borrow_mut().is_ok() {
+            self.send_event(event);
         } else {
             self.event_queue.borrow_mut().push_back(event);
-
-            unsafe {
-                PostMessageW(self.inner.window_hwnd, WM_USER_DEFERRED_EVENTS, 0, 0);
-            }
         }
     }
 }
@@ -497,11 +489,22 @@ unsafe extern "system" fn wnd_proc(
                 0
             }
 
+            WM_MOVE => {
+                let x = ((lparam >> 0) & 0xFFFF) as u16 as f32;
+                let y = ((lparam >> 16) & 0xFFFF) as u16 as f32;
+
+                (*window_ptr).send_event_defer(Event::WindowMove {
+                    origin: Point { x, y },
+                });
+
+                0
+            }
+
             WM_DPICHANGED => {
                 let dpi = (wparam & 0xFFFF) as u16 as u32;
                 let scale = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
 
-                (*window_ptr).send_event(Event::WindowScale { scale });
+                (*window_ptr).send_event_defer(Event::WindowScale { scale });
                 0
             }
 
@@ -521,7 +524,7 @@ unsafe extern "system" fn wnd_proc(
                 };
 
                 if let Some(button) = button {
-                    window.send_event(Event::MouseDown { button });
+                    window.send_event_defer(Event::MouseDown { button });
                 };
 
                 if window
@@ -552,7 +555,7 @@ unsafe extern "system" fn wnd_proc(
                 };
 
                 if let Some(button) = button {
-                    window.send_event(Event::MouseUp { button });
+                    window.send_event_defer(Event::MouseUp { button });
                 }
 
                 if window
@@ -571,7 +574,7 @@ unsafe extern "system" fn wnd_proc(
                 let wheel_delta: i16 = (wparam >> 16) as i16;
                 let wheel_delta = wheel_delta as f32 / WHEEL_DELTA as f32;
 
-                (*window_ptr).send_event(Event::MouseScroll {
+                (*window_ptr).send_event_defer(Event::MouseScroll {
                     x: if msg == WM_MOUSEWHEEL {
                         0.0
                     } else {
@@ -587,7 +590,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_MOUSELEAVE => {
-                (*window_ptr).send_event(Event::MouseMove { cursor: None });
+                (*window_ptr).send_event_defer(Event::MouseMove { cursor: None });
                 0
             }
 
@@ -604,7 +607,7 @@ unsafe extern "system" fn wnd_proc(
                     y: ((lparam >> 16) & 0xFFFF) as i16 as f32,
                 };
 
-                (*window_ptr).send_event(Event::MouseMove {
+                (*window_ptr).send_event_defer(Event::MouseMove {
                     cursor: Some(point),
                 });
                 0
@@ -670,9 +673,9 @@ unsafe extern "system" fn wnd_proc(
                 let scan_code = ((lparam & 0x1ff_0000) >> 16) as u32;
                 if let Some(key) = scan_code_to_key(scan_code) {
                     if msg == WM_USER_HOOK_KEYDOWN || msg == WM_KEYDOWN {
-                        window.send_event(Event::KeyDown { key });
+                        window.send_event_defer(Event::KeyDown { key });
                     } else {
-                        window.send_event(Event::KeyUp { key });
+                        window.send_event_defer(Event::KeyUp { key });
                     }
                 }
 
@@ -684,7 +687,7 @@ unsafe extern "system" fn wnd_proc(
 
                 let modifiers = get_modifiers_async();
                 if window.inner.state_current_modifiers.replace(modifiers) != modifiers {
-                    window.send_event(Event::KeyModifiers { modifiers });
+                    window.send_event_defer(Event::KeyModifiers { modifiers });
                 }
 
                 if let Some(context) = &window.gl_context {
@@ -703,15 +706,6 @@ unsafe extern "system" fn wnd_proc(
 
             WM_USER_KILL_WINDOW => {
                 DestroyWindow(hwnd);
-                0
-            }
-
-            WM_USER_DEFERRED_EVENTS => {
-                let window = &*window_ptr;
-                for event in window.event_queue.borrow_mut().drain(..) {
-                    window.send_event(event);
-                }
-
                 0
             }
 

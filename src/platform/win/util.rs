@@ -21,8 +21,8 @@ use windows_sys::{
         },
         UI::{
             Input::KeyboardAndMouse::{
-                GetAsyncKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU,
-                VK_NUMLOCK, VK_RWIN, VK_SCROLL, VK_SHIFT,
+                GetAsyncKeyState, GetKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN,
+                VK_MENU, VK_NUMLOCK, VK_RWIN, VK_SCROLL, VK_SHIFT,
             },
             WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage},
         },
@@ -271,24 +271,35 @@ pub fn scan_code_to_key(scan_code: u32) -> Option<Key> {
 }
 
 pub unsafe fn get_modifiers_async() -> Modifiers {
-    pub const MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
+    const KEY_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
         (VK_SHIFT, Modifiers::SHIFT),
         (VK_CONTROL, Modifiers::CTRL),
         (VK_MENU, Modifiers::ALT),
         (VK_LWIN, Modifiers::META),
         (VK_RWIN, Modifiers::META),
+    ];
+
+    const TOGGLE_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
         (VK_CAPITAL, Modifiers::CAPS_LOCK),
         (VK_NUMLOCK, Modifiers::NUM_LOCK),
         (VK_SCROLL, Modifiers::SCROLL_LOCK),
     ];
 
-    MODIFIERS
-        .iter()
-        .fold(Modifiers::empty(), |state, (key, mods)| unsafe {
-            if GetAsyncKeyState(*key as _) != 0 {
-                state | *mods
-            } else {
-                state
+    let mut state = Modifiers::empty();
+
+    unsafe {
+        for &(key, mods) in KEY_MODIFIERS {
+            if GetAsyncKeyState(key as _) != 0 {
+                state.insert(mods);
             }
-        })
+        }
+
+        for &(key, mods) in TOGGLE_MODIFIERS {
+            if GetKeyState(key as _) & 0x1 != 0 {
+                state.insert(mods);
+            }
+        }
+    }
+
+    state
 }
