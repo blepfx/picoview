@@ -8,8 +8,8 @@ use super::{
     window_hook::WindowKeyboardHook,
 };
 use crate::{
-    Error, Event, EventHandler, Modifiers, MouseButton, MouseCursor, Point, Size, WindowBuilder,
-    platform::OpenMode, rwh_06,
+    Error, Event, EventHandler, Modifiers, MouseButton, MouseCursor, Point, Size, Window,
+    WindowBuilder, platform::OpenMode, rwh_06,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -60,6 +60,12 @@ pub const WM_USER_HOOK_KEYDOWN: u32 = WM_USER + 4;
 pub const WM_USER_HOOK_KILLFOCUS: u32 = WM_USER + 5;
 
 pub struct WindowMain {
+    inner: WindowInner,
+    handler: RefCell<EventHandler>,
+    gl_context: Option<GlContext>,
+}
+
+pub struct WindowInner {
     connection: Arc<Connection>,
 
     window_hwnd: HWND,
@@ -73,9 +79,6 @@ pub struct WindowMain {
     state_current_modifiers: Cell<Modifiers>,
     state_current_cursor: Cell<HCURSOR>,
     state_mouse_capture: Cell<u32>,
-
-    handler: RefCell<EventHandler>,
-    gl_context: Option<GlContext>,
 }
 
 impl WindowMain {
@@ -182,7 +185,7 @@ impl WindowMain {
                 None => None,
             };
 
-            let event_loop = Rc::new(Self {
+            let mut inner = WindowInner {
                 connection: connection.clone(),
 
                 state_mouse_capture: Cell::new(0),
@@ -196,9 +199,15 @@ impl WindowMain {
                 window_hwnd: hwnd,
 
                 owns_event_loop: matches!(mode, OpenMode::Blocking),
+            };
 
+            // i hate this line so much. it feels. wrong.
+            let handler = RefCell::new((options.constructor)(crate::Window(&mut &inner)));
+
+            let event_loop = Rc::new(Self {
+                inner,
                 gl_context,
-                handler: RefCell::new(options.handler),
+                handler,
             });
 
             event_loop.send_event(Event::WindowOpen);
@@ -220,8 +229,8 @@ impl WindowMain {
 
     fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.handler.try_borrow_mut() {
-            let mut handle = self;
-            handler(event, crate::Window(&mut handle));
+            let mut handle = &self.inner;
+            handler.on_event(event, crate::Window(&mut handle));
         }
     }
 }
@@ -229,17 +238,22 @@ impl WindowMain {
 impl Drop for WindowMain {
     fn drop(&mut self) {
         // drop the handler here, so it could do clean up when the window is still alive
-        drop(self.handler.replace(Box::new(|_, _| {})));
+        drop(
+            self.handler
+                .replace(Box::new(|_: Event<'_>, _: crate::Window<'_>| {})),
+        );
 
         unsafe {
-            SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
-            UnregisterClassW(self.window_class as _, hinstance());
-            self.connection.unregister_pacer(self.window_hwnd);
+            SetWindowLongPtrW(self.inner.window_hwnd, GWLP_USERDATA, 0);
+            UnregisterClassW(self.inner.window_class as _, hinstance());
+            self.inner
+                .connection
+                .unregister_pacer(self.inner.window_hwnd);
         }
     }
 }
 
-impl<'a> crate::platform::OsWindow for &'a WindowMain {
+impl crate::platform::OsWindow for &WindowInner {
     fn close(&mut self) {
         unsafe {
             PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
@@ -439,7 +453,7 @@ unsafe extern "system" fn wnd_proc(
 
         match msg {
             WM_DESTROY => {
-                if (*window_ptr).owns_event_loop {
+                if (*window_ptr).inner.owns_event_loop {
                     PostQuitMessage(0);
                 }
 
@@ -476,11 +490,12 @@ unsafe extern "system" fn wnd_proc(
                 };
 
                 if window
+                    .inner
                     .state_mouse_capture
-                    .replace(window.state_mouse_capture.get() + 1)
+                    .replace(window.inner.state_mouse_capture.get() + 1)
                     == 0
                 {
-                    SetCapture(window.window_hwnd);
+                    SetCapture(window.inner.window_hwnd);
                 }
 
                 0
@@ -506,8 +521,9 @@ unsafe extern "system" fn wnd_proc(
                 }
 
                 if window
+                    .inner
                     .state_mouse_capture
-                    .replace(window.state_mouse_capture.get().saturating_sub(1))
+                    .replace(window.inner.state_mouse_capture.get().saturating_sub(1))
                     != 0
                 {
                     SetCapture(null_mut());
@@ -563,7 +579,7 @@ unsafe extern "system" fn wnd_proc(
                 let window = &*window_ptr;
 
                 if lparam as u32 & 0xffff == HTCLIENT {
-                    let cursor = window.state_current_cursor.get();
+                    let cursor = window.inner.state_current_cursor.get();
 
                     if cursor.is_null() {
                         ShowCursor(0);
@@ -581,12 +597,12 @@ unsafe extern "system" fn wnd_proc(
             WM_SETFOCUS => {
                 let window = &*window_ptr;
 
-                if window.state_focused_user.replace(true) == false {
+                if window.inner.state_focused_user.replace(true) == false {
                     window.send_event(Event::WindowFocus { focus: true });
                 }
 
-                if window.state_focused_keyboard.get() {
-                    let hwnd = window.window_hook.handle();
+                if window.inner.state_focused_keyboard.get() {
+                    let hwnd = window.inner.window_hook.handle();
                     let _ = SetFocus(hwnd);
                 }
 
@@ -597,9 +613,9 @@ unsafe extern "system" fn wnd_proc(
                 let window = &*window_ptr;
 
                 let target = wparam as HWND;
-                if target != window.window_hwnd
-                    && target != window.window_hook.handle()
-                    && window.state_focused_user.replace(false) == true
+                if target != window.inner.window_hwnd
+                    && target != window.inner.window_hook.handle()
+                    && window.inner.state_focused_user.replace(false) == true
                 {
                     window.send_event(Event::WindowFocus { focus: false });
                 }
@@ -626,7 +642,7 @@ unsafe extern "system" fn wnd_proc(
                 let window = &*window_ptr;
 
                 let modifiers = get_modifiers_async();
-                if window.state_current_modifiers.replace(modifiers) != modifiers {
+                if window.inner.state_current_modifiers.replace(modifiers) != modifiers {
                     window.send_event(Event::KeyModifiers { modifiers });
                 }
 

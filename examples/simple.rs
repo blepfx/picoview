@@ -1,12 +1,13 @@
-use picoview::{Event, MouseCursor, Point, Size, WindowBuilder};
+use picoview::{Event, MouseCursor, Point, Size, Window, WindowBuilder};
 use std::time::{Duration, Instant};
 
 fn main() {
-    WindowBuilder::new({
+    WindowBuilder::new(|_| {
         let start = Instant::now();
         let mut last = Instant::now();
 
-        move |event, mut window| match event {
+        // you *have* to make both types explicit otherwise rust complains
+        move |event: Event<'_>, mut window: Window<'_>| match event {
             Event::WindowOpen => {
                 window.set_cursor_icon(MouseCursor::Move);
                 println!("clipboard contents: {:?}", window.get_clipboard_text());
@@ -27,9 +28,11 @@ fn main() {
                         height: 300,
                     });
 
-                    WindowBuilder::new(|event, _| {
-                        if !matches!(event, Event::WindowFrame { .. }) {
-                            println!("child {:?}", event);
+                    WindowBuilder::new(|_| {
+                        |event: Event<'_>, _: Window<'_>| {
+                            if !matches!(event, Event::WindowFrame { .. }) {
+                                println!("child {:?}", event);
+                            }
                         }
                     })
                     .open_parented(&window)
