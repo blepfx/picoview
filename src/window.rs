@@ -1,10 +1,10 @@
 use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, platform, rwh_06};
 
-pub trait WindowHandler: Send + 'static {
+pub trait WindowHandler: 'static {
     fn on_event(&mut self, event: Event, window: Window);
 }
 
-impl<H: FnMut(Event, Window) + Send + 'static> WindowHandler for H {
+impl<H: FnMut(Event, Window) + 'static> WindowHandler for H {
     fn on_event(&mut self, event: Event, window: Window) {
         (self)(event, window);
     }
