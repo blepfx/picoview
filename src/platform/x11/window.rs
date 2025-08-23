@@ -229,23 +229,24 @@ impl WindowImpl {
             }
 
             let (on_closed, when_closed) = sync_channel(0);
+            let mut inner = WindowInner {
+                window_id,
+                connection: connection.clone(),
+
+                on_closed,
+                is_closed: false,
+                is_destroyed: false,
+
+                last_modifiers: Modifiers::empty(),
+                last_cursor: MouseCursor::Default,
+                last_window_position: None,
+                last_keyboard_focus: false,
+            };
+
             let mut window = Self {
-                handler: options.handler,
+                handler: (options.constructor)(Window(&mut inner)),
                 gl_context,
-
-                inner: WindowInner {
-                    window_id,
-                    connection: connection.clone(),
-
-                    on_closed,
-                    is_closed: false,
-                    is_destroyed: false,
-
-                    last_modifiers: Modifiers::empty(),
-                    last_cursor: MouseCursor::Default,
-                    last_window_position: None,
-                    last_keyboard_focus: false,
-                },
+                inner,
             };
 
             window.send_event(Event::WindowOpen);
@@ -278,7 +279,8 @@ impl WindowImpl {
         if let Some(gl) = self.gl_context.as_mut() {
             unsafe {
                 if gl.set_current(true) {
-                    (self.handler)(Event::WindowFrame { gl: Some(gl) }, Window(&mut self.inner));
+                    self.handler
+                        .on_event(Event::WindowFrame { gl: Some(gl) }, Window(&mut self.inner));
                     gl.set_current(false);
                 } else {
                     self.send_event(Event::WindowFrame { gl: None });
@@ -471,7 +473,7 @@ impl WindowImpl {
         }
 
         // drop the handler here, so it could do clean up when the window is still alive
-        self.handler = Box::new(|_, _| {});
+        self.handler = Box::new(|_: Event<'_>, _: Window<'_>| {});
         self.inner
             .connection
             .remove_window_pacer(self.inner.window_id);
@@ -484,7 +486,7 @@ impl WindowImpl {
     }
 
     fn send_event(&mut self, e: Event) {
-        (self.handler)(e, Window(&mut self.inner))
+        self.handler.on_event(e, Window(&mut self.inner))
     }
 }
 
