@@ -1,10 +1,10 @@
 use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, platform, rwh_06};
 
-pub trait WindowHandler {
+pub trait WindowHandler: Send + 'static {
     fn on_event(&mut self, event: Event, window: Window);
 }
 
-impl<H: FnMut(Event, Window)> WindowHandler for H {
+impl<H: FnMut(Event, Window) + Send + 'static> WindowHandler for H {
     fn on_event(&mut self, event: Event, window: Window) {
         (self)(event, window);
     }
@@ -25,9 +25,7 @@ pub struct WindowBuilder {
 }
 
 impl WindowBuilder {
-    pub fn new<W: WindowHandler + 'static>(
-        factory: impl FnOnce(Window) -> W + Send + 'static,
-    ) -> Self {
+    pub fn new<W: WindowHandler>(factory: impl FnOnce(Window) -> W + Send + 'static) -> Self {
         Self {
             visible: true,
             decorations: true,

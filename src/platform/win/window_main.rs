@@ -207,7 +207,7 @@ impl WindowMain {
             };
 
             // i hate this line so much. it feels. wrong.
-            let handler = RefCell::new((options.constructor)(crate::Window(&mut &inner)));
+            let handler = RefCell::new((options.factory)(crate::Window(&mut &inner)));
 
             let event_loop = Rc::new(Self {
                 inner,
@@ -215,7 +215,6 @@ impl WindowMain {
                 handler,
             });
 
-            event_loop.send_event(Event::WindowOpen);
             event_loop.send_event(Event::WindowScale {
                 scale: connection.try_get_dpi_for_window(hwnd) as f32
                     / USER_DEFAULT_SCREEN_DPI as f32,
