@@ -1,6 +1,6 @@
 use picoview::{Event, MouseCursor, Point, Size, Window, WindowBuilder};
 use std::time::{Duration, Instant};
-    
+
 fn main() {
     WindowBuilder::new(|mut window| {
         let start = Instant::now();
