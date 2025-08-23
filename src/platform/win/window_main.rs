@@ -13,6 +13,7 @@ use crate::{
 };
 use std::{
     cell::{Cell, RefCell},
+    collections::VecDeque,
     mem::size_of,
     num::NonZeroIsize,
     ptr::{copy_nonoverlapping, null, null_mut},
@@ -58,11 +59,14 @@ pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
 pub const WM_USER_HOOK_KEYUP: u32 = WM_USER + 3;
 pub const WM_USER_HOOK_KEYDOWN: u32 = WM_USER + 4;
 pub const WM_USER_HOOK_KILLFOCUS: u32 = WM_USER + 5;
+pub const WM_USER_DEFERRED_EVENTS: u32 = WM_USER + 6;
 
 pub struct WindowMain {
     inner: WindowInner,
-    handler: RefCell<Box<dyn WindowHandler>>,
     gl_context: Option<GlContext>,
+
+    event_handler: RefCell<Box<dyn WindowHandler>>,
+    event_queue: RefCell<VecDeque<Event<'static>>>,
 }
 
 pub struct WindowInner {
@@ -190,7 +194,7 @@ impl WindowMain {
                 None => None,
             };
 
-            let mut inner = WindowInner {
+            let inner = WindowInner {
                 connection: connection.clone(),
 
                 state_mouse_capture: Cell::new(0),
@@ -207,12 +211,14 @@ impl WindowMain {
             };
 
             // i hate this line so much. it feels. wrong.
-            let handler = RefCell::new((options.factory)(crate::Window(&mut &inner)));
+            let event_handler = RefCell::new((options.factory)(Window(&mut &inner)));
 
             let event_loop = Rc::new(Self {
                 inner,
                 gl_context,
-                handler,
+
+                event_handler,
+                event_queue: RefCell::new(VecDeque::new()),
             });
 
             event_loop.send_event(Event::WindowScale {
@@ -232,11 +238,27 @@ impl WindowMain {
     }
 
     fn send_event(&self, event: Event) {
-        if let Ok(mut handler) = self.handler.try_borrow_mut() {
+        if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
             let mut handle = &self.inner;
-            handler.on_event(event, crate::Window(&mut handle));
+            handler.on_event(event, Window(&mut handle));
         } else {
-            //TODO: deferred queue
+            debug_assert!(
+                false,
+                "event reentrancy issue, use send_event_defer instead"
+            );
+        }
+    }
+
+    fn send_event_defer(&self, event: Event<'static>) {
+        if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
+            let mut handle = &self.inner;
+            handler.on_event(event, Window(&mut handle));
+        } else {
+            self.event_queue.borrow_mut().push_back(event);
+
+            unsafe {
+                PostMessageW(self.inner.window_hwnd, WM_USER_DEFERRED_EVENTS, 0, 0);
+            }
         }
     }
 }
@@ -245,12 +267,12 @@ impl Drop for WindowMain {
     fn drop(&mut self) {
         // drop the handler here, so it could do clean up when the window is still alive
         drop(
-            self.handler
+            self.event_handler
                 .replace(Box::new(|_: Event<'_>, _: crate::Window<'_>| {})),
         );
 
         // drop window hook here before the window is destroyed
-        self.window_hook = None;
+        self.inner.window_hook = None;
 
         unsafe {
             SetWindowLongPtrW(self.inner.window_hwnd, GWLP_USERDATA, 0);
@@ -370,6 +392,10 @@ impl crate::platform::OsWindow for &WindowInner {
     }
 
     fn set_keyboard_input(&mut self, focus: bool) {
+        let Some(window_hook) = self.window_hook.as_ref() else {
+            return;
+        };
+
         if self.state_focused_keyboard.replace(focus) == focus {
             return;
         }
@@ -377,7 +403,7 @@ impl crate::platform::OsWindow for &WindowInner {
         if self.state_focused_user.get() {
             unsafe {
                 SetFocus(if focus {
-                    self.window_hook.handle()
+                    window_hook.handle()
                 } else {
                     self.window_hwnd
                 });
@@ -607,12 +633,13 @@ unsafe extern "system" fn wnd_proc(
                 let window = &*window_ptr;
 
                 if window.inner.state_focused_user.replace(true) == false {
-                    window.send_event(Event::WindowFocus { focus: true });
+                    window.send_event_defer(Event::WindowFocus { focus: true });
                 }
 
                 if window.inner.state_focused_keyboard.get() {
-                    let hwnd = window.inner.window_hook.handle();
-                    let _ = SetFocus(hwnd);
+                    if let Some(window_hook) = window.inner.window_hook.as_ref() {
+                        let _ = SetFocus(window_hook.handle());
+                    }
                 }
 
                 0
@@ -620,13 +647,18 @@ unsafe extern "system" fn wnd_proc(
 
             WM_KILLFOCUS | WM_USER_HOOK_KILLFOCUS => {
                 let window = &*window_ptr;
+                let window_hook_hwnd = window
+                    .inner
+                    .window_hook
+                    .as_ref()
+                    .map(WindowKeyboardHook::handle);
 
                 let target = wparam as HWND;
                 if target != window.inner.window_hwnd
-                    && target != window.inner.window_hook.handle()
+                    && Some(target) != window_hook_hwnd
                     && window.inner.state_focused_user.replace(false) == true
                 {
-                    window.send_event(Event::WindowFocus { focus: false });
+                    window.send_event_defer(Event::WindowFocus { focus: false });
                 }
 
                 0
@@ -637,7 +669,7 @@ unsafe extern "system" fn wnd_proc(
 
                 let scan_code = ((lparam & 0x1ff_0000) >> 16) as u32;
                 if let Some(key) = scan_code_to_key(scan_code) {
-                    if msg == WM_USER_HOOK_KEYDOWN {
+                    if msg == WM_USER_HOOK_KEYDOWN || msg == WM_KEYDOWN {
                         window.send_event(Event::KeyDown { key });
                     } else {
                         window.send_event(Event::KeyUp { key });
@@ -671,6 +703,15 @@ unsafe extern "system" fn wnd_proc(
 
             WM_USER_KILL_WINDOW => {
                 DestroyWindow(hwnd);
+                0
+            }
+
+            WM_USER_DEFERRED_EVENTS => {
+                let window = &*window_ptr;
+                for event in window.event_queue.borrow_mut().drain(..) {
+                    window.send_event(event);
+                }
+
                 0
             }
 
