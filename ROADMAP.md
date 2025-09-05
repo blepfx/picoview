@@ -35,20 +35,21 @@
 | Set title                                             | :ok:     | :x:      | :ok:     | Medium   |
 | Set visibility                                        | :ok:     | :x:      | :ok:     | Medium   |
 | Close window                                          | :ok:     | :x:      | :ok:     | High     |
-| Grab keyboard[^7]                                     | :ok:     | :x:      | :ok:     | High     |
+| Grab keyboard[^7]                                     | :ok:[^8] | :x:      | :ok:     | High     |
 | Open browser/explorer                                 | :ok:     | :ok:     | :ok:     | Medium   |
 | Cursor icons                                          | :ok:     | :ok:     | :ok:     | Medium   |
-| Cursor warping                                        | :ok:     | :ok:     | :ok:[^8] | Medium   |
-| Cursor hit passthrough[^9]                            | :x:      | :x:      | :x:      | Low      |
-| Drag & Drop accept[^10]                               | :x:      | :x:      | :x:      | Low      |
+| Cursor warping                                        | :ok:     | :ok:     | :ok:[^9] | Medium   |
+| Cursor hit passthrough[^10]                           | :x:      | :x:      | :x:      | Low      |
+| Drag & Drop accept[^11]                               | :x:      | :x:      | :x:      | Low      |
 
-[^1]: Only a single global scaling is supported (no per-monitor scaling)
+[^1]: Only a single global scaling factor is supported (no per-monitor scaling)
 [^2]: Currently only DWM waiting is supported, ideally we would have to do per-monitor DXGI wait.
 [^3]: Currently only main monitor sync is supported
 [^4]: Currently broken on XWayland, so it fallbacks to a fixed 60hz timer (use XRandR to get screen refresh rate?)
 [^5]: Initial (`None`) position is broken (should be centered), children position is broken (should be parent-relative).
 [^6]: No API for that yet
 [^7]: Some DAWS tend to consume key events meant for plugins, keyboard hooking/grabbing is meant to avoid that when needed (`set_keyboard_input`)
-[^8]: Broken on XWayland, seems to be a Wayland limitation?
-[^9]: No API for that yet
+[^8]: Currently uses a second window and an external event loop. Hooks should be a more elegant solution (see JUCE source code)
+[^9]: Broken on XWayland, seems to be a Wayland limitation?
 [^10]: No API for that yet
+[^11]: No API for that yet
