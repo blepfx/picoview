@@ -691,7 +691,10 @@ unsafe extern "system" fn wnd_proc(
                 }
 
                 window.send_event(Event::WindowFrame {
-                    gl: window.gl_context.as_ref().map(|x| x as &dyn crate::GlContext),
+                    gl: window
+                        .gl_context
+                        .as_ref()
+                        .map(|x| x as &dyn crate::GlContext),
                 });
 
                 0
