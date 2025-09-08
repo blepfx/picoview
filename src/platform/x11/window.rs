@@ -43,6 +43,8 @@ struct WindowInner {
     last_cursor: MouseCursor,
     last_window_position: Option<Point>,
     last_window_size: Option<Size>,
+    last_window_visible: bool,
+    last_window_title: String,
     last_keyboard_focus: bool,
 }
 
@@ -242,6 +244,8 @@ impl WindowImpl {
                 last_cursor: MouseCursor::Default,
                 last_window_position: None,
                 last_window_size: None,
+                last_window_visible: options.visible,
+                last_window_title: options.title,
                 last_keyboard_focus: false,
             };
 
@@ -517,6 +521,12 @@ impl crate::platform::OsWindow for WindowInner {
     }
 
     fn set_title(&mut self, title: &str) {
+        if self.is_closed || title == self.last_window_title {
+            return;
+        }
+
+        self.last_window_title = title.to_owned();
+
         let _ = self.connection.xcb().change_property8(
             PropMode::REPLACE,
             self.window_id,
@@ -562,7 +572,7 @@ impl crate::platform::OsWindow for WindowInner {
     }
 
     fn set_size(&mut self, size: Size) {
-        if self.is_closed {
+        if self.is_closed || replace(&mut self.last_window_size, Some(size)) == Some(size) {
             return;
         }
 
@@ -587,7 +597,7 @@ impl crate::platform::OsWindow for WindowInner {
     }
 
     fn set_position(&mut self, point: Point) {
-        if self.is_closed {
+        if self.is_closed || replace(&mut self.last_window_position, Some(point)) == Some(point) {
             return;
         }
 
@@ -598,11 +608,10 @@ impl crate::platform::OsWindow for WindowInner {
                 .y(point.y as i32),
         );
         self.connection.flush();
-        self.last_window_position = Some(point);
     }
 
     fn set_visible(&mut self, visible: bool) {
-        if self.is_closed {
+        if self.is_closed || replace(&mut self.last_window_visible, visible) == visible {
             return;
         }
 
