@@ -690,16 +690,9 @@ unsafe extern "system" fn wnd_proc(
                     window.send_event_defer(Event::KeyModifiers { modifiers });
                 }
 
-                if let Some(context) = &window.gl_context {
-                    if context.set_current(true) {
-                        window.send_event(Event::WindowFrame { gl: Some(context) });
-                        context.set_current(false);
-                    } else {
-                        window.send_event(Event::WindowFrame { gl: None });
-                    }
-                } else {
-                    window.send_event(Event::WindowFrame { gl: None });
-                }
+                window.send_event(Event::WindowFrame {
+                    gl: window.gl_context.as_ref().map(|x| x as &dyn crate::GlContext),
+                });
 
                 0
             }

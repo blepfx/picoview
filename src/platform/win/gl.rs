@@ -115,10 +115,6 @@ impl GlContext {
             })
         }
     }
-
-    pub fn set_current(&self, current: bool) -> bool {
-        unsafe { wglMakeCurrent(self.hdc, if current { self.hglrc } else { null_mut() }) != 0 }
-    }
 }
 
 impl Debug for GlContext {
@@ -143,6 +139,10 @@ impl crate::GlContext for GlContext {
                 .map(|x| x as *const c_void)
                 .unwrap_or(null())
         }
+    }
+
+    fn make_current(&self, current: bool) -> bool {
+        unsafe { wglMakeCurrent(self.hdc, if current { self.hglrc } else { null_mut() }) != 0 }
     }
 }
 

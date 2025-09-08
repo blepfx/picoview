@@ -280,19 +280,12 @@ impl WindowImpl {
             return;
         }
 
-        if let Some(gl) = self.gl_context.as_mut() {
-            unsafe {
-                if gl.set_current(true) {
-                    self.handler
-                        .on_event(Event::WindowFrame { gl: Some(gl) }, Window(&mut self.inner));
-                    gl.set_current(false);
-                } else {
-                    self.send_event(Event::WindowFrame { gl: None });
-                }
-            }
-        } else {
-            self.send_event(Event::WindowFrame { gl: None });
-        }
+        self.handler.on_event(
+            Event::WindowFrame {
+                gl: self.gl_context.as_ref().map(|x| x as &dyn crate::GlContext),
+            },
+            Window(&mut self.inner),
+        );
 
         self.handle_destroy();
     }

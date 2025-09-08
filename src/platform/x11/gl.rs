@@ -223,8 +223,24 @@ impl GlContext {
             })
         }
     }
+}
 
-    pub unsafe fn set_current(&self, current: bool) -> bool {
+impl crate::GlContext for GlContext {
+    fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
+        unsafe {
+            (self.lib_glx.glXGetProcAddress)(symbol.as_ptr() as *const u8)
+                .map(|x| x as *const c_void)
+                .unwrap_or(null())
+        }
+    }
+
+    fn swap_buffers(&self) {
+        unsafe {
+            (self.lib_glx.glXSwapBuffers)(self.connection.raw_display(), self.window);
+        }
+    }
+
+    fn make_current(&self, current: bool) -> bool {
         unsafe {
             let result = {
                 if current {
@@ -243,22 +259,6 @@ impl GlContext {
             };
 
             result != 0
-        }
-    }
-}
-
-impl crate::GlContext for GlContext {
-    fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
-        unsafe {
-            (self.lib_glx.glXGetProcAddress)(symbol.as_ptr() as *const u8)
-                .map(|x| x as *const c_void)
-                .unwrap_or(null())
-        }
-    }
-
-    fn swap_buffers(&self) {
-        unsafe {
-            (self.lib_glx.glXSwapBuffers)(self.connection.raw_display(), self.window);
         }
     }
 }

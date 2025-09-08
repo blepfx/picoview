@@ -68,4 +68,5 @@ impl Default for GlConfig {
 pub trait GlContext: Debug {
     fn swap_buffers(&self);
     fn get_proc_address(&self, name: &CStr) -> *const c_void;
+    fn make_current(&self, current: bool) -> bool;
 }

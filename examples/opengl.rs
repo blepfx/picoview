@@ -10,10 +10,13 @@ fn main() {
                 let clear: unsafe extern "system" fn(i32) =
                     transmute(gl.get_proc_address(c"glClear"));
 
+                gl.make_current(true);
+
                 (clear_color)(1.0, 1.0, 0.0, 0.5);
                 (clear)(0x00004000);
 
                 gl.swap_buffers();
+                gl.make_current(false);
             },
 
             Event::MouseMove {
