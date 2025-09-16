@@ -1,4 +1,4 @@
-use picoview::{Event, GlConfig, Point, Window, WindowBuilder};
+use picoview::{Event, GlConfig, GlFormat, GlVersion, Point, Window, WindowBuilder};
 use std::mem::transmute;
 
 fn main() {
@@ -30,7 +30,15 @@ fn main() {
             _ => {}
         }
     })
-    .with_opengl(GlConfig::default())
+    .with_opengl(GlConfig {
+        version: GlVersion::Core(3, 1),
+        format: GlFormat::RGB8_D24,
+        transparent: false,
+        optional: false,
+        msaa_count: 0,
+        debug: cfg!(debug_assertions),
+        ..Default::default()
+    })
     .with_size((200, 200))
     .with_transparency(false)
     .open_blocking()

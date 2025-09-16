@@ -74,6 +74,9 @@ impl GlContext {
             let ext_multisample = version >= (1, 4) || extensions.contains("GLX_ARB_multisample");
             let ext_framebuffer_srgb = extensions.contains("GLX_ARB_framebuffer_sRGB")
                 || extensions.contains("GLX_EXT_framebuffer_sRGB");
+            let ext_context = extensions.contains("GLX_ARB_create_context");
+
+            dbg!(extensions);
 
             let (fb_config, fb_visual) = {
                 let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
@@ -116,11 +119,9 @@ impl GlContext {
                     ]);
                 }
 
-                if config.debug {
-                    fb_attribs.extend_from_slice(&[
-                        glx::arb::GLX_CONTEXT_FLAGS_ARB,
-                        glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB,
-                    ]);
+                if config.transparent {
+                    fb_attribs
+                        .extend_from_slice(&[glx::GLX_TRANSPARENT_TYPE, glx::GLX_TRANSPARENT_RGB]);
                 }
 
                 fb_attribs.push(0);
@@ -141,7 +142,7 @@ impl GlContext {
                 let fb_visual =
                     (lib_glx.glXGetVisualFromFBConfig)(connection.raw_display(), fb_config);
                 if fb_visual.is_null() {
-                    return Err(Error::OpenGlError("no matching config".into()));
+                    return Err(Error::OpenGlError("no matching visual".into()));
                 }
 
                 check_error(&connection)?;
@@ -149,10 +150,14 @@ impl GlContext {
                 (fb_config, fb_visual)
             };
 
-            let glXCreateContextAttribsARB = (lib_glx.glXGetProcAddress)(
-                cstr!("glXCreateContextAttribsARB").as_ptr() as *const _,
-            )
-            .map(|addr| std::mem::transmute::<_, GlXCreateContextAttribsARB>(addr));
+            let glXCreateContextAttribsARB = ext_context
+                .then(|| {
+                    (lib_glx.glXGetProcAddress)(
+                        cstr!("glXCreateContextAttribsARB").as_ptr() as *const _
+                    )
+                    .map(|addr| std::mem::transmute::<_, GlXCreateContextAttribsARB>(addr))
+                })
+                .flatten();
 
             let context = if let Some(glXCreateContextAttribsARB) = glXCreateContextAttribsARB {
                 #[rustfmt::skip]
@@ -161,18 +166,21 @@ impl GlContext {
                     glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB, major as i32,
                     glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB, minor as i32,
                     glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB, glx::arb::GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
+                    glx::arb::GLX_CONTEXT_FLAGS_ARB, glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
                     0,
                 ],
                 GlVersion::Compat(major, minor) => [
                     glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB, major as i32,
                     glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB, minor as i32,
                     glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB, glx::arb::GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+                    glx::arb::GLX_CONTEXT_FLAGS_ARB, glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
                     0,
                 ],
                 GlVersion::ES(major, minor) if ext_es_support => [
                     glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB, major as i32,
                     glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB, minor as i32,
                     glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB, CONTEXT_ES2_PROFILE_BIT_EXT,
+                    glx::arb::GLX_CONTEXT_FLAGS_ARB, glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
                     0,
                 ],
                 _ => return Err(Error::OpenGlError("No ES support extension".into())),
