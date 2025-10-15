@@ -76,8 +76,6 @@ impl GlContext {
                 || extensions.contains("GLX_EXT_framebuffer_sRGB");
             let ext_context = extensions.contains("GLX_ARB_create_context");
 
-            dbg!(extensions);
-
             let (fb_config, fb_visual) = {
                 let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
 
@@ -160,31 +158,42 @@ impl GlContext {
                 .flatten();
 
             let context = if let Some(glXCreateContextAttribsARB) = glXCreateContextAttribsARB {
-                #[rustfmt::skip]
-            let ctx_attribs = match config.version {
-                GlVersion::Core(major, minor) => [
-                    glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB, major as i32,
-                    glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB, minor as i32,
-                    glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB, glx::arb::GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
-                    glx::arb::GLX_CONTEXT_FLAGS_ARB, glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
-                    0,
-                ],
-                GlVersion::Compat(major, minor) => [
-                    glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB, major as i32,
-                    glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB, minor as i32,
-                    glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB, glx::arb::GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-                    glx::arb::GLX_CONTEXT_FLAGS_ARB, glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
-                    0,
-                ],
-                GlVersion::ES(major, minor) if ext_es_support => [
-                    glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB, major as i32,
-                    glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB, minor as i32,
-                    glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB, CONTEXT_ES2_PROFILE_BIT_EXT,
-                    glx::arb::GLX_CONTEXT_FLAGS_ARB, glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
-                    0,
-                ],
-                _ => return Err(Error::OpenGlError("No ES support extension".into())),
-            };
+                let ctx_attribs = match config.version {
+                    GlVersion::Core(major, minor) => [
+                        glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB,
+                        major as i32,
+                        glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB,
+                        minor as i32,
+                        glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB,
+                        glx::arb::GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
+                        glx::arb::GLX_CONTEXT_FLAGS_ARB,
+                        glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
+                        0,
+                    ],
+                    GlVersion::Compat(major, minor) => [
+                        glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB,
+                        major as i32,
+                        glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB,
+                        minor as i32,
+                        glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB,
+                        glx::arb::GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+                        glx::arb::GLX_CONTEXT_FLAGS_ARB,
+                        glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
+                        0,
+                    ],
+                    GlVersion::ES(major, minor) if ext_es_support => [
+                        glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB,
+                        major as i32,
+                        glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB,
+                        minor as i32,
+                        glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB,
+                        CONTEXT_ES2_PROFILE_BIT_EXT,
+                        glx::arb::GLX_CONTEXT_FLAGS_ARB,
+                        glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
+                        0,
+                    ],
+                    _ => return Err(Error::OpenGlError("No ES support extension".into())),
+                };
 
                 glXCreateContextAttribsARB(
                     connection.raw_display(),

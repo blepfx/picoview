@@ -134,6 +134,17 @@ impl WindowImpl {
                 )
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
 
+            connection
+                .xcb()
+                .change_property32(
+                    PropMode::REPLACE,
+                    window_id,
+                    connection.atoms().WM_PROTOCOLS,
+                    AtomEnum::ATOM,
+                    &[connection.atoms().WM_DELETE_WINDOW],
+                )
+                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+
             let mut size_hints = WmSizeHints::new();
             size_hints.base_size = Some((options.size.width as _, options.size.height as _));
             size_hints.max_size = size_hints.base_size;
@@ -300,6 +311,14 @@ impl WindowImpl {
         }
 
         match event {
+            XEvent::ClientMessage(event) => {
+                if event.format == 32
+                    && event.data.as_data32()[0] == self.inner.connection.atoms().WM_DELETE_WINDOW
+                {
+                    self.inner.is_closed = true;
+                }
+            }
+
             XEvent::ConfigureNotify(e) => {
                 let is_synthetic = e.response_type & 0x80 == 0;
                 let origin = Point {
