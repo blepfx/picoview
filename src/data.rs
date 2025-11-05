@@ -255,8 +255,11 @@ pub enum Event<'a> {
     },
 
     MouseMove {
-        cursor: Option<Point>,
+        relative: Point,
+        absolute: Point,
     },
+
+    MouseLeave,
     MouseDown {
         button: MouseButton,
     },

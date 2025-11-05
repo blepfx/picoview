@@ -590,7 +590,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_MOUSELEAVE => {
-                (*window_ptr).send_event_defer(Event::MouseMove { cursor: None });
+                (*window_ptr).send_event_defer(Event::MouseLeave);
                 0
             }
 
@@ -602,13 +602,25 @@ unsafe extern "system" fn wnd_proc(
                     dwHoverTime: 0,
                 });
 
-                let point = Point {
-                    x: (lparam & 0xFFFF) as i16 as f32,
-                    y: ((lparam >> 16) & 0xFFFF) as i16 as f32,
+                let relative_x = (lparam & 0xFFFF) as i16;
+                let relative_y = ((lparam >> 16) & 0xFFFF) as i16;
+
+                let mut absolute = POINT {
+                    x: relative_x as i32,
+                    y: relative_y as i32,
                 };
 
+                ClientToScreen(hwnd, &mut absolute);
+
                 (*window_ptr).send_event_defer(Event::MouseMove {
-                    cursor: Some(point),
+                    absolute: Point {
+                        x: absolute.x as f32,
+                        y: absolute.y as f32,
+                    },
+                    relative: Point {
+                        x: relative_x as f32,
+                        y: relative_y as f32,
+                    },
                 });
                 0
             }

@@ -318,13 +318,19 @@ impl OsWindowView {
 
     unsafe extern "C-unwind" fn mouse_moved(&self, _cmd: Sel, event: *const NSEvent) {
         unsafe {
-            let point = (*event).locationInWindow();
-            let point = self.convertPoint_fromView(point, None);
+            let absolute = (*event).mouseLocation();
+            let relative = (*event).locationInWindow();
+            let relative = self.convertPoint_fromView(relative, None);
+
             self.send_event_defer(Event::MouseMove {
-                cursor: Some(Point {
-                    x: point.x as _,
-                    y: point.y as _,
-                }),
+                relative: Point {
+                    x: relative.x as f32,
+                    y: relative.y as f32,
+                },
+                absolute: Point {
+                    x: absolute.x as f32,
+                    y: absolute.y as f32,
+                },
             });
         }
     }
@@ -364,7 +370,7 @@ impl OsWindowView {
     }
 
     unsafe extern "C-unwind" fn mouse_exited(&self, _cmd: Sel, _event: *const NSEvent) {
-        self.send_event_defer(Event::MouseMove { cursor: None });
+        self.send_event_defer(Event::MouseLeave);
     }
 
     unsafe extern "C-unwind" fn scroll_wheel(&self, _cmd: Sel, event: *const NSEvent) {

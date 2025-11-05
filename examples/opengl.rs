@@ -19,10 +19,8 @@ fn main() {
                 gl.make_current(false);
             },
 
-            Event::MouseMove {
-                cursor: Some(cursor),
-            } => {
-                if cursor.x < -10.0 {
+            Event::MouseMove { relative, .. } => {
+                if relative.x < -10.0 {
                     window.set_cursor_position(Point { x: 100.0, y: 100.0 });
                 }
             }

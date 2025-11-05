@@ -345,11 +345,6 @@ impl WindowImpl {
             XEvent::ButtonPress(e) => {
                 self.handle_modifiers(util::keymask2mods(e.state));
 
-                let position = Point {
-                    x: e.event_x as f32,
-                    y: e.event_y as f32,
-                };
-
                 let event = match e.detail {
                     1 => Event::MouseDown {
                         button: MouseButton::Left,
@@ -374,18 +369,20 @@ impl WindowImpl {
                 };
 
                 self.send_event(Event::MouseMove {
-                    cursor: Some(position),
+                    relative: Point {
+                        x: e.event_x as f32,
+                        y: e.event_y as f32,
+                    },
+                    absolute: Point {
+                        x: e.root_x as f32,
+                        y: e.root_y as f32,
+                    },
                 });
                 self.send_event(event);
             }
 
             XEvent::ButtonRelease(e) => {
                 self.handle_modifiers(util::keymask2mods(e.state));
-
-                let position = Point {
-                    x: e.event_x as f32,
-                    y: e.event_y as f32,
-                };
 
                 let button = match e.detail {
                     1 => MouseButton::Left,
@@ -397,7 +394,14 @@ impl WindowImpl {
                 };
 
                 self.send_event(Event::MouseMove {
-                    cursor: Some(position),
+                    relative: Point {
+                        x: e.event_x as f32,
+                        y: e.event_y as f32,
+                    },
+                    absolute: Point {
+                        x: e.root_x as f32,
+                        y: e.root_y as f32,
+                    },
                 });
                 self.send_event(Event::MouseUp { button });
             }
@@ -421,10 +425,14 @@ impl WindowImpl {
             XEvent::MotionNotify(e) => {
                 self.handle_modifiers(util::keymask2mods(e.state));
                 self.send_event(Event::MouseMove {
-                    cursor: Some(Point {
+                    relative: Point {
                         x: e.event_x as f32,
                         y: e.event_y as f32,
-                    }),
+                    },
+                    absolute: Point {
+                        x: e.root_x as f32,
+                        y: e.root_y as f32,
+                    },
                 });
             }
 
@@ -441,7 +449,7 @@ impl WindowImpl {
                     return;
                 }
 
-                self.send_event(Event::MouseMove { cursor: None });
+                self.send_event(Event::MouseLeave);
             }
 
             XEvent::FocusIn(_) => {
