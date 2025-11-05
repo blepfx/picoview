@@ -282,11 +282,15 @@ impl OsWindowView {
                 return;
             }
 
+            let mut capture = false;
             if let Some(key) = keycode2key((*event).keyCode()) {
-                self.send_event_defer(Event::KeyDown { key });
+                self.send_event(Event::KeyDown {
+                    key,
+                    capture: &mut capture,
+                });
             }
 
-            if !self.has_input_focus() {
+            if !capture {
                 msg_send![super(self, NSView::class()), keyDown: event]
             }
         }
@@ -298,11 +302,15 @@ impl OsWindowView {
                 return;
             }
 
+            let mut capture = false;
             if let Some(key) = keycode2key((*event).keyCode()) {
-                self.send_event_defer(Event::KeyUp { key });
+                self.send_event(Event::KeyUp {
+                    key,
+                    capture: &mut capture,
+                });
             }
 
-            if !self.has_input_focus() {
+            if !capture {
                 msg_send![super(self, NSView::class()), keyUp: event]
             }
         }

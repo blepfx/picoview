@@ -45,7 +45,6 @@ struct WindowInner {
     last_window_size: Option<Size>,
     last_window_visible: bool,
     last_window_title: String,
-    last_keyboard_focus: bool,
 }
 
 pub struct WindowImpl {
@@ -257,7 +256,6 @@ impl WindowImpl {
                 last_window_size: None,
                 last_window_visible: options.visible,
                 last_window_title: options.title,
-                last_keyboard_focus: false,
             };
 
             let mut window = Self {
@@ -410,7 +408,10 @@ impl WindowImpl {
                 self.handle_modifiers(util::keymask2mods(e.state) | util::hwcode2mods(e.detail));
 
                 if let Some(key) = util::hwcode2key(e.detail) {
-                    self.send_event(Event::KeyDown { key });
+                    self.send_event(Event::KeyDown {
+                        key,
+                        capture: &mut false, //TODO: key capture?
+                    });
                 }
             }
 
@@ -418,7 +419,10 @@ impl WindowImpl {
                 self.handle_modifiers(util::keymask2mods(e.state) - util::hwcode2mods(e.detail));
 
                 if let Some(key) = util::hwcode2key(e.detail) {
-                    self.send_event(Event::KeyUp { key });
+                    self.send_event(Event::KeyUp {
+                        key,
+                        capture: &mut false,
+                    });
                 }
             }
 
@@ -654,26 +658,6 @@ impl crate::platform::OsWindow for WindowInner {
             }
         } else {
             let _ = self.connection.xcb().unmap_window(self.window_id);
-        }
-
-        self.connection.flush();
-    }
-
-    fn set_keyboard_input(&mut self, focus: bool) {
-        if self.is_closed || replace(&mut self.last_keyboard_focus, focus) == focus {
-            return;
-        }
-
-        if focus {
-            let _ = self.connection.xcb().grab_keyboard(
-                false,
-                self.window_id,
-                x11rb::CURRENT_TIME,
-                GrabMode::ASYNC,
-                GrabMode::ASYNC,
-            );
-        } else {
-            let _ = self.connection.xcb().ungrab_keyboard(x11rb::CURRENT_TIME);
         }
 
         self.connection.flush();

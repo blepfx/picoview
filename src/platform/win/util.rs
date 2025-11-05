@@ -142,7 +142,7 @@ pub fn assert(assert: bool, message: &'static str) -> Result<(), crate::Error> {
     Ok(())
 }
 
-pub fn wait_flush() {
+pub fn wait_vsync() {
     let waited = unsafe {
         let mut pfenabled = 0;
         if DwmIsCompositionEnabled(&mut pfenabled) == 0 && pfenabled != 0 {

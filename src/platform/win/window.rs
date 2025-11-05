@@ -5,7 +5,6 @@ use super::{
         assert, from_widestring, generate_guid, get_modifiers_async, hinstance, run_event_loop,
         scan_code_to_key, to_widestring,
     },
-    window_hook::WindowKeyboardHook,
 };
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
@@ -34,33 +33,31 @@ use windows_sys::Win32::{
     UI::{
         Controls::WM_MOUSELEAVE,
         Input::KeyboardAndMouse::{
-            GetFocus, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+            GetFocus, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
         },
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
             AdjustWindowRectEx, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-            GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetWindowLongPtrW, GetWindowLongW, HCURSOR,
-            HTCLIENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, PostMessageW, PostQuitMessage,
+            GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetWindowLongPtrW, GetWindowLongW,
+            HCURSOR, HTCLIENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, PostMessageW, PostQuitMessage,
             RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
             SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes,
             SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI,
-            UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP,
-            WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-            WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
-            WM_SETCURSOR, WM_SETFOCUS, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER,
-            WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
-            XBUTTON1, XBUTTON2,
+            UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+            WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
+            WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+            WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE, XBUTTON1, XBUTTON2,
         },
     },
 };
 
 pub const WM_USER_FRAME_PACER: u32 = WM_USER + 1;
 pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
-pub const WM_USER_HOOK_KEYUP: u32 = WM_USER + 3;
-pub const WM_USER_HOOK_KEYDOWN: u32 = WM_USER + 4;
-pub const WM_USER_HOOK_KILLFOCUS: u32 = WM_USER + 5;
+pub const WM_USER_KEY_DOWN: u32 = WM_USER + 3;
+pub const WM_USER_KEY_UP: u32 = WM_USER + 4;
 
-pub struct WindowMain {
+pub struct WindowImpl {
     inner: WindowInner,
     gl_context: Option<GlContext>,
 
@@ -73,18 +70,20 @@ pub struct WindowInner {
 
     window_hwnd: HWND,
     window_class: u16,
-    window_hook: Option<WindowKeyboardHook>,
 
     owns_event_loop: bool,
 
-    state_focused_user: Cell<bool>,
-    state_focused_keyboard: Cell<bool>,
+    state_focused: Cell<bool>,
     state_current_modifiers: Cell<Modifiers>,
     state_current_cursor: Cell<HCURSOR>,
     state_mouse_capture: Cell<u32>,
 }
 
-impl WindowMain {
+impl WindowImpl {
+    pub unsafe fn is_our_window(hwnd: HWND) -> bool {
+        unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as isize }
+    }
+
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
         unsafe {
             let parent = match mode {
@@ -178,12 +177,6 @@ impl WindowMain {
                 SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
             }
 
-            let window_hook = if !parent.is_null() {
-                Some(WindowKeyboardHook::new(hwnd)?)
-            } else {
-                None
-            };
-
             let gl_context = match options.opengl {
                 Some(config) => match GlContext::new(hwnd, config) {
                     Ok(gl) => Some(gl),
@@ -198,12 +191,10 @@ impl WindowMain {
 
                 state_mouse_capture: Cell::new(0),
                 state_current_cursor: Cell::new(connection.load_cursor(MouseCursor::Default)),
-                state_focused_user: Cell::new(GetFocus() == hwnd),
-                state_focused_keyboard: Cell::new(false),
                 state_current_modifiers: Cell::new(Modifiers::empty()),
+                state_focused: Cell::new(GetFocus() == hwnd),
 
                 window_class,
-                window_hook,
                 window_hwnd: hwnd,
 
                 owns_event_loop: matches!(mode, OpenMode::Blocking),
@@ -255,16 +246,13 @@ impl WindowMain {
     }
 }
 
-impl Drop for WindowMain {
+impl Drop for WindowImpl {
     fn drop(&mut self) {
         // drop the handler here, so it could do clean up when the window is still alive
         drop(
             self.event_handler
                 .replace(Box::new(|_: Event<'_>, _: crate::Window<'_>| {})),
         );
-
-        // drop window hook here before the window is destroyed
-        self.inner.window_hook = None;
 
         unsafe {
             SetWindowLongPtrW(self.inner.window_hwnd, GWLP_USERDATA, 0);
@@ -383,26 +371,6 @@ impl crate::platform::OsWindow for &WindowInner {
         }
     }
 
-    fn set_keyboard_input(&mut self, focus: bool) {
-        let Some(window_hook) = self.window_hook.as_ref() else {
-            return;
-        };
-
-        if self.state_focused_keyboard.replace(focus) == focus {
-            return;
-        }
-
-        if self.state_focused_user.get() {
-            unsafe {
-                SetFocus(if focus {
-                    window_hook.handle()
-                } else {
-                    self.window_hwnd
-                });
-            }
-        }
-    }
-
     fn open_url(&mut self, url: &str) -> bool {
         let path = to_widestring(url);
         let verb = to_widestring("open");
@@ -473,7 +441,7 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe {
-        let window_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowMain;
+        let window_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowImpl;
         if window_ptr.is_null() {
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
@@ -646,58 +614,48 @@ unsafe extern "system" fn wnd_proc(
 
             WM_SETFOCUS => {
                 let window = &*window_ptr;
-
-                if window.inner.state_focused_user.replace(true) == false {
+                if window.inner.state_focused.replace(true) == false {
                     window.send_event_defer(Event::WindowFocus { focus: true });
-                }
-
-                if window.inner.state_focused_keyboard.get() {
-                    if let Some(window_hook) = window.inner.window_hook.as_ref() {
-                        let _ = SetFocus(window_hook.handle());
-                    }
                 }
 
                 0
             }
 
-            WM_KILLFOCUS | WM_USER_HOOK_KILLFOCUS => {
+            WM_KILLFOCUS => {
                 let window = &*window_ptr;
-                let window_hook_hwnd = window
-                    .inner
-                    .window_hook
-                    .as_ref()
-                    .map(WindowKeyboardHook::handle);
-
-                let target = wparam as HWND;
-                if target != window.inner.window_hwnd
-                    && Some(target) != window_hook_hwnd
-                    && window.inner.state_focused_user.replace(false) == true
-                {
+                if window.inner.state_focused.replace(false) == true {
                     window.send_event_defer(Event::WindowFocus { focus: false });
                 }
 
                 0
             }
 
-            WM_KEYDOWN | WM_KEYUP | WM_USER_HOOK_KEYDOWN | WM_USER_HOOK_KEYUP => {
+            WM_USER_KEY_DOWN | WM_USER_KEY_UP => {
                 let window = &*window_ptr;
-
                 let scan_code = ((lparam & 0x1ff_0000) >> 16) as u32;
+                let mut capture = false;
+
                 if let Some(key) = scan_code_to_key(scan_code) {
-                    if msg == WM_USER_HOOK_KEYDOWN || msg == WM_KEYDOWN {
-                        window.send_event_defer(Event::KeyDown { key });
+                    if msg == WM_USER_KEY_DOWN {
+                        window.send_event(Event::KeyDown {
+                            key,
+                            capture: &mut capture,
+                        });
                     } else {
-                        window.send_event_defer(Event::KeyUp { key });
+                        window.send_event(Event::KeyUp {
+                            key,
+                            capture: &mut capture,
+                        });
                     }
                 }
 
-                0
+                if capture { 1 } else { 0 }
             }
 
             WM_USER_FRAME_PACER => {
                 let window = &*window_ptr;
-
                 let modifiers = get_modifiers_async();
+
                 if window.inner.state_current_modifiers.replace(modifiers) != modifiers {
                     window.send_event_defer(Event::KeyModifiers { modifiers });
                 }

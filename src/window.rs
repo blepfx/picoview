@@ -133,10 +133,6 @@ impl<'a> Window<'a> {
         self.0.set_visible(visible);
     }
 
-    pub fn set_keyboard_input(&mut self, focus: bool) {
-        self.0.set_keyboard_input(focus);
-    }
-
     pub fn open_url(&mut self, url: &str) -> bool {
         self.0.open_url(url)
     }

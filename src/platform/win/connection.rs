@@ -1,9 +1,16 @@
 use super::{
-    util::{load_function_dynamic, wait_flush},
-    window_main::WM_USER_FRAME_PACER,
+    util::{load_function_dynamic, wait_vsync},
+    window::WM_USER_FRAME_PACER,
 };
-use crate::{Error, MouseCursor};
+use crate::{
+    Error, MouseCursor,
+    platform::win::{
+        util::hinstance,
+        window::{WM_USER_KEY_DOWN, WM_USER_KEY_UP, WindowImpl},
+    },
+};
 use std::{
+    mem::zeroed,
     ptr::null_mut,
     sync::{
         Arc, Mutex, Weak,
@@ -13,11 +20,14 @@ use std::{
 };
 use windows_sys::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        System::Threading::GetCurrentThreadId,
         UI::WindowsAndMessaging::{
-            HCURSOR, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
-            IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, LoadCursorW,
-            SendMessageW, USER_DEFAULT_SCREEN_DPI,
+            CallNextHookEx, HC_ACTION, HCURSOR, HHOOK, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP,
+            IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+            IDC_WAIT, LoadCursorW, MSG, PM_REMOVE, SendMessageW, SetWindowsHookExW,
+            USER_DEFAULT_SCREEN_DPI, UnhookWindowsHookEx, WH_GETMESSAGE, WM_KEYDOWN, WM_KEYUP,
+            WM_USER,
         },
     },
     core::PCWSTR,
@@ -28,6 +38,7 @@ unsafe impl Sync for Connection {}
 
 pub struct Connection {
     cursor_cache: CursorCache,
+    keyboard_hook: HHOOK,
 
     loop_sender: Sender<(usize, bool)>,
 
@@ -88,6 +99,13 @@ impl Connection {
                 cursor_cache: CursorCache::load(),
                 loop_sender,
 
+                keyboard_hook: SetWindowsHookExW(
+                    WH_GETMESSAGE,
+                    Some(keyboard_hook_proc),
+                    hinstance(),
+                    GetCurrentThreadId(),
+                ),
+
                 dl_set_thread_dpi_awareness_context: load_function_dynamic(
                     "user32.dll",
                     "SetThreadDpiAwarenessContext",
@@ -97,6 +115,14 @@ impl Connection {
 
             run_pacer_loop(loop_receiver);
             Ok(conn)
+        }
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        unsafe {
+            UnhookWindowsHookEx(self.keyboard_hook);
         }
     }
 }
@@ -126,9 +152,47 @@ fn run_pacer_loop(loop_receiver: Receiver<(usize, bool)>) {
                 }
             }
 
-            wait_flush();
+            wait_vsync();
         }
     });
+}
+
+unsafe extern "system" fn keyboard_hook_proc(
+    n_code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        if n_code == HC_ACTION as i32 && wparam == PM_REMOVE as usize {
+            let message = lparam as *mut MSG;
+
+            if matches!((*message).message, WM_KEYDOWN | WM_KEYUP)
+                && WindowImpl::is_our_window((*message).hwnd)
+            {
+                let capture = SendMessageW(
+                    (*message).hwnd,
+                    if (*message).message == WM_KEYDOWN {
+                        WM_USER_KEY_DOWN
+                    } else {
+                        WM_USER_KEY_UP
+                    },
+                    (*message).wParam,
+                    (*message).lParam,
+                ) != 0;
+
+                if capture {
+                    *message = MSG {
+                        message: WM_USER,
+                        ..zeroed()
+                    };
+
+                    return 0;
+                }
+            }
+        }
+
+        CallNextHookEx(null_mut(), n_code, wparam, lparam)
+    }
 }
 
 struct CursorCache {

@@ -235,21 +235,26 @@ pub enum Event<'a> {
     WindowFocus {
         focus: bool,
     },
+
     WindowScale {
         scale: f32,
     },
+
     WindowMove {
         origin: Point,
     },
+
     WindowResize {
         size: Size,
     },
+
     WindowInvalidate {
         top: u32,
         left: u32,
         bottom: u32,
         right: u32,
     },
+
     WindowFrame {
         gl: Option<&'a dyn GlContext>,
     },
@@ -274,19 +279,25 @@ pub enum Event<'a> {
     KeyModifiers {
         modifiers: Modifiers,
     },
+
     KeyDown {
         key: Key,
+        capture: &'a mut bool,
     },
+
     KeyUp {
         key: Key,
+        capture: &'a mut bool,
     },
 
     DragHover {
         files: &'a [PathBuf],
     },
+
     DragAccept {
         files: &'a [PathBuf],
     },
+
     DragCancel,
 }
 

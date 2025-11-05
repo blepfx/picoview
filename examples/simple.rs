@@ -26,9 +26,7 @@ fn main() {
                         height: 300,
                     });
 
-                    WindowBuilder::new(|mut window| {
-                        window.set_keyboard_input(true);
-
+                    WindowBuilder::new(|_| {
                         |event: Event<'_>, _: Window<'_>| {
                             if !matches!(event, Event::WindowFrame { .. }) {
                                 println!("child {:?}", event);

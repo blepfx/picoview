@@ -33,7 +33,6 @@ pub trait OsWindow {
     fn set_size(&mut self, size: Size);
     fn set_position(&mut self, pos: Point);
     fn set_visible(&mut self, visible: bool);
-    fn set_keyboard_input(&mut self, focus: bool);
 
     fn open_url(&mut self, url: &str) -> bool;
 
