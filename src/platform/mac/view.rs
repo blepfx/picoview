@@ -43,8 +43,6 @@ struct OsWindowViewInner {
 
     event_queue: RefCell<VecDeque<Event<'static>>>,
     event_handler: RefCell<Option<Box<dyn WindowHandler>>>,
-
-    input_focus: Cell<bool>,
     current_cursor: Cell<MouseCursor>,
 
     #[allow(unused)] //TODO: stuff!
@@ -196,7 +194,6 @@ impl OsWindowView {
             _display_link: display,
             event_queue: RefCell::new(VecDeque::default()),
             event_handler: RefCell::new(None),
-            input_focus: Cell::new(false),
             current_cursor: Cell::new(MouseCursor::Default),
             is_closed: Cell::new(false),
             is_embedded,
@@ -206,10 +203,6 @@ impl OsWindowView {
         view.inner().event_handler.replace(Some(handler));
 
         Ok(view)
-    }
-
-    fn has_input_focus(&self) -> bool {
-        self.inner().input_focus.get()
     }
 
     fn send_event(&self, event: Event) {
@@ -545,10 +538,6 @@ impl<'a> OsWindow for &'a OsWindowView {
                 window.orderOut(None);
             }
         }
-    }
-
-    fn set_keyboard_input(&mut self, focus: bool) {
-        self.inner().input_focus.set(focus);
     }
 
     fn open_url(&mut self, url: &str) -> bool {

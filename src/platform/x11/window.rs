@@ -22,7 +22,7 @@ use x11rb::{
         Event as XEvent,
         xproto::{
             AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux,
-            ConnectionExt as ConnectionExtXProto, CreateWindowAux, EventMask, GrabMode, PropMode,
+            ConnectionExt as ConnectionExtXProto, CreateWindowAux, EventMask, PropMode,
             WindowClass,
         },
     },
