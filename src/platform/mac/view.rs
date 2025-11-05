@@ -318,7 +318,7 @@ impl OsWindowView {
 
     unsafe extern "C-unwind" fn mouse_moved(&self, _cmd: Sel, event: *const NSEvent) {
         unsafe {
-            let absolute = (*event).mouseLocation();
+            let absolute = NSEvent::mouseLocation();
             let relative = (*event).locationInWindow();
             let relative = self.convertPoint_fromView(relative, None);
 
