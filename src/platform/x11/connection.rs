@@ -1,7 +1,7 @@
-use crate::{Error, MouseCursor, platform::x11::util::consume_error};
+use crate::{Error, MouseCursor};
 use std::{
     cell::RefCell,
-    collections::{HashMap, hash_map::Entry},
+    collections::HashMap,
     ffi::{CStr, c_int, c_void},
     os::fd::{AsFd, AsRawFd},
     sync::{
@@ -61,7 +61,7 @@ pub struct Connection {
     screen: c_int,
 
     loop_manual: bool,
-    loop_sender: Sender<(Window, Option<WindowHandler>)>,
+    event_loop_sender: Sender<(Window, Option<WindowHandler>)>,
 
     atoms: Atoms,
     cursor_handle: Handle,
@@ -113,8 +113,8 @@ impl Connection {
         &self.atoms
     }
 
-    pub fn flush(&self) -> bool {
-        consume_error(self.connection.flush())
+    pub fn flush(&self) -> Result<(), ConnectionError> {
+        self.connection.flush()
     }
 
     pub fn default_screen_index(&self) -> c_int {
@@ -142,7 +142,7 @@ impl Connection {
     }
 
     pub fn load_cursor(&self, cursor: MouseCursor) -> u32 {
-        self.cursor_cache.lock().expect("poisoned").get(
+        self.cursor_cache.lock().expect("poisoned").get_cached(
             &self.connection,
             self.screen as usize,
             &self.cursor_handle,
@@ -154,29 +154,23 @@ impl Connection {
         self.loop_manual
     }
 
-    pub fn add_window_pacer(&self, window: Window, handler: WindowHandler) {
-        let _ = self.loop_sender.send((window, Some(handler)));
+    pub fn add_window_event_loop(&self, window: Window, handler: WindowHandler) {
+        if self
+            .event_loop_sender
+            .send((window, Some(handler)))
+            .is_err()
+        {
+            panic!("event loop is closed?");
+        }
     }
 
-    pub fn remove_window_pacer(&self, window: Window) {
-        let _ = self.loop_sender.send((window, None));
+    pub fn remove_window_event_loop(&self, window: Window) {
+        if self.event_loop_sender.send((window, None)).is_err() {
+            panic!("event loop is closed?");
+        }
     }
 
     fn create() -> Result<Arc<Self>, Error> {
-        unsafe extern "C" fn error_handler(_dpy: *mut Display, err: *mut XErrorEvent) -> i32 {
-            CURRENT_X11_ERROR.with(|error| {
-                let mut error = error.borrow_mut();
-                match error.as_mut() {
-                    Some(_) => 1,
-                    None => {
-                        unsafe {
-                            *error = Some(err.read());
-                        }
-                        0
-                    }
-                }
-            })
-        }
         unsafe {
             let xlib_xcb = x11_dl::xlib_xcb::Xlib_xcb::open().map_err(|_| {
                 Error::PlatformError(
@@ -207,17 +201,17 @@ impl Connection {
             let screen = (xlib.XDefaultScreen)(display);
 
             let connection = XCBConnection::from_raw_xcb_connection(xcb_connection as _, false)
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
             let atoms = Atoms::new(&connection)
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?
+                .map_err(|e| Error::PlatformError(e.to_string()))?
                 .reply()
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
             let resource_manager = resource_manager::new_from_default(&connection)
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
             let cursor_handle = Handle::new(&connection, screen as usize, &resource_manager)
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?
+                .map_err(|e| Error::PlatformError(e.to_string()))?
                 .reply()
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             let ext_present = connection
                 .extension_information(present::X11_EXTENSION_NAME)
@@ -241,7 +235,7 @@ impl Connection {
                 screen,
 
                 loop_manual: !ext_present || is_xwayland,
-                loop_sender,
+                event_loop_sender: loop_sender,
 
                 atoms,
                 cursor_handle,
@@ -323,9 +317,16 @@ fn run_event_loop(
 
             let timeout =
                 deadline.map(|t| t.saturating_duration_since(Instant::now()) + FRAME_PADDING);
+
             let event = match connection.poll_event_single(timeout) {
                 Ok(event) => event,
-                Err(e) => panic!("x11 event loop error: {:?}", e),
+                Err(e) => {
+                    if cfg!(debug_assertions) {
+                        panic!("x11 event loop error: {:?}", e);
+                    }
+
+                    continue;
+                }
             };
 
             while let Ok((window, handler)) = handler_receiver.try_recv() {
@@ -351,6 +352,21 @@ fn run_event_loop(
     });
 }
 
+unsafe extern "C" fn error_handler(_dpy: *mut Display, err: *mut XErrorEvent) -> i32 {
+    CURRENT_X11_ERROR.with(|error| {
+        let mut error = error.borrow_mut();
+        match error.as_mut() {
+            Some(_) => 1,
+            None => {
+                unsafe {
+                    *error = Some(err.read());
+                }
+                0
+            }
+        }
+    })
+}
+
 struct CursorCache {
     map: HashMap<MouseCursor, u32>,
 }
@@ -362,72 +378,59 @@ impl CursorCache {
         }
     }
 
-    fn get(
+    fn get_cached(
         &mut self,
         conn: &XCBConnection,
         screen: usize,
         handle: &Handle,
         cursor: MouseCursor,
     ) -> u32 {
-        match self.map.entry(cursor) {
-            Entry::Occupied(entry) => *entry.get(),
-            Entry::Vacant(entry) => {
-                let cursor = Self::load(conn, screen, handle, cursor)
-                    .or_else(|| Self::load(conn, screen, handle, MouseCursor::Default))
-                    .unwrap_or(x11rb::NONE);
-
-                entry.insert(cursor);
-                cursor
-            }
-        }
+        *self
+            .map
+            .entry(cursor)
+            .or_insert_with(|| Self::get(conn, screen, handle, cursor).unwrap_or(x11rb::NONE))
     }
 
-    fn load(
+    fn get(
         conn: &XCBConnection,
         screen: usize,
         handle: &Handle,
         cursor: MouseCursor,
     ) -> Option<u32> {
-        macro_rules! load {
-            ($($l:literal),*) => {
-                Self::load_named(conn, handle, &[$($l),*])
-            };
-        }
-
         match cursor {
-            MouseCursor::Default => load!("left_ptr"),
-            MouseCursor::Hand => load!("hand2", "hand1"),
-            MouseCursor::HandGrabbing => load!("closedhand", "grabbing"),
-            MouseCursor::Help => load!("question_arrow"),
+            MouseCursor::Default => Self::load(conn, handle, &["left_ptr"]),
+            MouseCursor::Hand => Self::load(conn, handle, &["hand2", "hand1"]),
+            MouseCursor::HandGrabbing => Self::load(conn, handle, &["closedhand", "grabbing"]),
+            MouseCursor::Help => Self::load(conn, handle, &["question_arrow"]),
             MouseCursor::Hidden => Self::create_empty(conn, screen),
-            MouseCursor::Text => load!("text", "xterm"),
-            MouseCursor::VerticalText => load!("vertical-text"),
-            MouseCursor::Working => load!("watch"),
-            MouseCursor::PtrWorking => load!("left_ptr_watch"),
-            MouseCursor::NotAllowed => load!("crossed_circle"),
-            MouseCursor::PtrNotAllowed => load!("no-drop", "crossed_circle"),
-            MouseCursor::ZoomIn => load!("zoom-in"),
-            MouseCursor::ZoomOut => load!("zoom-out"),
-            MouseCursor::Alias => load!("link"),
-            MouseCursor::Copy => load!("copy"),
-            MouseCursor::Move => load!("move"),
-            MouseCursor::AllScroll => load!("all-scroll"),
-            MouseCursor::Cell => load!("plus"),
-            MouseCursor::Crosshair => load!("crosshair"),
-            MouseCursor::EResize => load!("right_side"),
-            MouseCursor::NResize => load!("top_side"),
-            MouseCursor::NeResize => load!("top_right_corner"),
-            MouseCursor::NwResize => load!("top_left_corner"),
-            MouseCursor::SResize => load!("bottom_side"),
-            MouseCursor::SeResize => load!("bottom_right_corner"),
-            MouseCursor::SwResize => load!("bottom_left_corner"),
-            MouseCursor::WResize => load!("left_side"),
-            MouseCursor::EwResize => load!("h_double_arrow"),
-            MouseCursor::NsResize => load!("v_double_arrow"),
-            MouseCursor::NwseResize => load!("bd_double_arrow", "size_bdiag"),
-            MouseCursor::NeswResize => load!("fd_double_arrow", "size_fdiag"),
-            MouseCursor::ColResize => load!("split_h", "h_double_arrow"),
-            MouseCursor::RowResize => load!("split_v", "v_double_arrow"),
+            MouseCursor::Text => Self::load(conn, handle, &["text", "xterm"]),
+            MouseCursor::VerticalText => Self::load(conn, handle, &["vertical-text"]),
+            MouseCursor::Working => Self::load(conn, handle, &["watch"]),
+            MouseCursor::PtrWorking => Self::load(conn, handle, &["left_ptr_watch"]),
+            MouseCursor::NotAllowed => Self::load(conn, handle, &["crossed_circle"]),
+            MouseCursor::PtrNotAllowed => Self::load(conn, handle, &["no-drop", "crossed_circle"]),
+            MouseCursor::ZoomIn => Self::load(conn, handle, &["zoom-in"]),
+            MouseCursor::ZoomOut => Self::load(conn, handle, &["zoom-out"]),
+            MouseCursor::Alias => Self::load(conn, handle, &["link"]),
+            MouseCursor::Copy => Self::load(conn, handle, &["copy"]),
+            MouseCursor::Move => Self::load(conn, handle, &["move"]),
+            MouseCursor::AllScroll => Self::load(conn, handle, &["all-scroll"]),
+            MouseCursor::Cell => Self::load(conn, handle, &["plus"]),
+            MouseCursor::Crosshair => Self::load(conn, handle, &["crosshair"]),
+            MouseCursor::EResize => Self::load(conn, handle, &["right_side"]),
+            MouseCursor::NResize => Self::load(conn, handle, &["top_side"]),
+            MouseCursor::NeResize => Self::load(conn, handle, &["top_right_corner"]),
+            MouseCursor::NwResize => Self::load(conn, handle, &["top_left_corner"]),
+            MouseCursor::SResize => Self::load(conn, handle, &["bottom_side"]),
+            MouseCursor::SeResize => Self::load(conn, handle, &["bottom_right_corner"]),
+            MouseCursor::SwResize => Self::load(conn, handle, &["bottom_left_corner"]),
+            MouseCursor::WResize => Self::load(conn, handle, &["left_side"]),
+            MouseCursor::EwResize => Self::load(conn, handle, &["h_double_arrow"]),
+            MouseCursor::NsResize => Self::load(conn, handle, &["v_double_arrow"]),
+            MouseCursor::NwseResize => Self::load(conn, handle, &["bd_double_arrow", "size_bdiag"]),
+            MouseCursor::NeswResize => Self::load(conn, handle, &["fd_double_arrow", "size_fdiag"]),
+            MouseCursor::ColResize => Self::load(conn, handle, &["split_h", "h_double_arrow"]),
+            MouseCursor::RowResize => Self::load(conn, handle, &["split_v", "v_double_arrow"]),
         }
     }
 
@@ -444,7 +447,7 @@ impl CursorCache {
         Some(cursor_id)
     }
 
-    fn load_named(conn: &XCBConnection, cursor_handle: &Handle, names: &[&str]) -> Option<u32> {
+    fn load(conn: &XCBConnection, cursor_handle: &Handle, names: &[&str]) -> Option<u32> {
         for name in names {
             match cursor_handle.load_cursor(conn, name) {
                 Ok(cursor) if cursor != x11rb::NONE => return Some(cursor),
