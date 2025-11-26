@@ -137,6 +137,7 @@ type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
 ) -> CVResult;
 
 //TODO: replace this with objc2?
+#[allow(clippy::duplicated_attributes)] // ?
 #[link(name = "CoreFoundation", kind = "framework")]
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {

@@ -458,7 +458,7 @@ impl OsWindowView {
     }
 }
 
-impl<'a> OsWindow for &'a OsWindowView {
+impl OsWindow for &OsWindowView {
     fn close(&mut self) {
         if let Some(window) = self.window() {
             window.close();
