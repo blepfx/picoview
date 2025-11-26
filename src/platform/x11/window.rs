@@ -16,7 +16,7 @@ use x11rb::connection::Connection as XConnection;
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
 use x11rb::protocol::present::CompleteKind;
 use x11rb::protocol::present::{self, ConnectionExt as ConnectionExtPresent};
-use x11rb::protocol::xproto::{ColormapAlloc, KeyButMask, VisualClass};
+use x11rb::protocol::xproto::KeyButMask;
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
     protocol::{
