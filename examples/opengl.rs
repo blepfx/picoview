@@ -12,7 +12,7 @@ fn main() {
 
                 gl.make_current(true);
 
-                (clear_color)(1.0, 1.0, 0.0, 0.5);
+                (clear_color)(1.0, 1.0, 0.0, 0.01);
                 (clear)(0x00004000);
 
                 gl.swap_buffers();
@@ -29,13 +29,16 @@ fn main() {
                 println!("{:?}", size);
             }
 
+            Event::WindowMove { origin } => {
+                println!("{:?}", origin);
+            }
+
             _ => {}
         }
     })
     .with_opengl(GlConfig {
         version: GlVersion::Core(3, 1),
-        format: GlFormat::RGB8_D24,
-        transparent: false,
+        format: GlFormat::RGBA8_D24,
         optional: false,
         msaa_count: 0,
         debug: cfg!(debug_assertions),
@@ -43,7 +46,6 @@ fn main() {
     })
     .with_size((200, 200))
     .with_resizable((0, 0), (1000, 1000))
-    .with_transparency(false)
     .open_blocking()
     .expect("failed to open a window");
 }

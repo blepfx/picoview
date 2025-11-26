@@ -41,7 +41,6 @@ pub struct GlConfig {
     pub version: GlVersion,
 
     pub double_buffer: bool,
-    pub transparent: bool,
     pub debug: bool,
     pub srgb: bool,
     pub optional: bool,
@@ -56,7 +55,6 @@ impl Default for GlConfig {
             version: GlVersion::Compat(1, 1),
             double_buffer: true,
             debug: false,
-            transparent: false,
             srgb: false,
             optional: false,
             format: GlFormat::RGBA8_D24_S8,

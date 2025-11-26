@@ -74,44 +74,10 @@ impl WindowImpl {
                 .generate_id()
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
 
-            let (visual, depth) = if options.transparent {
-                connection
-                    .default_root()
-                    .allowed_depths
-                    .iter()
-                    .flat_map(|depth| {
-                        depth
-                            .visuals
-                            .iter()
-                            .map(move |visual| (visual, depth.depth))
-                    })
-                    .find(|(visual, depth)| visual.class == VisualClass::TRUE_COLOR && *depth == 32)
-                    .map(|(visual, depth)| (visual.visual_id, depth))
-                    .unwrap_or((COPY_FROM_PARENT, COPY_DEPTH_FROM_PARENT))
-            } else {
-                (COPY_FROM_PARENT, COPY_DEPTH_FROM_PARENT)
-            };
-
-            let colormap = if visual != COPY_FROM_PARENT {
-                let colormap_id = connection
-                    .xcb()
-                    .generate_id()
-                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
-
-                connection
-                    .xcb()
-                    .create_colormap(ColormapAlloc::NONE, colormap_id, parent_window_id, visual)
-                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
-
-                colormap_id
-            } else {
-                0
-            };
-
             connection
                 .xcb()
                 .create_window(
-                    depth,
+                    COPY_DEPTH_FROM_PARENT,
                     window_id,
                     parent_window_id,
                     0,
@@ -120,8 +86,8 @@ impl WindowImpl {
                     options.size.height as _,
                     0,
                     WindowClass::INPUT_OUTPUT,
-                    visual,
-                    &CreateWindowAux::new().colormap(colormap).event_mask(
+                    COPY_FROM_PARENT,
+                    &CreateWindowAux::new().event_mask(
                         EventMask::EXPOSURE
                             | EventMask::BUTTON_PRESS
                             | EventMask::BUTTON_RELEASE

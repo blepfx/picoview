@@ -16,16 +16,6 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::SystemTime;
 
-macro_rules! cstr {
-    ($str:literal) => {
-        #[allow(unused_unsafe)]
-        unsafe {
-            std::ffi::CStr::from_bytes_with_nul_unchecked(concat!($str, "\0").as_bytes())
-        }
-    };
-}
-pub(crate) use cstr;
-
 fn try_get_cursor(selector: Sel) -> Retained<NSCursor> {
     unsafe {
         let class = NSCursor::class();

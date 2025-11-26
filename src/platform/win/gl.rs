@@ -11,7 +11,7 @@ use std::{
 };
 use windows_sys::{
     Win32::{
-        Foundation::{FreeLibrary, HMODULE, HWND},
+        Foundation::{FreeLibrary, HMODULE, HWND, PROC},
         Graphics::{
             Gdi::{GetDC, HDC, ReleaseDC},
             OpenGL::{
@@ -56,7 +56,6 @@ const WGL_TYPE_RGBA_ARB: i32 = 0x202B;
 const WGL_SAMPLE_BUFFERS_ARB: i32 = 0x2041;
 const WGL_SAMPLES_ARB: i32 = 0x2042;
 const WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20A9;
-const WGL_TRANSPARENT_ARB: i32 = 0x200A;
 
 type WglCreateContextAttribsARB = unsafe extern "system" fn(HDC, HGLRC, *const i32) -> HGLRC;
 type WglChoosePixelFormatARB =
@@ -77,7 +76,7 @@ impl GlContext {
         unsafe {
             let ext = WglExtensions::get();
             let hdc = GetDC(hwnd);
-            let gl_library = LoadLibraryA("opengl32.dll\0".as_ptr() as *const _);
+            let gl_library = LoadLibraryA(c"opengl32.dll".as_ptr() as *const _);
 
             let (format_id, format_desc) = create_pixel_format_arb(hdc, &config, ext)
                 .or_else(|| create_pixel_format_fallback(hdc, &config))
@@ -89,7 +88,7 @@ impl GlContext {
 
             SetPixelFormat(hdc, format_id, &format_desc);
 
-            let hglrc = create_context_arb(hdc, &config, &ext)
+            let hglrc = create_context_arb(hdc, &config, ext)
                 .or_else(|| create_context_fallback(hdc))
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
@@ -99,12 +98,12 @@ impl GlContext {
                     )
                 })?;
 
-            if ext.extensions.contains(Extensions::SWAP_CONTROL) {
-                if let Some(swap_interval) = ext.swap_interval {
-                    wglMakeCurrent(hdc, hglrc);
-                    (swap_interval)(0);
-                    wglMakeCurrent(hdc, null_mut());
-                }
+            if ext.extensions.contains(Extensions::SWAP_CONTROL)
+                && let Some(swap_interval) = ext.swap_interval
+            {
+                wglMakeCurrent(hdc, hglrc);
+                (swap_interval)(0);
+                wglMakeCurrent(hdc, null_mut());
             }
 
             Ok(Self {
@@ -233,7 +232,7 @@ impl WglExtensions {
 
             macro_rules! load_fn {
                 ($type:ident, $lit:literal) => {
-                    std::mem::transmute::<_, Option<$type>>(wglGetProcAddress(
+                    std::mem::transmute::<PROC, Option<$type>>(wglGetProcAddress(
                         concat!($lit, "\0").as_ptr() as *const _,
                     ))
                     .filter(|&ptr| check_ptr(ptr as *const _))
@@ -451,10 +450,6 @@ fn create_pixel_format_arb(
             if ext.extensions.contains(Extensions::FRAMEBUFFER_SRGB) {
                 pixel_format_attribs
                     .extend_from_slice(&[WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, config.srgb as i32]);
-            }
-
-            if config.transparent {
-                pixel_format_attribs.extend_from_slice(&[WGL_TRANSPARENT_ARB, 1]);
             }
 
             pixel_format_attribs.push(0);

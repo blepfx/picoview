@@ -5,17 +5,6 @@ use std::{
 };
 use x11rb::{errors::ConnectionError, protocol::xproto::KeyButMask};
 
-macro_rules! cstr {
-    ($str:literal) => {
-        #[allow(unused_unsafe)]
-        unsafe {
-            std::ffi::CStr::from_bytes_with_nul_unchecked(concat!($str, "\0").as_bytes())
-        }
-    };
-}
-
-pub(crate) use cstr;
-
 pub fn open_url(path: &str) -> bool {
     if spawn_detached(Command::new("xdg-open").arg(path)).is_ok() {
         return true;

@@ -1,14 +1,16 @@
 use super::{
-    connection::Connection,
     gl::GlContext,
+    shared::Win32Shared,
     util::{
-        assert, from_widestring, generate_guid, get_modifiers_async, hinstance, run_event_loop,
-        scan_code_to_key, to_widestring,
+        check_error, from_widestring, generate_guid, get_modifiers_async, hinstance,
+        run_event_loop, scan_code_to_key, to_widestring,
     },
 };
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
-    WindowHandler, platform::OpenMode, rwh_06,
+    WindowHandler,
+    platform::{OpenMode, win::util::window_size_from_client_size},
+    rwh_06,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -20,7 +22,7 @@ use std::{
     sync::Arc,
 };
 use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
     Graphics::Gdi::ClientToScreen,
     System::{
         Com::CoInitialize,
@@ -32,22 +34,20 @@ use windows_sys::Win32::{
     },
     UI::{
         Controls::WM_MOUSELEAVE,
-        Input::KeyboardAndMouse::{
-            GetFocus, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
-        },
+        Input::KeyboardAndMouse::{SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
-            AdjustWindowRectEx, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-            GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetWindowLongPtrW, GetWindowLongW,
-            HCURSOR, HTCLIENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, PostMessageW, PostQuitMessage,
-            RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes,
-            SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI,
-            UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN,
+            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_STYLE,
+            GWLP_USERDATA, GWLP_WNDPROC, GetWindowLongPtrW, GetWindowLongW, HCURSOR, HTCLIENT,
+            IDC_ARROW, LoadCursorW, MINMAXINFO, PostMessageW, PostQuitMessage, RegisterClassW,
+            SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetWindowLongPtrW, SetWindowPos,
+            SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA,
+            WM_DESTROY, WM_DPICHANGED, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_LBUTTONDOWN,
             WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
             WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
-            WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-            WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE, XBUTTON1, XBUTTON2,
+            WM_SIZE, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD,
+            WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_VISIBLE, XBUTTON1, XBUTTON2,
         },
     },
 };
@@ -66,12 +66,14 @@ pub struct WindowImpl {
 }
 
 pub struct WindowInner {
-    connection: Arc<Connection>,
+    shared: Arc<Win32Shared>,
 
     window_hwnd: HWND,
     window_class: u16,
 
     owns_event_loop: bool,
+    min_window_size: POINT,
+    max_window_size: POINT,
 
     state_focused: Cell<bool>,
     state_current_modifiers: Cell<Modifiers>,
@@ -81,7 +83,7 @@ pub struct WindowInner {
 
 impl WindowImpl {
     pub unsafe fn is_our_window(hwnd: HWND) -> bool {
-        unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as isize }
+        unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as usize as isize }
     }
 
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
@@ -96,14 +98,14 @@ impl WindowImpl {
                 OpenMode::Blocking => null_mut(),
             };
 
-            let connection = Connection::get()?;
+            let shared = Win32Shared::get()?;
 
             if parent.is_null() {
                 let com_init = CoInitialize(null());
-                assert(com_init == 0, "com sta init")?;
+                check_error(com_init == 0, "com sta init")?;
             }
 
-            connection.try_set_thread_dpi_awareness_monitor_aware();
+            shared.try_set_thread_dpi_awareness_monitor_aware();
 
             let class_name = to_widestring(&format!("picoview-{}", generate_guid()));
             let window_title = to_widestring(&options.title);
@@ -120,62 +122,59 @@ impl WindowImpl {
                 lpszMenuName: null(),
                 lpszClassName: class_name.as_ptr(),
             });
-            assert(window_class != 0, "main window class")?;
+            check_error(window_class != 0, "main window class")?;
 
-            let (dwstyle, dwexstyle) = {
+            let dwstyle = {
                 let mut dwstyle = 0;
-                let mut dwexstyle = 0;
+
+                match mode {
+                    OpenMode::Blocking => {
+                        if options.decorations {
+                            dwstyle |= WS_OVERLAPPEDWINDOW;
+                        } else {
+                            dwstyle |= WS_POPUP;
+                        }
+
+                        if options.resizable.is_none() {
+                            dwstyle &= !WS_SIZEBOX;
+                        }
+                    }
+
+                    OpenMode::Embedded(..) => {
+                        dwstyle |= WS_CHILD;
+                    }
+                }
 
                 if options.visible {
                     dwstyle |= WS_VISIBLE;
                 }
 
-                if options.decorations {
-                    dwstyle |= WS_POPUP | WS_CAPTION | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX;
-                } else if parent.is_null() {
-                    dwstyle |= WS_POPUP;
-                }
-
-                if options.transparent {
-                    dwexstyle |= WS_EX_LAYERED;
-                }
-
-                if !parent.is_null() {
-                    dwstyle |= WS_CHILD;
-                }
-
-                (dwstyle, dwexstyle)
+                dwstyle
             };
 
-            let point = options.position.unwrap_or(Point { x: 0.0, y: 0.0 });
-            let mut rect = RECT {
-                left: point.x as i32,
-                top: point.y as i32,
-                right: point.x as i32 + options.size.width as i32,
-                bottom: point.y as i32 + options.size.height as i32,
-            };
-
-            AdjustWindowRectEx(&mut rect, dwstyle, 0, dwexstyle);
+            let size = window_size_from_client_size(options.size, dwstyle);
 
             let hwnd = CreateWindowExW(
-                dwexstyle,
+                0,
                 window_class as _,
                 window_title.as_ptr() as _,
                 dwstyle,
-                options.position.map(|_| rect.left).unwrap_or(CW_USEDEFAULT),
-                options.position.map(|_| rect.top).unwrap_or(CW_USEDEFAULT),
-                rect.right - rect.left,
-                rect.bottom - rect.top,
+                options
+                    .position
+                    .map(|pos| pos.x as i32)
+                    .unwrap_or(CW_USEDEFAULT),
+                options
+                    .position
+                    .map(|pos| pos.y as i32)
+                    .unwrap_or(CW_USEDEFAULT),
+                size.x,
+                size.y,
                 parent as _,
                 null_mut(),
                 hinstance(),
                 null(),
             );
-            assert(!hwnd.is_null(), "main window create")?;
-
-            if options.transparent {
-                SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
-            }
+            check_error(!hwnd.is_null(), "main window create")?;
 
             let gl_context = match options.opengl {
                 Some(config) => match GlContext::new(hwnd, config) {
@@ -187,37 +186,48 @@ impl WindowImpl {
             };
 
             let inner = WindowInner {
-                connection: connection.clone(),
+                shared: shared.clone(),
 
                 state_mouse_capture: Cell::new(0),
-                state_current_cursor: Cell::new(connection.load_cursor(MouseCursor::Default)),
+                state_current_cursor: Cell::new(shared.load_cursor(MouseCursor::Default)),
                 state_current_modifiers: Cell::new(Modifiers::empty()),
-                state_focused: Cell::new(GetFocus() == hwnd),
+                state_focused: Cell::new(false),
 
                 window_class,
                 window_hwnd: hwnd,
 
                 owns_event_loop: matches!(mode, OpenMode::Blocking),
+                max_window_size: window_size_from_client_size(
+                    options
+                        .resizable
+                        .as_ref()
+                        .map(|x| x.end)
+                        .unwrap_or(Size::MAX),
+                    dwstyle,
+                ),
+                min_window_size: window_size_from_client_size(
+                    options
+                        .resizable
+                        .as_ref()
+                        .map(|x| x.start)
+                        .unwrap_or(Size::MIN),
+                    dwstyle,
+                ),
             };
 
-            // i hate this line so much. it feels. wrong.
-            let event_handler = RefCell::new((options.factory)(Window(&mut &inner)));
-
             let event_loop = Rc::new(Self {
-                inner,
-                gl_context,
-
-                event_handler,
+                event_handler: RefCell::new((options.factory)(Window(&mut &inner))),
                 event_queue: RefCell::new(VecDeque::new()),
+                gl_context,
+                inner,
             });
 
             event_loop.send_event(Event::WindowScale {
-                scale: connection.try_get_dpi_for_window(hwnd) as f32
-                    / USER_DEFAULT_SCREEN_DPI as f32,
+                scale: shared.try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
             });
 
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(event_loop) as _);
-            connection.register_pacer(hwnd);
+            shared.register_pacer(hwnd);
 
             if matches!(mode, OpenMode::Blocking) {
                 run_event_loop(null_mut());
@@ -234,6 +244,8 @@ impl WindowImpl {
             for event in self.event_queue.borrow_mut().drain(..) {
                 handler.on_event(event, Window(&mut &self.inner));
             }
+        } else if cfg!(debug_assertions) {
+            panic!("send_event reentrancy")
         }
     }
 
@@ -257,9 +269,7 @@ impl Drop for WindowImpl {
         unsafe {
             SetWindowLongPtrW(self.inner.window_hwnd, GWLP_USERDATA, 0);
             UnregisterClassW(self.inner.window_class as _, hinstance());
-            self.inner
-                .connection
-                .unregister_pacer(self.inner.window_hwnd);
+            self.inner.shared.unregister_pacer(self.inner.window_hwnd);
         }
     }
 }
@@ -294,7 +304,7 @@ impl crate::platform::OsWindow for &WindowInner {
 
     fn set_cursor_icon(&mut self, cursor: MouseCursor) {
         self.state_current_cursor
-            .set(self.connection.load_cursor(cursor));
+            .set(self.shared.load_cursor(cursor));
     }
 
     fn set_cursor_position(&mut self, point: Point) {
@@ -313,23 +323,15 @@ impl crate::platform::OsWindow for &WindowInner {
     fn set_size(&mut self, size: Size) {
         unsafe {
             let dwstyle = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
-            let dwexstyle = GetWindowLongW(self.window_hwnd, GWL_EXSTYLE) as u32;
+            let size = window_size_from_client_size(size, dwstyle);
 
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                right: size.width as i32,
-                bottom: size.height as i32,
-            };
-
-            AdjustWindowRectEx(&mut rect, dwstyle, 0, dwexstyle);
             SetWindowPos(
                 self.window_hwnd,
                 self.window_hwnd,
                 0,
                 0,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
+                size.x,
+                size.y,
                 SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE,
             );
         }
@@ -418,7 +420,7 @@ impl crate::platform::OsWindow for &WindowInner {
         unsafe {
             if OpenClipboard(self.window_hwnd) != 0 {
                 EmptyClipboard();
-                let wide = to_widestring(&text);
+                let wide = to_widestring(text);
                 let buf = GlobalAlloc(GMEM_MOVEABLE, (wide.len() + 1) * size_of::<u16>());
                 let buf = GlobalLock(buf) as *mut u16;
                 copy_nonoverlapping(wide.as_ptr(), buf, wide.len());
@@ -446,23 +448,33 @@ unsafe extern "system" fn wnd_proc(
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
 
-        match msg {
-            WM_DESTROY => {
-                if (*window_ptr).inner.owns_event_loop {
-                    PostQuitMessage(0);
-                }
+        if msg == WM_DESTROY {
+            if (*window_ptr).inner.owns_event_loop {
+                PostQuitMessage(0);
+            }
 
-                drop(Rc::from_raw(window_ptr));
+            drop(Rc::from_raw(window_ptr));
+
+            return 0;
+        }
+
+        let window = &*window_ptr;
+        match msg {
+            WM_MOVE => {
+                let x = ((lparam >> 0) & 0xFFFF) as i16 as f32;
+                let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
+                window.send_event_defer(Event::WindowMove {
+                    origin: Point { x, y },
+                });
 
                 0
             }
 
-            WM_MOVE => {
-                let x = ((lparam >> 0) & 0xFFFF) as u16 as f32;
-                let y = ((lparam >> 16) & 0xFFFF) as u16 as f32;
-
-                (*window_ptr).send_event_defer(Event::WindowMove {
-                    origin: Point { x, y },
+            WM_SIZE => {
+                let width = ((lparam >> 0) & 0xFFFF) as u32;
+                let height = ((lparam >> 16) & 0xFFFF) as u32;
+                window.send_event_defer(Event::WindowResize {
+                    size: Size { width, height },
                 });
 
                 0
@@ -471,14 +483,11 @@ unsafe extern "system" fn wnd_proc(
             WM_DPICHANGED => {
                 let dpi = (wparam & 0xFFFF) as u16 as u32;
                 let scale = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
-
-                (*window_ptr).send_event_defer(Event::WindowScale { scale });
+                window.send_event_defer(Event::WindowScale { scale });
                 0
             }
 
             WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
-                let window = &*window_ptr;
-
                 let button = match msg {
                     WM_LBUTTONDOWN => Some(MouseButton::Left),
                     WM_RBUTTONDOWN => Some(MouseButton::Right),
@@ -508,8 +517,6 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
-                let window = &*window_ptr;
-
                 let button = match msg {
                     WM_LBUTTONUP => Some(MouseButton::Left),
                     WM_RBUTTONUP => Some(MouseButton::Right),
@@ -542,7 +549,7 @@ unsafe extern "system" fn wnd_proc(
                 let wheel_delta: i16 = (wparam >> 16) as i16;
                 let wheel_delta = wheel_delta as f32 / WHEEL_DELTA as f32;
 
-                (*window_ptr).send_event_defer(Event::MouseScroll {
+                window.send_event_defer(Event::MouseScroll {
                     x: if msg == WM_MOUSEWHEEL {
                         0.0
                     } else {
@@ -558,7 +565,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_MOUSELEAVE => {
-                (*window_ptr).send_event_defer(Event::MouseLeave);
+                window.send_event_defer(Event::MouseLeave);
                 0
             }
 
@@ -580,7 +587,7 @@ unsafe extern "system" fn wnd_proc(
 
                 ClientToScreen(hwnd, &mut absolute);
 
-                (*window_ptr).send_event_defer(Event::MouseMove {
+                window.send_event_defer(Event::MouseMove {
                     absolute: Point {
                         x: absolute.x as f32,
                         y: absolute.y as f32,
@@ -594,8 +601,6 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_SETCURSOR => {
-                let window = &*window_ptr;
-
                 if lparam as u32 & 0xffff == HTCLIENT {
                     let cursor = window.inner.state_current_cursor.get();
 
@@ -612,9 +617,17 @@ unsafe extern "system" fn wnd_proc(
                 }
             }
 
+            WM_GETMINMAXINFO => {
+                let info = lparam as *mut MINMAXINFO;
+                (*info).ptMinTrackSize = window.inner.min_window_size;
+                (*info).ptMaxTrackSize = window.inner.max_window_size;
+                (*info).ptMaxSize = window.inner.max_window_size;
+
+                0
+            }
+
             WM_SETFOCUS => {
-                let window = &*window_ptr;
-                if window.inner.state_focused.replace(true) == false {
+                if !window.inner.state_focused.replace(true) {
                     window.send_event_defer(Event::WindowFocus { focus: true });
                 }
 
@@ -622,8 +635,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_KILLFOCUS => {
-                let window = &*window_ptr;
-                if window.inner.state_focused.replace(false) == true {
+                if window.inner.state_focused.replace(false) {
                     window.send_event_defer(Event::WindowFocus { focus: false });
                 }
 
@@ -631,7 +643,6 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_USER_KEY_DOWN | WM_USER_KEY_UP => {
-                let window = &*window_ptr;
                 let scan_code = ((lparam & 0x1ff_0000) >> 16) as u32;
                 let mut capture = false;
 
@@ -653,7 +664,6 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_USER_FRAME_PACER => {
-                let window = &*window_ptr;
                 let modifiers = get_modifiers_async();
 
                 if window.inner.state_current_modifiers.replace(modifiers) != modifiers {

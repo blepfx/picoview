@@ -15,7 +15,6 @@ impl<H: FnMut(Event, Window) + 'static> WindowHandler for H {
 pub struct WindowBuilder {
     pub visible: bool,
     pub decorations: bool,
-    pub transparent: bool,
 
     pub title: String,
 
@@ -34,7 +33,6 @@ impl WindowBuilder {
         Self {
             visible: true,
             decorations: true,
-            transparent: false,
             title: String::new(),
 
             resizable: None,
@@ -46,13 +44,6 @@ impl WindowBuilder {
             position: None,
             opengl: None,
             factory: Box::new(|w| Box::new((factory)(w))),
-        }
-    }
-
-    pub fn with_transparency(self, transparent: bool) -> Self {
-        Self {
-            transparent,
-            ..self
         }
     }
 

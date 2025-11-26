@@ -1,6 +1,6 @@
-use crate::{Error, Key, Modifiers};
+use crate::{Error, Key, Modifiers, Size};
 use std::{
-    ffi::{CString, OsString},
+    ffi::{CStr, OsString},
     os::windows::ffi::OsStrExt,
     ptr::null_mut,
     thread::sleep,
@@ -8,7 +8,7 @@ use std::{
 };
 use windows_sys::{
     Win32::{
-        Foundation::{GetLastError, HINSTANCE, HWND},
+        Foundation::{GetLastError, HINSTANCE, HWND, POINT, RECT},
         Graphics::Dwm::{DwmFlush, DwmIsCompositionEnabled},
         System::{
             Com::CoCreateGuid,
@@ -24,22 +24,25 @@ use windows_sys::{
                 GetAsyncKeyState, GetKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN,
                 VK_MENU, VK_NUMLOCK, VK_RWIN, VK_SCROLL, VK_SHIFT,
             },
-            WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage},
+            WindowsAndMessaging::{
+                AdjustWindowRectEx, DispatchMessageW, GetMessageW, MSG, TranslateMessage,
+                WINDOW_STYLE,
+            },
         },
     },
     core::{GUID, PWSTR},
 };
 
 pub unsafe fn load_function_dynamic<A, R>(
-    module: &str,
-    function: &str,
+    module: &CStr,
+    function: &CStr,
 ) -> Option<unsafe fn(A) -> R> {
     unsafe {
-        let lib = LoadLibraryA(CString::new(module).unwrap().as_ptr() as *const _);
+        let lib = LoadLibraryA(module.as_ptr() as *const _);
         if lib.is_null() {
             None
         } else {
-            let proc = GetProcAddress(lib, CString::new(function).unwrap().as_ptr() as *const _);
+            let proc = GetProcAddress(lib, function.as_ptr() as *const _);
             proc.map(|x| std::mem::transmute(x))
         }
     }
@@ -51,7 +54,7 @@ pub fn generate_guid() -> String {
         CoCreateGuid(&mut guid);
 
         format!(
-            "{:0X}-{:0X}-{:0X}-{:0X}{:0X}-{:0X}{:0X}{:0X}{:0X}{:0X}{:0X}\0",
+            "{:0X}-{:0X}-{:0X}-{:0X}{:0X}-{:0X}{:0X}{:0X}{:0X}{:0X}{:0X}",
             guid.data1,
             guid.data2,
             guid.data3,
@@ -107,8 +110,7 @@ pub fn hinstance() -> HINSTANCE {
     unsafe { &__ImageBase as *const IMAGE_DOS_HEADER as _ }
 }
 
-#[must_use]
-pub fn assert(assert: bool, message: &'static str) -> Result<(), crate::Error> {
+pub fn check_error(assert: bool, message: &'static str) -> Result<(), crate::Error> {
     if !assert {
         unsafe {
             let error = GetLastError();
@@ -302,4 +304,22 @@ pub unsafe fn get_modifiers_async() -> Modifiers {
     }
 
     state
+}
+
+pub fn window_size_from_client_size(size: Size, dwstyle: WINDOW_STYLE) -> POINT {
+    unsafe {
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: size.width.try_into().unwrap_or(i32::MAX / 2),
+            bottom: size.height.try_into().unwrap_or(i32::MAX / 2),
+        };
+
+        AdjustWindowRectEx(&mut rect, dwstyle, 0, 0);
+
+        POINT {
+            x: rect.right - rect.left,
+            y: rect.bottom - rect.top,
+        }
+    }
 }

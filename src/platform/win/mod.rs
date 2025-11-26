@@ -1,5 +1,5 @@
-mod connection;
 mod gl;
+mod shared;
 mod util;
 mod window;
 

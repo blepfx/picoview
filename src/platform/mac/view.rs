@@ -1,5 +1,5 @@
 use super::display::*;
-use super::util::{cstr, get_cursor, keycode2key, random_id};
+use super::util::{get_cursor, keycode2key, random_id};
 use crate::platform::OsWindow;
 use crate::platform::mac::util::{self, flags2mods};
 use crate::{
@@ -242,7 +242,7 @@ impl OsWindowView {
         unsafe {
             let ivar = self
                 .class()
-                .instance_variable(cstr!("_context"))
+                .instance_variable(c"_context")
                 .unwrap_unchecked();
             let context = *ivar.load::<*mut c_void>(self) as *mut Box<RefCell<OsWindowViewInner>>;
             if !context.is_null() {
@@ -439,7 +439,7 @@ impl OsWindowView {
     fn set_context(&self, context: Box<OsWindowViewInner>) {
         unsafe {
             self.class()
-                .instance_variable(cstr!("_context"))
+                .instance_variable(c"_context")
                 .unwrap_unchecked()
                 .load_ptr::<*mut c_void>(self)
                 .write(Box::into_raw(context) as *mut c_void);
@@ -450,7 +450,7 @@ impl OsWindowView {
         unsafe {
             let ivar = self
                 .class()
-                .instance_variable(cstr!("_context"))
+                .instance_variable(c"_context")
                 .unwrap_unchecked();
             let context = *ivar.load::<*mut c_void>(self) as *mut OsWindowViewInner;
             &*context
@@ -567,14 +567,15 @@ impl<'a> OsWindow for &'a OsWindowView {
 
 impl OsWindowClass {
     fn register_class() -> Result<OsWindowClass, Error> {
-        let class_name = CString::new(format!("picoview-{}", random_id())).unwrap();
+        let class_name =
+            CString::new(format!("picoview-{}", random_id())).expect("unexpected nul terminator?");
 
         let mut builder = match ClassBuilder::new(&class_name, NSView::class()) {
             Some(builder) => builder,
             None => return Err(Error::PlatformError("Failed to register class".to_string())),
         };
 
-        builder.add_ivar::<*mut c_void>(cstr!("_context"));
+        builder.add_ivar::<*mut c_void>(c"_context");
 
         unsafe {
             // NSView

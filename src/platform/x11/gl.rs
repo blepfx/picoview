@@ -1,5 +1,4 @@
 use super::connection::Connection;
-use super::util::cstr;
 use crate::{Error, GlConfig, GlVersion};
 use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
@@ -113,11 +112,6 @@ impl GlContext {
                     ]);
                 }
 
-                if config.transparent {
-                    fb_attribs
-                        .extend_from_slice(&[glx::GLX_TRANSPARENT_TYPE, glx::GLX_TRANSPARENT_RGB]);
-                }
-
                 fb_attribs.push(0);
 
                 let mut n_configs = 0;
@@ -146,10 +140,8 @@ impl GlContext {
 
             let glXCreateContextAttribsARB = ext_context
                 .then(|| {
-                    (lib_glx.glXGetProcAddress)(
-                        cstr!("glXCreateContextAttribsARB").as_ptr() as *const _
-                    )
-                    .map(|addr| std::mem::transmute::<_, GlXCreateContextAttribsARB>(addr))
+                    (lib_glx.glXGetProcAddress)(c"glXCreateContextAttribsARB".as_ptr() as *const _)
+                        .map(|addr| std::mem::transmute::<_, GlXCreateContextAttribsARB>(addr))
                 })
                 .flatten();
 
@@ -215,7 +207,7 @@ impl GlContext {
 
             if ext_swap_control {
                 let glXSwapIntervalEXT =
-                    (lib_glx.glXGetProcAddress)(cstr!("glXSwapIntervalEXT").as_ptr() as *const _)
+                    (lib_glx.glXGetProcAddress)(c"glXSwapIntervalEXT".as_ptr() as *const _)
                         .map(|addr| std::mem::transmute::<_, GlXSwapIntervalEXT>(addr));
 
                 if let Some(glXSwapIntervalEXT) = glXSwapIntervalEXT

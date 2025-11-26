@@ -33,10 +33,10 @@ use windows_sys::{
     core::PCWSTR,
 };
 
-unsafe impl Send for Connection {}
-unsafe impl Sync for Connection {}
+unsafe impl Send for Win32Shared {}
+unsafe impl Sync for Win32Shared {}
 
-pub struct Connection {
+pub struct Win32Shared {
     cursor_cache: CursorCache,
     keyboard_hook: HHOOK,
 
@@ -46,11 +46,11 @@ pub struct Connection {
     dl_get_dpi_for_window: Option<unsafe fn(HWND) -> u32>,
 }
 
-impl Connection {
+impl Win32Shared {
     pub fn get() -> Result<Arc<Self>, Error> {
-        static INSTANCE: Mutex<Weak<Connection>> = Mutex::new(Weak::new());
+        static INSTANCE: Mutex<Weak<Win32Shared>> = Mutex::new(Weak::new());
 
-        let mut lock = INSTANCE.lock().unwrap();
+        let mut lock = INSTANCE.lock().expect("poisoned");
         if let Some(conn) = lock.upgrade() {
             return Ok(conn);
         }
@@ -107,10 +107,10 @@ impl Connection {
                 ),
 
                 dl_set_thread_dpi_awareness_context: load_function_dynamic(
-                    "user32.dll",
-                    "SetThreadDpiAwarenessContext",
+                    c"user32.dll",
+                    c"SetThreadDpiAwarenessContext",
                 ),
-                dl_get_dpi_for_window: load_function_dynamic("user32.dll", "GetDpiForWindow"),
+                dl_get_dpi_for_window: load_function_dynamic(c"user32.dll", c"GetDpiForWindow"),
             });
 
             run_pacer_loop(loop_receiver);
@@ -119,7 +119,7 @@ impl Connection {
     }
 }
 
-impl Drop for Connection {
+impl Drop for Win32Shared {
     fn drop(&mut self) {
         unsafe {
             UnhookWindowsHookEx(self.keyboard_hook);
