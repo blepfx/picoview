@@ -27,12 +27,12 @@ jobs:
         toolchain: stable
         components: rustfmt, clippy
     - name: Build
-      run: cargo build --workspace --all-targets --all-features --verbose
+      run: cargo build --workspace --all-targets --all-features
     - name: Run Tests
-      run: cargo test --workspace --all-targets --all-features --verbose
+      run: cargo test --workspace --all-targets --all-features
     - name: Check Docs
       run: cargo doc --examples --all-features --no-deps
-    # - name: Clippy (TODO)
-    #   run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+    - name: Clippy
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
     - name: Check Formatting
       run: cargo fmt --all -- --check

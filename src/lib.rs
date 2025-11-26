@@ -2,7 +2,6 @@
 #![allow(clippy::identity_op)]
 #![deny(clippy::unwrap_used)]
 // #![warn(missing_docs)]
-// TODO: setup clippy
 
 mod data;
 mod opengl;
