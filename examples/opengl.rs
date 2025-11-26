@@ -25,6 +25,10 @@ fn main() {
                 }
             }
 
+            Event::WindowResize { size } => {
+                println!("{:?}", size);
+            }
+
             _ => {}
         }
     })
@@ -38,6 +42,7 @@ fn main() {
         ..Default::default()
     })
     .with_size((200, 200))
+    .with_resizable((0, 0), (1000, 1000))
     .with_transparency(false)
     .open_blocking()
     .unwrap();

@@ -1,4 +1,5 @@
 use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, platform, rwh_06};
+use std::ops::Range;
 
 pub trait WindowHandler: 'static {
     fn on_event(&mut self, event: Event, window: Window);
@@ -17,7 +18,10 @@ pub struct WindowBuilder {
     pub transparent: bool,
 
     pub title: String,
+
     pub size: Size,
+    pub resizable: Option<Range<Size>>,
+
     pub position: Option<Point>,
     pub opengl: Option<GlConfig>,
 
@@ -31,10 +35,13 @@ impl WindowBuilder {
             decorations: true,
             transparent: false,
             title: String::new(),
+
+            resizable: None,
             size: Size {
                 width: 200,
                 height: 200,
             },
+
             position: None,
             opengl: None,
             factory: Box::new(|w| Box::new((factory)(w))),
@@ -69,6 +76,13 @@ impl WindowBuilder {
     pub fn with_size(self, size: impl Into<Size>) -> Self {
         Self {
             size: size.into(),
+            ..self
+        }
+    }
+
+    pub fn with_resizable(self, min: impl Into<Size>, max: impl Into<Size>) -> Self {
+        Self {
+            resizable: Some(min.into()..max.into()),
             ..self
         }
     }

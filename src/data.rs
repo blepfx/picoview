@@ -70,10 +70,22 @@ pub struct Point {
 }
 
 /// size in physical pixels
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub struct Size {
     pub width: u32,
     pub height: u32,
+}
+
+impl Size {
+    pub const MIN: Size = Size {
+        width: 0,
+        height: 0,
+    };
+
+    pub const MAX: Size = Size {
+        width: u32::MAX,
+        height: u32::MAX,
+    };
 }
 
 impl From<(u32, u32)> for Size {

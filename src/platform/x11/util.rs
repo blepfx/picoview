@@ -3,7 +3,7 @@ use std::{
     os::unix::process::CommandExt,
     process::{Command, Stdio},
 };
-use x11rb::protocol::xproto::KeyButMask;
+use x11rb::{errors::ConnectionError, protocol::xproto::KeyButMask};
 
 macro_rules! cstr {
     ($str:literal) => {
@@ -198,4 +198,17 @@ pub fn keymask2mods(mods: KeyButMask) -> Modifiers {
         }
     }
     ret
+}
+
+pub fn consume_error<T>(result: Result<T, ConnectionError>) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(e) => {
+            if cfg!(debug_assertions) {
+                panic!("x11 connection error: {}", e);
+            }
+
+            false
+        }
+    }
 }

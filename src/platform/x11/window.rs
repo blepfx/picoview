@@ -2,6 +2,7 @@ use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
 use crate::platform::OpenMode;
+use crate::platform::x11::util::consume_error;
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
     WindowHandler, rwh_06,
@@ -12,7 +13,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use x11rb::connection::Connection as XConnection;
-use x11rb::properties::WmSizeHints;
+use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
 use x11rb::protocol::present::CompleteKind;
 use x11rb::protocol::present::{self, ConnectionExt as ConnectionExtPresent};
 use x11rb::protocol::xproto::{ColormapAlloc, KeyButMask, VisualClass};
@@ -37,6 +38,7 @@ struct WindowInner {
 
     is_closed: bool,
     is_destroyed: bool,
+    is_resizeable: bool,
     on_closed: SyncSender<()>,
 
     last_modifiers: Modifiers,
@@ -144,10 +146,25 @@ impl WindowImpl {
                 )
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
 
+            let (min_size, max_size) = match options.resizable.clone() {
+                None => (options.size, options.size),
+                Some(range) => (range.start, range.end),
+            };
+
             let mut size_hints = WmSizeHints::new();
-            size_hints.base_size = Some((options.size.width as _, options.size.height as _));
-            size_hints.max_size = size_hints.base_size;
-            size_hints.min_size = size_hints.base_size;
+            size_hints.size = Some((
+                WmSizeHintsSpecification::ProgramSpecified,
+                options.size.width.try_into().unwrap_or(i32::MAX),
+                options.size.height.try_into().unwrap_or(i32::MAX),
+            ));
+            size_hints.max_size = Some((
+                max_size.width.try_into().unwrap_or(i32::MAX),
+                max_size.height.try_into().unwrap_or(i32::MAX),
+            ));
+            size_hints.min_size = Some((
+                min_size.width.try_into().unwrap_or(i32::MAX),
+                min_size.height.try_into().unwrap_or(i32::MAX),
+            ));
             size_hints
                 .set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS)
                 .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
@@ -249,6 +266,7 @@ impl WindowImpl {
                 on_closed,
                 is_closed: false,
                 is_destroyed: false,
+                is_resizeable: options.resizable.is_some(),
 
                 last_modifiers: Modifiers::empty(),
                 last_cursor: MouseCursor::Default,
@@ -518,11 +536,13 @@ impl WindowImpl {
         self.inner
             .connection
             .remove_window_pacer(self.inner.window_id);
-        let _ = self
-            .inner
-            .connection
-            .xcb()
-            .destroy_window(self.inner.window_id);
+
+        consume_error(
+            self.inner
+                .connection
+                .xcb()
+                .destroy_window(self.inner.window_id),
+        );
         self.inner.connection.flush();
     }
 
@@ -558,13 +578,13 @@ impl crate::platform::OsWindow for WindowInner {
 
         self.last_window_title = title.to_owned();
 
-        let _ = self.connection.xcb().change_property8(
+        consume_error(self.connection.xcb().change_property8(
             PropMode::REPLACE,
             self.window_id,
             AtomEnum::WM_NAME,
             AtomEnum::STRING,
             title.as_bytes(),
-        );
+        ));
 
         self.connection.flush();
     }
@@ -576,10 +596,11 @@ impl crate::platform::OsWindow for WindowInner {
 
         let xid = self.connection.load_cursor(cursor);
         if xid != 0 {
-            let _ = self.connection.xcb().change_window_attributes(
+            consume_error(self.connection.xcb().change_window_attributes(
                 self.window_id,
                 &ChangeWindowAttributesAux::new().cursor(xid),
-            );
+            ));
+
             self.connection.flush();
         }
     }
@@ -589,7 +610,7 @@ impl crate::platform::OsWindow for WindowInner {
             return;
         }
 
-        let _ = self.connection.xcb().warp_pointer(
+        consume_error(self.connection.xcb().warp_pointer(
             x11rb::NONE,
             self.window_id,
             0,
@@ -598,46 +619,60 @@ impl crate::platform::OsWindow for WindowInner {
             0,
             point.x.round() as i16,
             point.y.round() as i16,
-        );
+        ));
+
         self.connection.flush();
     }
 
     fn set_size(&mut self, size: Size) {
-        if self.is_closed || replace(&mut self.last_window_size, Some(size)) == Some(size) {
+        if self.is_closed || self.last_window_size.replace(size) == Some(size) {
             return;
         }
 
-        let _ = self.connection.xcb().configure_window(
-            self.window_id,
-            &ConfigureWindowAux::new()
-                .width(size.width as u32)
-                .height(size.height as u32),
+        let mut size_hints = WmSizeHints::new();
+        let (w_i32, h_i32) = (
+            size.width.try_into().unwrap_or(i32::MAX),
+            size.height.try_into().unwrap_or(i32::MAX),
         );
 
-        let mut size_hints = WmSizeHints::new();
-        size_hints.base_size = Some((size.width as _, size.height as _));
-        size_hints.max_size = size_hints.base_size;
-        size_hints.min_size = size_hints.base_size;
-        let _ = size_hints.set(
+        size_hints.size = Some((WmSizeHintsSpecification::ProgramSpecified, w_i32, h_i32));
+        if !self.is_resizeable {
+            size_hints.max_size = Some((w_i32, h_i32));
+            size_hints.min_size = Some((w_i32, h_i32));
+        }
+
+        consume_error(size_hints.set(
             self.connection.xcb(),
             self.window_id,
             AtomEnum::WM_NORMAL_HINTS,
+        ));
+
+        consume_error(
+            self.connection.xcb().configure_window(
+                self.window_id,
+                &ConfigureWindowAux::new()
+                    .width(size.width)
+                    .height(size.height),
+            ),
         );
 
         self.connection.flush();
     }
 
     fn set_position(&mut self, point: Point) {
-        if self.is_closed || replace(&mut self.last_window_position, Some(point)) == Some(point) {
+        if self.is_closed || self.last_window_position.replace(point) == Some(point) {
             return;
         }
 
-        let _ = self.connection.xcb().configure_window(
-            self.window_id,
-            &ConfigureWindowAux::new()
-                .x(point.x as i32)
-                .y(point.y as i32),
+        consume_error(
+            self.connection.xcb().configure_window(
+                self.window_id,
+                &ConfigureWindowAux::new()
+                    .x(point.x as i32)
+                    .y(point.y as i32),
+            ),
         );
+
         self.connection.flush();
     }
 
@@ -647,17 +682,25 @@ impl crate::platform::OsWindow for WindowInner {
         }
 
         if visible {
-            let _ = self.connection.xcb().map_window(self.window_id);
+            let mut config = ConfigureWindowAux::new();
             if let Some(point) = self.last_window_position {
-                let _ = self.connection.xcb().configure_window(
-                    self.window_id,
-                    &ConfigureWindowAux::new()
-                        .x(point.x as i32)
-                        .y(point.y as i32),
-                );
+                config.x = Some(point.x as i32);
+                config.y = Some(point.y as i32);
             }
+
+            if let Some(size) = self.last_window_size {
+                config.width = Some(size.width);
+                config.height = Some(size.height);
+            }
+
+            consume_error(self.connection.xcb().map_window(self.window_id));
+            consume_error(
+                self.connection
+                    .xcb()
+                    .configure_window(self.window_id, &config),
+            );
         } else {
-            let _ = self.connection.xcb().unmap_window(self.window_id);
+            consume_error(self.connection.xcb().unmap_window(self.window_id));
         }
 
         self.connection.flush();

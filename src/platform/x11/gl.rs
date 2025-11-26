@@ -47,18 +47,14 @@ impl GlContext {
                     return Err(Error::OpenGlError("glXQueryVersion failed".into()));
                 }
 
-                let extensions = (lib_glx.glXGetClientString)(
-                    connection.raw_display(),
-                    glx::GLX_EXTENSIONS as i32,
-                );
+                let extensions =
+                    (lib_glx.glXGetClientString)(connection.raw_display(), glx::GLX_EXTENSIONS);
                 let extensions = if extensions.is_null() {
                     HashSet::new()
+                } else if let Ok(extensions) = CStr::from_ptr(extensions).to_str() {
+                    extensions.split(' ').collect::<HashSet<_>>()
                 } else {
-                    if let Ok(extensions) = CStr::from_ptr(extensions).to_str() {
-                        extensions.split(' ').collect::<HashSet<_>>()
-                    } else {
-                        HashSet::new()
-                    }
+                    HashSet::new()
                 };
 
                 check_error(&connection)?;

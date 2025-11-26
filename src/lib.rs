@@ -1,3 +1,5 @@
+//TODO: setup clippy
+
 mod data;
 mod opengl;
 mod platform;

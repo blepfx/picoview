@@ -13,8 +13,9 @@ fn main() {
         // you *have* to make both types explicit otherwise rust complains
         move |event: Event<'_>, mut window: Window<'_>| match event {
             Event::WindowFrame { .. } => {
+                let current = Instant::now();
                 let passed = |d| {
-                    start.elapsed() >= Duration::from_millis(d)
+                    (current - start) >= Duration::from_millis(d)
                         && (last - start) < Duration::from_millis(d)
                 };
 
@@ -42,7 +43,7 @@ fn main() {
                     window.close();
                 }
 
-                last = Instant::now();
+                last = current;
             }
 
             Event::MouseMove { relative, .. } => {

@@ -1,4 +1,4 @@
-use crate::{Error, MouseCursor};
+use crate::{Error, MouseCursor, platform::x11::util::consume_error};
 use std::{
     cell::RefCell,
     collections::{HashMap, hash_map::Entry},
@@ -75,7 +75,7 @@ impl Connection {
     pub fn get() -> Result<Arc<Self>, Error> {
         static INSTANCE: Mutex<Weak<Connection>> = Mutex::new(Weak::new());
 
-        let mut lock = INSTANCE.lock().unwrap();
+        let mut lock = INSTANCE.lock().expect("poisoned");
         if let Some(conn) = lock.upgrade() {
             return Ok(conn);
         }
@@ -114,7 +114,7 @@ impl Connection {
     }
 
     pub fn flush(&self) -> bool {
-        self.connection.flush().is_ok()
+        consume_error(self.connection.flush())
     }
 
     pub fn default_screen_index(&self) -> c_int {
@@ -142,7 +142,7 @@ impl Connection {
     }
 
     pub fn load_cursor(&self, cursor: MouseCursor) -> u32 {
-        self.cursor_cache.lock().unwrap().get(
+        self.cursor_cache.lock().expect("poisoned").get(
             &self.connection,
             self.screen as usize,
             &self.cursor_handle,
@@ -328,7 +328,7 @@ fn run_event_loop(
                 Err(e) => panic!("x11 event loop error: {:?}", e),
             };
 
-            while let Some((window, handler)) = handler_receiver.try_recv().ok() {
+            while let Ok((window, handler)) = handler_receiver.try_recv() {
                 match handler {
                     Some(handler) => event_handlers.insert(window, handler),
                     None => event_handlers.remove(&window),
