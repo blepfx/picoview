@@ -17,19 +17,19 @@ macro_rules! cstr {
 pub(crate) use cstr;
 
 pub fn open_url(path: &str) -> bool {
-    if let Ok(()) = spawn_detached(Command::new("xdg-open").arg(&path)) {
+    if spawn_detached(Command::new("xdg-open").arg(path)).is_ok() {
         return true;
     }
 
-    if let Ok(()) = spawn_detached(Command::new("gio").args(&["open", &path])) {
+    if spawn_detached(Command::new("gio").args(["open", path])).is_ok() {
         return true;
     }
 
-    if let Ok(()) = spawn_detached(Command::new("gnome-open").arg(&path)) {
+    if spawn_detached(Command::new("gnome-open").arg(path)).is_ok() {
         return true;
     }
 
-    if let Ok(()) = spawn_detached(Command::new("kde-open").arg(&path)) {
+    if spawn_detached(Command::new("kde-open").arg(path)).is_ok() {
         return true;
     }
 

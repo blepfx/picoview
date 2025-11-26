@@ -347,13 +347,12 @@ impl WindowImpl {
                     height: e.height as u32,
                 };
 
-                if !is_synthetic
-                    && replace(&mut self.inner.last_window_position, Some(origin)) != Some(origin)
+                if !is_synthetic && self.inner.last_window_position.replace(origin) != Some(origin)
                 {
                     self.send_event(Event::WindowMove { origin });
                 }
 
-                if replace(&mut self.inner.last_window_size, Some(size)) != Some(size) {
+                if self.inner.last_window_size.replace(size) != Some(size) {
                     self.send_event(Event::WindowResize { size });
                 }
             }

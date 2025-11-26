@@ -25,6 +25,7 @@ pub struct WindowBuilder {
     pub position: Option<Point>,
     pub opengl: Option<GlConfig>,
 
+    #[allow(clippy::type_complexity)]
     pub factory: Box<dyn (FnOnce(Window) -> Box<dyn WindowHandler>) + Send>,
 }
 

@@ -35,7 +35,7 @@ fn main() {
                         }
                     })
                     .open_parented(&window)
-                    .unwrap();
+                    .expect("failed to open a child window");
                 }
 
                 if passed(15000) {
@@ -64,7 +64,7 @@ fn main() {
     .with_size((200, 200))
     .with_position((1000, 100))
     .open_blocking()
-    .unwrap();
+    .expect("failed to open a window");
 
     println!("Exiting loop");
 }

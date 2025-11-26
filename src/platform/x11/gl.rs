@@ -218,11 +218,11 @@ impl GlContext {
                     (lib_glx.glXGetProcAddress)(cstr!("glXSwapIntervalEXT").as_ptr() as *const _)
                         .map(|addr| std::mem::transmute::<_, GlXSwapIntervalEXT>(addr));
 
-                if let Some(glXSwapIntervalEXT) = glXSwapIntervalEXT {
-                    if (lib_glx.glXMakeCurrent)(connection.raw_display(), window, context) != 0 {
-                        glXSwapIntervalEXT(connection.raw_display(), window, 0);
-                        (lib_glx.glXMakeCurrent)(connection.raw_display(), 0, null_mut());
-                    }
+                if let Some(glXSwapIntervalEXT) = glXSwapIntervalEXT
+                    && (lib_glx.glXMakeCurrent)(connection.raw_display(), window, context) != 0
+                {
+                    glXSwapIntervalEXT(connection.raw_display(), window, 0);
+                    (lib_glx.glXMakeCurrent)(connection.raw_display(), 0, null_mut());
                 }
             }
 

@@ -45,5 +45,5 @@ fn main() {
     .with_resizable((0, 0), (1000, 1000))
     .with_transparency(false)
     .open_blocking()
-    .unwrap();
+    .expect("failed to open a window");
 }

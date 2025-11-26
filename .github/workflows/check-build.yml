@@ -32,7 +32,7 @@ jobs:
       run: cargo test --workspace --all-targets --all-features --verbose
     - name: Check Docs
       run: cargo doc --examples --all-features --no-deps
-    # - name: Clippy
+    # - name: Clippy (TODO)
     #   run: cargo clippy --workspace --all-targets --all-features -- -D warnings
     - name: Check Formatting
       run: cargo fmt --all -- --check
