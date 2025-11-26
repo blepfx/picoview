@@ -31,24 +31,23 @@
 | Alpha transparency                                    | :x:      | :x:      | :x:      | Low      |
 | Set position                                          | :ok:[^5] | :x:      | :ok:     | Medium   |
 | Set size                                              | :ok:     | :x:      | :ok:     | High     |
-| User resizable[^6]                                    | :x:      | :x:      | :x:      | High     |
+| User resizable                                        | :x:      | :x:      | :ok:     | High     |
 | Set title                                             | :ok:     | :x:      | :ok:     | Medium   |
 | Set visibility                                        | :ok:     | :x:      | :ok:     | Medium   |
 | Close window                                          | :ok:     | :x:      | :ok:     | High     |
-| Grab keyboard[^7]                                     | :ok:     | :x:      | :ok:     | High     |
+| Capture keyboard events[^6]                           | :ok:     | :ok:     | :ok:     | High     |
 | Open browser/explorer                                 | :ok:     | :ok:     | :ok:     | Medium   |
 | Cursor icons                                          | :ok:     | :ok:     | :ok:     | Medium   |
-| Cursor warping                                        | :ok:     | :ok:     | :ok:[^8] | Medium   |
-| Cursor hit passthrough[^9]                            | :x:      | :x:      | :x:      | Low      |
-| Drag & Drop accept[^10]                               | :x:      | :x:      | :x:      | Low      |
+| Cursor warping                                        | :ok:     | :ok:     | :ok:[^7] | Medium   |
+| Cursor hit passthrough[^8]                            | :x:      | :x:      | :x:      | Low      |
+| Drag & Drop accept[^9]                                | :x:      | :x:      | :x:      | Low      |
 
 [^1]: Only a single global scaling factor is supported (no per-monitor scaling)
 [^2]: Currently only DWM waiting is supported, ideally we would have to do per-monitor DXGI wait.
 [^3]: Currently only main monitor sync is supported
 [^4]: Currently broken on XWayland, so it fallbacks to a fixed 60hz timer (use XRandR to get screen refresh rate?)
 [^5]: Initial (`None`) position is broken (should be centered), children position is broken (should be parent-relative).
-[^6]: No API for that yet
-[^7]: Some DAWS tend to consume key events meant for plugins, keyboard hooking/grabbing is meant to avoid that when needed
-[^8]: Broken on XWayland, seems to be a Wayland limitation?
+[^6]: Some DAWS tend to consume key events meant for plugins, keyboard capturing is meant to avoid that when needed
+[^7]: Broken on XWayland, seems to be a Wayland limitation?
+[^8]: No API for that yet
 [^9]: No API for that yet
-[^10]: No API for that yet
