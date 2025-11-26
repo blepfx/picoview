@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![allow(clippy::identity_op)]
 #![deny(clippy::unwrap_used)]
+#![warn(missing_debug_implementations)]
 // #![warn(missing_docs)]
 
 mod data;
