@@ -11,7 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use x11rb::connection::Connection as XConnection;
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
 use x11rb::protocol::xproto::KeyButMask;
@@ -205,7 +205,7 @@ impl WindowImpl {
                     .refresh_rate_for_window(window_id)
                     .map_err(|e| Error::PlatformError(e.to_string()))?
                     .unwrap_or(60.0);
-                Duration::from_secs_f32(1000.0 / rate)
+                Duration::from_secs_f32(1.0 / rate)
             };
 
             connection
@@ -251,12 +251,21 @@ impl WindowImpl {
     }
 
     fn run_event_loop(self) -> Result<(), Error> {
+        let mut next_frame = Instant::now();
+
         while !self.is_closed.get() {
-            match self
-                .connection
-                .poll_event_timeout(Some(self.refresh_interval.get()))
-            {
-                Ok(None) => self.handle_frame(),
+            let curr_frame = Instant::now();
+            let wait_time = match next_frame.checked_duration_since(curr_frame) {
+                Some(wait_time) => wait_time + Duration::from_millis(1),
+                None => {
+                    next_frame = (next_frame + self.refresh_interval.get()).max(curr_frame);
+                    self.handle_frame();
+                    Duration::ZERO
+                }
+            };
+
+            match self.connection.poll_event_timeout(Some(wait_time)) {
+                Ok(None) => {}
                 Ok(Some(event)) => self.handle_event(&event),
                 Err(e) => return Err(Error::PlatformError(e.to_string())),
             }

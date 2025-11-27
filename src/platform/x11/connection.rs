@@ -3,7 +3,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     ffi::{CStr, c_int, c_void},
-    os::fd::{AsFd, AsRawFd},
+    os::fd::AsRawFd,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -202,17 +202,15 @@ impl Connection {
             return Ok(Some(event));
         }
 
-        let mut fd = libc::pollfd {
-            fd: self.connection.as_fd().as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-
         let result = unsafe {
             libc::poll(
-                &mut fd,
+                &mut libc::pollfd {
+                    fd: self.connection.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
                 1 as _,
-                timeout.map(|x| x.subsec_millis() as i32).unwrap_or(-1) as _,
+                timeout.map(|x| x.as_millis() as i32).unwrap_or(-1) as _,
             )
         };
 
@@ -220,10 +218,10 @@ impl Connection {
             return Err(ConnectionError::IoError(std::io::Error::last_os_error()));
         }
 
-        if fd.revents & libc::POLLIN != 0 {
-            self.connection.poll_for_event()
-        } else {
+        if result == 0 {
             Ok(None)
+        } else {
+            self.connection.poll_for_event()
         }
     }
 }
