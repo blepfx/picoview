@@ -7,7 +7,7 @@ use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
     WindowHandler, rwh_06,
 };
-use std::mem::replace;
+use std::cell::{Cell, RefCell};
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -32,26 +32,22 @@ use x11rb::{
 
 unsafe impl Send for WindowImpl {}
 
-struct WindowInner {
+pub struct WindowImpl {
     window_id: u32,
     connection: Arc<Connection>,
 
-    is_closed: bool,
-    is_destroyed: bool,
+    is_closed: Cell<bool>,
+    is_destroyed: Cell<bool>,
     is_resizeable: bool,
     on_closed: SyncSender<()>,
 
-    last_modifiers: Modifiers,
-    last_cursor: MouseCursor,
-    last_window_position: Option<Point>,
-    last_window_size: Option<Size>,
-    last_window_visible: bool,
-    last_window_title: String,
-}
+    last_modifiers: Cell<Modifiers>,
+    last_cursor: Cell<MouseCursor>,
+    last_window_position: Cell<Option<Point>>,
+    last_window_size: Cell<Option<Size>>,
+    last_window_visible: Cell<bool>,
 
-pub struct WindowImpl {
-    inner: WindowInner,
-    handler: Box<dyn WindowHandler>,
+    handler: RefCell<Option<Box<dyn WindowHandler>>>,
     gl_context: Option<GlContext>,
 }
 
@@ -225,28 +221,29 @@ impl WindowImpl {
                 .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             let (on_closed, when_closed) = sync_channel(0);
-            let mut inner = WindowInner {
+
+            let window = Self {
                 window_id,
                 connection: connection.clone(),
 
                 on_closed,
-                is_closed: false,
-                is_destroyed: false,
+                is_closed: Cell::new(false),
+                is_destroyed: Cell::new(false),
                 is_resizeable: options.resizable.is_some(),
 
-                last_modifiers: Modifiers::empty(),
-                last_cursor: MouseCursor::Default,
-                last_window_position: None,
-                last_window_size: None,
-                last_window_visible: options.visible,
-                last_window_title: options.title,
+                last_modifiers: Cell::new(Modifiers::empty()),
+                last_cursor: Cell::new(MouseCursor::Default),
+                last_window_position: Cell::new(None),
+                last_window_size: Cell::new(None),
+                last_window_visible: Cell::new(options.visible),
+
+                handler: RefCell::new(None),
+                gl_context,
             };
 
-            let mut window = Self {
-                handler: (options.factory)(Window(&mut inner)),
-                gl_context,
-                inner,
-            };
+            window
+                .handler
+                .replace(Some((options.factory)(Window(&window))));
 
             window.send_event(Event::WindowScale {
                 scale: connection.os_scale_dpi() as f32 / 96.0,
@@ -272,32 +269,29 @@ impl WindowImpl {
         }
     }
 
-    fn handle_frame(&mut self) {
-        if self.inner.is_closed {
+    fn handle_frame(&self) {
+        if self.is_closed.get() {
             return;
         }
 
-        self.handler.on_event(
-            Event::WindowFrame {
-                gl: self.gl_context.as_ref().map(|x| x as &dyn crate::GlContext),
-            },
-            Window(&mut self.inner),
-        );
+        self.send_event(Event::WindowFrame {
+            gl: self.gl_context.as_ref().map(|x| x as &dyn crate::GlContext),
+        });
 
         self.handle_destroy();
     }
 
-    fn handle_event(&mut self, event: &XEvent) {
-        if self.inner.is_closed {
+    fn handle_event(&self, event: &XEvent) {
+        if self.is_closed.get() {
             return;
         }
 
         match event {
             XEvent::ClientMessage(event) => {
                 if event.format == 32
-                    && event.data.as_data32()[0] == self.inner.connection.atoms().WM_DELETE_WINDOW
+                    && event.data.as_data32()[0] == self.connection.atoms().WM_DELETE_WINDOW
                 {
-                    self.inner.is_closed = true;
+                    self.is_closed.set(true);
                 }
             }
 
@@ -313,12 +307,12 @@ impl WindowImpl {
                     height: e.height as u32,
                 };
 
-                if !is_synthetic && self.inner.last_window_position.replace(origin) != Some(origin)
+                if !is_synthetic && self.last_window_position.replace(Some(origin)) != Some(origin)
                 {
                     self.send_event(Event::WindowMove { origin });
                 }
 
-                if self.inner.last_window_size.replace(size) != Some(size) {
+                if self.last_window_size.replace(Some(size)) != Some(size) {
                     self.send_event(Event::WindowResize { size });
                 }
             }
@@ -447,16 +441,15 @@ impl WindowImpl {
                 self.send_event(Event::WindowFocus { focus: false });
             }
 
-            XEvent::PresentCompleteNotify(e) if !self.inner.connection.is_manual_tick() => {
+            XEvent::PresentCompleteNotify(e) if !self.connection.is_manual_tick() => {
                 if e.kind == CompleteKind::NOTIFY_MSC {
                     self.handle_frame();
-                    self.inner
-                        .connection
+                    self.connection
                         .xcb()
-                        .present_notify_msc(self.inner.window_id, 0, 0, 1, 0)
+                        .present_notify_msc(self.window_id, 0, 0, 1, 0)
                         .ok();
 
-                    check_error(self.inner.connection.flush());
+                    check_error(self.connection.flush());
                 }
             }
 
@@ -470,9 +463,9 @@ impl WindowImpl {
             }
 
             XEvent::DestroyNotify(_) => {
-                self.inner.is_closed = true;
-                self.inner.is_destroyed = true;
-                self.inner.on_closed.try_send(()).ok();
+                self.is_closed.set(true);
+                self.is_destroyed.set(true);
+                self.on_closed.try_send(()).ok();
             }
 
             _ => {}
@@ -481,45 +474,35 @@ impl WindowImpl {
         self.handle_destroy();
     }
 
-    fn handle_modifiers(&mut self, modifiers: Modifiers) {
-        if modifiers != self.inner.last_modifiers {
-            self.inner.last_modifiers = modifiers;
+    fn handle_modifiers(&self, modifiers: Modifiers) {
+        if self.last_modifiers.replace(modifiers) != modifiers {
             self.send_event(Event::KeyModifiers { modifiers });
         }
     }
 
-    fn handle_destroy(&mut self) {
-        if !self.inner.is_closed {
-            return;
-        }
-
-        if replace(&mut self.inner.is_destroyed, true) {
+    fn handle_destroy(&self) {
+        if !self.is_closed.get() || self.is_destroyed.replace(true) {
             return;
         }
 
         // drop the handler here, so it could do clean up when the window is still alive
-        self.handler = Box::new(|_: Event<'_>, _: Window<'_>| {});
-        self.inner
-            .connection
-            .remove_window_event_loop(self.inner.window_id);
+        self.handler.take();
+        self.connection.remove_window_event_loop(self.window_id);
 
-        check_error(
-            self.inner
-                .connection
-                .xcb()
-                .destroy_window(self.inner.window_id),
-        );
-        check_error(self.inner.connection.flush());
+        check_error(self.connection.xcb().destroy_window(self.window_id));
+        check_error(self.connection.flush());
     }
 
-    fn send_event(&mut self, e: Event) {
-        self.handler.on_event(e, Window(&mut self.inner))
+    fn send_event(&self, e: Event) {
+        if let Some(handler) = &mut *self.handler.borrow_mut() {
+            handler.on_event(e, Window(self))
+        }
     }
 }
 
-impl crate::platform::OsWindow for WindowInner {
-    fn close(&mut self) {
-        self.is_closed = true;
+impl crate::platform::OsWindow for WindowImpl {
+    fn close(&self) {
+        self.is_closed.set(true);
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -537,12 +520,10 @@ impl crate::platform::OsWindow for WindowInner {
         ))
     }
 
-    fn set_title(&mut self, title: &str) {
-        if self.is_closed || title == self.last_window_title {
+    fn set_title(&self, title: &str) {
+        if self.is_closed.get() {
             return;
         }
-
-        self.last_window_title = title.to_owned();
 
         check_error(self.connection.xcb().change_property8(
             PropMode::REPLACE,
@@ -555,8 +536,8 @@ impl crate::platform::OsWindow for WindowInner {
         check_error(self.connection.flush());
     }
 
-    fn set_cursor_icon(&mut self, cursor: MouseCursor) {
-        if self.is_closed || replace(&mut self.last_cursor, cursor) == cursor {
+    fn set_cursor_icon(&self, cursor: MouseCursor) {
+        if self.is_closed.get() || self.last_cursor.replace(cursor) == cursor {
             return;
         }
 
@@ -571,8 +552,8 @@ impl crate::platform::OsWindow for WindowInner {
         }
     }
 
-    fn set_cursor_position(&mut self, point: Point) {
-        if self.is_closed {
+    fn set_cursor_position(&self, point: Point) {
+        if self.is_closed.get() {
             return;
         }
 
@@ -590,8 +571,8 @@ impl crate::platform::OsWindow for WindowInner {
         check_error(self.connection.flush());
     }
 
-    fn set_size(&mut self, size: Size) {
-        if self.is_closed || self.last_window_size.replace(size) == Some(size) {
+    fn set_size(&self, size: Size) {
+        if self.is_closed.get() || self.last_window_size.replace(Some(size)) == Some(size) {
             return;
         }
 
@@ -625,8 +606,8 @@ impl crate::platform::OsWindow for WindowInner {
         check_error(self.connection.flush());
     }
 
-    fn set_position(&mut self, point: Point) {
-        if self.is_closed || self.last_window_position.replace(point) == Some(point) {
+    fn set_position(&self, point: Point) {
+        if self.is_closed.get() || self.last_window_position.replace(Some(point)) == Some(point) {
             return;
         }
 
@@ -642,19 +623,19 @@ impl crate::platform::OsWindow for WindowInner {
         check_error(self.connection.flush());
     }
 
-    fn set_visible(&mut self, visible: bool) {
-        if self.is_closed || replace(&mut self.last_window_visible, visible) == visible {
+    fn set_visible(&self, visible: bool) {
+        if self.is_closed.get() || self.last_window_visible.replace(visible) == visible {
             return;
         }
 
         if visible {
             let mut config = ConfigureWindowAux::new();
-            if let Some(point) = self.last_window_position {
+            if let Some(point) = self.last_window_position.get() {
                 config.x = Some(point.x as i32);
                 config.y = Some(point.y as i32);
             }
 
-            if let Some(size) = self.last_window_size {
+            if let Some(size) = self.last_window_size.get() {
                 config.width = Some(size.width);
                 config.height = Some(size.height);
             }
@@ -672,15 +653,15 @@ impl crate::platform::OsWindow for WindowInner {
         check_error(self.connection.flush());
     }
 
-    fn open_url(&mut self, url: &str) -> bool {
+    fn open_url(&self, url: &str) -> bool {
         util::open_url(url)
     }
 
-    fn get_clipboard_text(&mut self) -> Option<String> {
+    fn get_clipboard_text(&self) -> Option<String> {
         None
     }
 
-    fn set_clipboard_text(&mut self, _text: &str) -> bool {
+    fn set_clipboard_text(&self, _text: &str) -> bool {
         false
     }
 }
