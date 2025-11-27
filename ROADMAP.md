@@ -17,7 +17,7 @@
 |  - `KeyDown`                                          | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyModifiers`                                     | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowFocus`                                      | :ok:     | :x:      | :ok:     | Low      |
-|  - `WindowScale`                                      | :ok:     | :x:      | :ok:[^1] | Medium   |
+|  - `WindowScale`                                      | :ok:     | :ok:     | :ok:[^1] | Medium   |
 |  - `WindowMove`                                       | :ok:     | :x:      | :ok:     | Low      |
 |  - `WindowResize`                                     | :ok:     | :x:      | :ok:     | High     |
 |  - `WindowFrame`                                      | :ok:[^2] | :ok:[^3] | :ok:[^4] | High     |
@@ -31,8 +31,8 @@
 | Set position                                          | :ok:[^5] | :x:      | :ok:     | Medium   |
 | Set size                                              | :ok:     | :x:      | :ok:     | High     |
 | User resizable                                        | :ok:     | :x:      | :ok:     | High     |
-| Set title                                             | :ok:     | :x:      | :ok:     | Medium   |
-| Set visibility                                        | :ok:     | :x:      | :ok:     | Medium   |
+| Set title                                             | :ok:     | :ok:     | :ok:     | Medium   |
+| Set visibility                                        | :ok:     | :ok:     | :ok:     | Medium   |
 | Close window                                          | :ok:     | :x:      | :ok:     | High     |
 | Capture keyboard events[^6]                           | :ok:     | :ok:     | :ok:     | High     |
 | Open browser/explorer                                 | :ok:     | :ok:     | :ok:     | Medium   |

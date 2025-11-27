@@ -215,7 +215,7 @@ impl WindowImpl {
             };
 
             let event_loop = Box::new(Self {
-                event_handler: RefCell::new((options.factory)(Window(&mut &inner))),
+                event_handler: RefCell::new((options.factory)(Window(&inner))),
                 event_queue: RefCell::new(VecDeque::new()),
                 gl_context,
                 inner,
@@ -238,10 +238,10 @@ impl WindowImpl {
 
     fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
-            handler.on_event(event, Window(&mut &self.inner));
+            handler.on_event(event, Window(&self.inner));
 
             for event in self.event_queue.borrow_mut().drain(..) {
-                handler.on_event(event, Window(&mut &self.inner));
+                handler.on_event(event, Window(&self.inner));
             }
         } else if cfg!(debug_assertions) {
             panic!("send_event reentrancy")
@@ -273,8 +273,8 @@ impl Drop for WindowImpl {
     }
 }
 
-impl crate::platform::OsWindow for &WindowInner {
-    fn close(&mut self) {
+impl crate::platform::OsWindow for WindowInner {
+    fn close(&self) {
         unsafe {
             PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
         }
@@ -294,19 +294,19 @@ impl crate::platform::OsWindow for &WindowInner {
         rwh_06::RawDisplayHandle::Windows(rwh_06::WindowsDisplayHandle::new())
     }
 
-    fn set_title(&mut self, title: &str) {
+    fn set_title(&self, title: &str) {
         unsafe {
             let window_title = to_widestring(title);
             SetWindowTextW(self.window_hwnd, window_title.as_ptr() as _);
         }
     }
 
-    fn set_cursor_icon(&mut self, cursor: MouseCursor) {
+    fn set_cursor_icon(&self, cursor: MouseCursor) {
         self.state_current_cursor
             .set(self.shared.load_cursor(cursor));
     }
 
-    fn set_cursor_position(&mut self, point: Point) {
+    fn set_cursor_position(&self, point: Point) {
         unsafe {
             let mut point = POINT {
                 x: point.x as i32,
@@ -319,7 +319,7 @@ impl crate::platform::OsWindow for &WindowInner {
         }
     }
 
-    fn set_size(&mut self, size: Size) {
+    fn set_size(&self, size: Size) {
         unsafe {
             let dwstyle = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
             let size = window_size_from_client_size(size, dwstyle);
@@ -336,7 +336,7 @@ impl crate::platform::OsWindow for &WindowInner {
         }
     }
 
-    fn set_position(&mut self, point: Point) {
+    fn set_position(&self, point: Point) {
         unsafe {
             SetWindowPos(
                 self.window_hwnd,
@@ -350,7 +350,7 @@ impl crate::platform::OsWindow for &WindowInner {
         }
     }
 
-    fn set_visible(&mut self, visible: bool) {
+    fn set_visible(&self, visible: bool) {
         unsafe {
             SetWindowPos(
                 self.window_hwnd,
@@ -372,7 +372,7 @@ impl crate::platform::OsWindow for &WindowInner {
         }
     }
 
-    fn open_url(&mut self, url: &str) -> bool {
+    fn open_url(&self, url: &str) -> bool {
         let path = to_widestring(url);
         let verb = to_widestring("open");
 
@@ -389,7 +389,7 @@ impl crate::platform::OsWindow for &WindowInner {
         }
     }
 
-    fn get_clipboard_text(&mut self) -> Option<String> {
+    fn get_clipboard_text(&self) -> Option<String> {
         unsafe {
             if OpenClipboard(self.window_hwnd) != 0 {
                 let data = GetClipboardData(CF_UNICODETEXT as _);
@@ -415,7 +415,7 @@ impl crate::platform::OsWindow for &WindowInner {
         }
     }
 
-    fn set_clipboard_text(&mut self, text: &str) -> bool {
+    fn set_clipboard_text(&self, text: &str) -> bool {
         unsafe {
             if OpenClipboard(self.window_hwnd) != 0 {
                 EmptyClipboard();

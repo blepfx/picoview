@@ -7,7 +7,7 @@ use crate::{
     rwh_06,
 };
 use objc2::rc::{Allocated, Retained, Weak, autoreleasepool};
-use objc2::runtime::{ProtocolObject, Sel};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2::{
     ClassType, Encoding, Message, RefEncode,
@@ -18,8 +18,8 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApp, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor, NSDragOperation,
-    NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
+    NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
+    NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
@@ -39,16 +39,14 @@ pub struct OsWindowView {
 }
 
 struct OsWindowViewInner {
-    _class: OsWindowClass,
     _display_link: DisplayLink,
+
+    app: RefCell<Option<Retained<NSApplication>>>,
 
     event_queue: RefCell<VecDeque<Event<'static>>>,
     event_handler: RefCell<Option<Box<dyn WindowHandler>>>,
     current_cursor: Cell<MouseCursor>,
 
-    #[allow(unused)] //TODO: stuff!
-    is_embedded: bool,
-    #[allow(unused)] //TODO: stuff!
     is_closed: Cell<bool>,
 }
 
@@ -57,7 +55,6 @@ unsafe impl RefEncode for OsWindowView {
 }
 
 unsafe impl Message for OsWindowView {}
-pub struct OsWindowClass(&'static AnyClass);
 
 impl OsWindowView {
     pub unsafe fn open_blocking(options: WindowBuilder) -> Result<(), Error> {
@@ -69,9 +66,11 @@ impl OsWindowView {
             app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
             let window = Self::create_window(&options, main_thread)?;
-            let view = Self::create_view(options, false)?;
+            let view = Self::create_view(options, Some(app.clone()))?;
 
             window.setContentView(Some(&view));
+            //window.setDelegate(Some(&view));
+
             app.run();
             Ok(())
         })
@@ -87,7 +86,7 @@ impl OsWindowView {
                 _ => return Err(Error::InvalidParent),
             };
 
-            let view = Self::create_view(options, true)?;
+            let view = Self::create_view(options, None)?;
             (*parent_view).addSubview(&view);
             Ok(())
         })
@@ -106,9 +105,9 @@ impl OsWindowView {
                 NSSize::new(options.size.width as f64, options.size.height as f64),
             );
 
-            let ns_window = NSWindow::alloc(main_thread);
-            let ns_window = NSWindow::initWithContentRect_styleMask_backing_defer(
-                ns_window,
+            let window = NSWindow::alloc(main_thread);
+            let window = NSWindow::initWithContentRect_styleMask_backing_defer(
+                window,
                 rect,
                 NSWindowStyleMask::Titled
                     | NSWindowStyleMask::Closable
@@ -118,24 +117,35 @@ impl OsWindowView {
             );
 
             if options.position.is_none() {
-                ns_window.center();
+                window.center();
             }
 
             if options.visible {
-                ns_window.makeKeyAndOrderFront(None);
+                window.makeKeyAndOrderFront(None);
             }
 
-            ns_window.setTitle(&NSString::from_str(&options.title));
+            window.setTitle(&NSString::from_str(&options.title));
 
-            Ok(ns_window)
+            if let Some(range) = options.resizable.clone() {
+                window.setContentMinSize(NSSize::new(
+                    range.start.width as f64,
+                    range.start.height as f64,
+                ));
+                window.setContentMaxSize(NSSize::new(
+                    range.end.width as f64,
+                    range.end.height as f64,
+                ));
+            }
+
+            Ok(window)
         }
     }
 
     unsafe fn create_view(
         options: WindowBuilder,
-        is_embedded: bool,
+        blocking: Option<Retained<NSApplication>>,
     ) -> Result<Retained<Self>, Error> {
-        let class = OsWindowClass::register_class()?;
+        let class = Self::register_class()?;
 
         let rect = NSRect::new(
             NSPoint {
@@ -149,7 +159,7 @@ impl OsWindowView {
         );
 
         let view = unsafe {
-            let view: Allocated<OsWindowView> = msg_send![class.0, alloc];
+            let view: Allocated<OsWindowView> = msg_send![class, alloc];
             let view: Retained<OsWindowView> = msg_send![view, initWithFrame: rect];
 
             let tracking_area = NSTrackingArea::initWithRect_options_owner_userInfo(
@@ -166,7 +176,6 @@ impl OsWindowView {
             let dragged_types = NSArray::arrayWithObject(NSPasteboardTypeFileURL);
             view.addTrackingArea(&tracking_area);
             view.registerForDraggedTypes(&dragged_types);
-
             view
         };
 
@@ -183,16 +192,15 @@ impl OsWindowView {
         };
 
         view.set_context(Box::new(OsWindowViewInner {
-            _class: class,
             _display_link: display,
+            app: RefCell::new(blocking),
             event_queue: RefCell::new(VecDeque::default()),
             event_handler: RefCell::new(None),
             current_cursor: Cell::new(MouseCursor::Default),
             is_closed: Cell::new(false),
-            is_embedded,
         }));
 
-        let handler = (options.factory)(Window(&mut &*view));
+        let handler = (options.factory)(Window(&*view));
         view.inner().event_handler.replace(Some(handler));
         Ok(view)
     }
@@ -200,232 +208,29 @@ impl OsWindowView {
     fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
             if let Some(handler) = handler.as_mut() {
-                handler.on_event(event, Window(&mut &*self));
+                handler.on_event(event, Window(self));
                 let mut queue = self.inner().event_queue.borrow_mut();
                 for event in queue.drain(..) {
-                    handler.on_event(event, Window(&mut &*self));
+                    handler.on_event(event, Window(self));
                 }
             }
-        } else {
-            eprintln!("WARNING: tried to defer nondeferrable event: {event:?}");
+        } else if cfg!(debug_assertions) {
+            panic!("send_event reentrancy")
         }
     }
 
     fn send_event_defer(&self, event: Event<'static>) {
         if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
             if let Some(handler) = handler.as_mut() {
-                handler.on_event(event, Window(&mut &*self));
+                handler.on_event(event, Window(self));
 
                 for event in self.inner().event_queue.borrow_mut().drain(..) {
-                    handler.on_event(event, Window(&mut &*self));
+                    handler.on_event(event, Window(self));
                 }
             }
         } else {
             self.inner().event_queue.borrow_mut().push_back(event);
         }
-    }
-
-    // NSView
-    unsafe extern "C-unwind" fn init_with_frame(&self, _cmd: Sel, rect: NSRect) -> Option<&Self> {
-        unsafe { msg_send![super(self, NSView::class()), initWithFrame: rect] }
-    }
-
-    unsafe extern "C-unwind" fn dealloc(&self, _cmd: Sel) {
-        unsafe {
-            let ivar = self
-                .class()
-                .instance_variable(c"_context")
-                .unwrap_unchecked();
-            let context = *ivar.load::<*mut c_void>(self) as *mut Box<RefCell<OsWindowViewInner>>;
-            if !context.is_null() {
-                drop(Box::from_raw(context));
-            }
-
-            let _: () = msg_send![super(self, NSView::class()), dealloc];
-        }
-    }
-
-    unsafe extern "C-unwind" fn accepts_first_mouse(
-        &self,
-        _cmd: Sel,
-        _event: *const NSEvent,
-    ) -> Bool {
-        Bool::YES
-    }
-
-    unsafe extern "C-unwind" fn accepts_first_responder(&self, _cmd: Sel) -> Bool {
-        Bool::YES
-    }
-
-    unsafe extern "C-unwind" fn is_flipped(&self, _cmd: Sel) -> Bool {
-        Bool::YES
-    }
-
-    unsafe extern "C-unwind" fn key_down(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            if event.is_null() {
-                return;
-            }
-
-            let mut capture = false;
-            if let Some(key) = keycode2key((*event).keyCode()) {
-                self.send_event(Event::KeyDown {
-                    key,
-                    capture: &mut capture,
-                });
-            }
-
-            if !capture {
-                msg_send![super(self, NSView::class()), keyDown: event]
-            }
-        }
-    }
-
-    unsafe extern "C-unwind" fn key_up(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            if event.is_null() {
-                return;
-            }
-
-            let mut capture = false;
-            if let Some(key) = keycode2key((*event).keyCode()) {
-                self.send_event(Event::KeyUp {
-                    key,
-                    capture: &mut capture,
-                });
-            }
-
-            if !capture {
-                msg_send![super(self, NSView::class()), keyUp: event]
-            }
-        }
-    }
-
-    unsafe extern "C-unwind" fn flags_changed(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            self.send_event_defer(Event::KeyModifiers {
-                modifiers: flags2mods((*event).modifierFlags()),
-            });
-        }
-    }
-
-    unsafe extern "C-unwind" fn mouse_moved(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            let absolute = NSEvent::mouseLocation();
-            let relative = (*event).locationInWindow();
-            let relative = self.convertPoint_fromView(relative, None);
-
-            self.send_event_defer(Event::MouseMove {
-                relative: Point {
-                    x: relative.x as f32,
-                    y: relative.y as f32,
-                },
-                absolute: Point {
-                    x: absolute.x as f32,
-                    y: absolute.y as f32,
-                },
-            });
-        }
-    }
-
-    unsafe extern "C-unwind" fn mouse_down(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            let button = match (*event).buttonNumber() {
-                0 => Some(MouseButton::Left),
-                1 => Some(MouseButton::Right),
-                2 => Some(MouseButton::Middle),
-                3 => Some(MouseButton::Back),
-                4 => Some(MouseButton::Forward),
-                _ => None,
-            };
-
-            if let Some(button) = button {
-                self.send_event_defer(Event::MouseDown { button });
-            }
-        }
-    }
-
-    unsafe extern "C-unwind" fn mouse_up(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            let button = match (*event).buttonNumber() {
-                0 => Some(MouseButton::Left),
-                1 => Some(MouseButton::Right),
-                2 => Some(MouseButton::Middle),
-                3 => Some(MouseButton::Back),
-                4 => Some(MouseButton::Forward),
-                _ => None,
-            };
-
-            if let Some(button) = button {
-                self.send_event_defer(Event::MouseUp { button });
-            }
-        }
-    }
-
-    unsafe extern "C-unwind" fn mouse_exited(&self, _cmd: Sel, _event: *const NSEvent) {
-        self.send_event_defer(Event::MouseLeave);
-    }
-
-    unsafe extern "C-unwind" fn scroll_wheel(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            if event.is_null() {
-                return;
-            }
-
-            let x = (*event).deltaX() as f32;
-            let y = (*event).deltaY() as f32;
-
-            self.send_event_defer(Event::MouseScroll { x, y });
-        }
-    }
-
-    // custom
-    unsafe extern "C-unwind" fn draw_frame(&self, _cmd: Sel) {
-        self.send_event(Event::WindowFrame { gl: None });
-    }
-
-    // NSDraggingDestination
-    unsafe extern "C-unwind" fn wants_periodic_dragging_updates(&self, _cmd: Sel) -> Bool {
-        Bool::NO
-    }
-
-    unsafe extern "C-unwind" fn dragging_entered(
-        &self,
-        _cmd: Sel,
-        _sender: &ProtocolObject<dyn NSDraggingInfo>,
-    ) -> NSDragOperation {
-        NSDragOperation::empty()
-    }
-
-    unsafe extern "C-unwind" fn dragging_updated(
-        &self,
-        _cmd: Sel,
-        _sender: &ProtocolObject<dyn NSDraggingInfo>,
-    ) -> NSDragOperation {
-        NSDragOperation::empty()
-    }
-
-    unsafe extern "C-unwind" fn dragging_exited(
-        &self,
-        _cmd: Sel,
-        _sender: &ProtocolObject<dyn NSDraggingInfo>,
-    ) {
-    }
-
-    unsafe extern "C-unwind" fn prepare_for_drag_operation(
-        &self,
-        _cmd: Sel,
-        _sender: &ProtocolObject<dyn NSDraggingInfo>,
-    ) -> Bool {
-        Bool::YES
-    }
-
-    unsafe extern "C-unwind" fn perform_drag_operation(
-        &self,
-        _cmd: Sel,
-        _sender: &ProtocolObject<dyn NSDraggingInfo>,
-    ) -> Bool {
-        Bool::NO
     }
 
     fn set_context(&self, context: Box<OsWindowViewInner>) {
@@ -448,22 +253,375 @@ impl OsWindowView {
             &*context
         }
     }
-}
 
-impl OsWindow for &OsWindowView {
-    fn close(&mut self) {
-        if let Some(window) = self.window() {
-            window.close();
+    // NSView
+    unsafe extern "C" fn init_with_frame(&self, _cmd: Sel, rect: NSRect) -> Option<&Self> {
+        unsafe { msg_send![super(self, NSView::class()), initWithFrame: rect] }
+    }
+
+    unsafe extern "C" fn dealloc(&self, _cmd: Sel) {
+        unsafe {
+            let ivar = self
+                .class()
+                .instance_variable(c"_context")
+                .unwrap_unchecked();
+
+            let context = *ivar.load::<*mut c_void>(self) as *mut Box<RefCell<OsWindowViewInner>>;
+            if !context.is_null() {
+                drop(Box::from_raw(context));
+            }
+
+            let _: () = msg_send![super(self, NSView::class()), dealloc];
+
+            let class: &'static AnyClass = msg_send![self, class];
+            objc_disposeClassPair(class as *const _ as *mut _);
         }
     }
 
-    fn set_title(&mut self, title: &str) {
-        if let Some(window) = self.window() {
+    unsafe extern "C" fn view_did_change_backing_properties(&self, _: Sel, _: Option<&AnyObject>) {
+        let scale = self.window().map(|x| x.backingScaleFactor()).unwrap_or(1.0);
+
+        self.send_event_defer(Event::WindowScale {
+            scale: scale as f32,
+        });
+
+        // TODO: fun logical -> physical scaling stuff here
+    }
+
+    unsafe extern "C" fn accepts_first_mouse(&self, _cmd: Sel, _event: *const NSEvent) -> Bool {
+        Bool::YES
+    }
+
+    unsafe extern "C" fn accepts_first_responder(&self, _cmd: Sel) -> Bool {
+        Bool::YES
+    }
+
+    unsafe extern "C" fn is_flipped(&self, _cmd: Sel) -> Bool {
+        Bool::YES
+    }
+
+    unsafe extern "C" fn key_down(&self, _cmd: Sel, event: *const NSEvent) {
+        unsafe {
+            let mut capture = false;
+            if let Some(key) = keycode2key((*event).keyCode()) {
+                self.send_event(Event::KeyDown {
+                    key,
+                    capture: &mut capture,
+                });
+            }
+
+            if !capture {
+                msg_send![super(self, NSView::class()), keyDown: event]
+            }
+        }
+    }
+
+    unsafe extern "C" fn key_up(&self, _cmd: Sel, event: *const NSEvent) {
+        unsafe {
+            let mut capture = false;
+            if let Some(key) = keycode2key((*event).keyCode()) {
+                self.send_event(Event::KeyUp {
+                    key,
+                    capture: &mut capture,
+                });
+            }
+
+            if !capture {
+                msg_send![super(self, NSView::class()), keyUp: event]
+            }
+        }
+    }
+
+    unsafe extern "C" fn flags_changed(&self, _cmd: Sel, event: *const NSEvent) {
+        unsafe {
+            self.send_event_defer(Event::KeyModifiers {
+                modifiers: flags2mods((*event).modifierFlags()),
+            });
+        }
+    }
+
+    unsafe extern "C" fn mouse_moved(&self, _cmd: Sel, event: *const NSEvent) {
+        unsafe {
+            let absolute = NSEvent::mouseLocation();
+            let relative = (*event).locationInWindow();
+            let relative = self.convertPoint_fromView(relative, None);
+
+            self.send_event_defer(Event::MouseMove {
+                relative: Point {
+                    x: relative.x as f32,
+                    y: relative.y as f32,
+                },
+                absolute: Point {
+                    x: absolute.x as f32,
+                    y: absolute.y as f32,
+                },
+            });
+        }
+    }
+
+    unsafe extern "C" fn mouse_down(&self, _cmd: Sel, event: *const NSEvent) {
+        unsafe {
+            let button = match (*event).buttonNumber() {
+                0 => Some(MouseButton::Left),
+                1 => Some(MouseButton::Right),
+                2 => Some(MouseButton::Middle),
+                3 => Some(MouseButton::Back),
+                4 => Some(MouseButton::Forward),
+                _ => None,
+            };
+
+            if let Some(button) = button {
+                self.send_event_defer(Event::MouseDown { button });
+            }
+        }
+    }
+
+    unsafe extern "C" fn mouse_up(&self, _cmd: Sel, event: *const NSEvent) {
+        unsafe {
+            let button = match (*event).buttonNumber() {
+                0 => Some(MouseButton::Left),
+                1 => Some(MouseButton::Right),
+                2 => Some(MouseButton::Middle),
+                3 => Some(MouseButton::Back),
+                4 => Some(MouseButton::Forward),
+                _ => None,
+            };
+
+            if let Some(button) = button {
+                self.send_event_defer(Event::MouseUp { button });
+            }
+        }
+    }
+
+    unsafe extern "C" fn mouse_exited(&self, _cmd: Sel, _event: *const NSEvent) {
+        self.send_event_defer(Event::MouseLeave);
+    }
+
+    unsafe extern "C" fn scroll_wheel(&self, _cmd: Sel, event: *const NSEvent) {
+        unsafe {
+            if event.is_null() {
+                return;
+            }
+
+            let x = (*event).deltaX() as f32;
+            let y = (*event).deltaY() as f32;
+
+            self.send_event_defer(Event::MouseScroll { x, y });
+        }
+    }
+
+    // custom
+    unsafe extern "C" fn draw_frame(&self, _cmd: Sel) {
+        self.send_event(Event::WindowFrame { gl: None });
+    }
+
+    // NSDraggingDestination
+    unsafe extern "C" fn wants_periodic_dragging_updates(&self, _cmd: Sel) -> Bool {
+        Bool::NO
+    }
+
+    unsafe extern "C" fn dragging_entered(
+        &self,
+        _cmd: Sel,
+        _sender: &ProtocolObject<dyn NSDraggingInfo>,
+    ) -> NSDragOperation {
+        NSDragOperation::empty()
+    }
+
+    unsafe extern "C" fn dragging_updated(
+        &self,
+        _cmd: Sel,
+        _sender: &ProtocolObject<dyn NSDraggingInfo>,
+    ) -> NSDragOperation {
+        NSDragOperation::empty()
+    }
+
+    unsafe extern "C" fn dragging_exited(
+        &self,
+        _cmd: Sel,
+        _sender: &ProtocolObject<dyn NSDraggingInfo>,
+    ) {
+    }
+
+    unsafe extern "C" fn prepare_for_drag_operation(
+        &self,
+        _cmd: Sel,
+        _sender: &ProtocolObject<dyn NSDraggingInfo>,
+    ) -> Bool {
+        Bool::YES
+    }
+
+    unsafe extern "C" fn perform_drag_operation(
+        &self,
+        _cmd: Sel,
+        _sender: &ProtocolObject<dyn NSDraggingInfo>,
+    ) -> Bool {
+        Bool::NO
+    }
+
+    fn register_class() -> Result<&'static AnyClass, Error> {
+        let class_name =
+            CString::new(format!("picoview-{}", random_id())).expect("unexpected nul terminator?");
+
+        let mut builder = match ClassBuilder::new(&class_name, NSView::class()) {
+            Some(builder) => builder,
+            None => return Err(Error::PlatformError("Failed to register class".to_string())),
+        };
+
+        builder.add_ivar::<*mut c_void>(c"_context");
+
+        unsafe {
+            // NSView
+            builder.add_method(
+                sel!(initWithFrame:),
+                Self::init_with_frame as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(dealloc),
+                Self::dealloc as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
+                sel!(viewDidChangeBackingProperties:),
+                Self::view_did_change_backing_properties as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(acceptsFirstMouse:),
+                Self::accepts_first_mouse as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(acceptsFirstResponder),
+                Self::accepts_first_responder as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
+                sel!(isFlipped),
+                Self::is_flipped as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
+                sel!(keyDown:),
+                Self::key_down as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(keyUp:),
+                Self::key_up as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(flagsChanged:),
+                Self::flags_changed as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(mouseMoved:),
+                Self::mouse_moved as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(mouseDragged:),
+                Self::mouse_moved as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(rightMouseDragged:),
+                Self::mouse_moved as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(otherMouseDragged:),
+                Self::mouse_moved as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(mouseDown:),
+                Self::mouse_down as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(mouseUp:),
+                Self::mouse_up as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(rightMouseDown:),
+                Self::mouse_down as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(rightMouseUp:),
+                Self::mouse_up as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(otherMouseDown:),
+                Self::mouse_down as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(otherMouseUp:),
+                Self::mouse_up as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(mouseExited:),
+                Self::mouse_exited as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(scrollWheel:),
+                Self::scroll_wheel as unsafe extern "C" fn(_, _, _) -> _,
+            );
+
+            // custom
+            builder.add_method(
+                sel!(picoview_drawFrame),
+                Self::draw_frame as unsafe extern "C" fn(_, _) -> _,
+            );
+
+            // NSDraggingDestination
+            builder.add_method(
+                sel!(wantsPeriodicDraggingUpdates),
+                Self::wants_periodic_dragging_updates as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
+                sel!(draggingEntered:),
+                Self::dragging_entered as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(draggingUpdated:),
+                Self::dragging_updated as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(draggingExited:),
+                Self::dragging_exited as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(prepareForDragOperation:),
+                Self::prepare_for_drag_operation as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(performDragOperation:),
+                Self::perform_drag_operation as unsafe extern "C" fn(_, _, _) -> _,
+            );
+        }
+
+        Ok(builder.register())
+    }
+}
+
+impl OsWindow for OsWindowView {
+    fn close(&self) {
+        if self.inner().is_closed.replace(true) {
+            return;
+        }
+
+        unsafe {
+            self.removeFromSuperview();
+        }
+
+        let is_blocking = self.inner().app.borrow().is_some();
+        if is_blocking && let Some(window) = self.window() {
+            window.close();
+        }
+
+        if let Some(app) = self.inner().app.take() {
+            app.stop(Some(&app));
+        }
+    }
+
+    fn set_title(&self, title: &str) {
+        let is_blocking = self.inner().app.borrow().is_some();
+        if is_blocking && let Some(window) = self.window() {
             window.setTitle(&NSString::from_str(title));
         }
     }
 
-    fn set_cursor_icon(&mut self, cursor: MouseCursor) {
+    fn set_cursor_icon(&self, cursor: MouseCursor) {
         unsafe {
             let old_cursor = self.inner().current_cursor.replace(cursor);
             if old_cursor != cursor {
@@ -482,7 +640,7 @@ impl OsWindow for &OsWindowView {
         }
     }
 
-    fn set_cursor_position(&mut self, point: Point) {
+    fn set_cursor_position(&self, point: Point) {
         unsafe {
             if let Some(window) = self.window() {
                 let main_thread = MainThreadMarker::new_unchecked();
@@ -504,11 +662,10 @@ impl OsWindow for &OsWindowView {
         }
     }
 
-    fn set_size(&mut self, size: Size) {
+    fn set_size(&self, size: Size) {
         unsafe {
-            if !self.inner().is_embedded
-                && let Some(window) = self.window()
-            {
+            let is_blocking = self.inner().app.borrow().is_some();
+            if is_blocking && let Some(window) = self.window() {
                 window.setContentSize(CGSize {
                     width: size.width as _,
                     height: size.height as _,
@@ -522,15 +679,16 @@ impl OsWindow for &OsWindowView {
         }
     }
 
-    fn set_position(&mut self, point: Point) {
+    fn set_position(&self, point: Point) {
         unsafe {
-            if self.inner().is_embedded {
-                self.setFrameOrigin(NSPoint {
+            let is_blocking = self.inner().app.borrow().is_some();
+            if is_blocking && let Some(window) = self.window() {
+                window.setFrameOrigin(CGPoint {
                     x: point.x as _,
                     y: point.y as _,
                 });
-            } else if let Some(window) = self.window() {
-                window.setFrameOrigin(CGPoint {
+            } else {
+                self.setFrameOrigin(NSPoint {
                     x: point.x as _,
                     y: point.y as _,
                 });
@@ -538,25 +696,28 @@ impl OsWindow for &OsWindowView {
         }
     }
 
-    fn set_visible(&mut self, visible: bool) {
-        if let Some(window) = self.window() {
+    fn set_visible(&self, visible: bool) {
+        let is_blocking = self.inner().app.borrow().is_some();
+        if is_blocking && let Some(window) = self.window() {
             if visible {
                 window.orderFront(None);
             } else {
                 window.orderOut(None);
             }
+        } else {
+            self.setHidden(!visible);
         }
     }
 
-    fn open_url(&mut self, url: &str) -> bool {
+    fn open_url(&self, url: &str) -> bool {
         util::spawn_detached(std::process::Command::new("/usr/bin/open").arg(url)).is_ok()
     }
 
-    fn get_clipboard_text(&mut self) -> Option<String> {
+    fn get_clipboard_text(&self) -> Option<String> {
         util::get_clipboard_text()
     }
 
-    fn set_clipboard_text(&mut self, text: &str) -> bool {
+    fn set_clipboard_text(&self, text: &str) -> bool {
         util::set_clipboard_text(text)
     }
 
@@ -573,140 +734,6 @@ impl OsWindow for &OsWindowView {
     }
 }
 
-impl OsWindowClass {
-    fn register_class() -> Result<OsWindowClass, Error> {
-        let class_name =
-            CString::new(format!("picoview-{}", random_id())).expect("unexpected nul terminator?");
-
-        let mut builder = match ClassBuilder::new(&class_name, NSView::class()) {
-            Some(builder) => builder,
-            None => return Err(Error::PlatformError("Failed to register class".to_string())),
-        };
-
-        builder.add_ivar::<*mut c_void>(c"_context");
-
-        unsafe {
-            // NSView
-            builder.add_method(
-                sel!(initWithFrame:),
-                OsWindowView::init_with_frame as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(dealloc),
-                OsWindowView::dealloc as unsafe extern "C-unwind" fn(_, _) -> _,
-            );
-            builder.add_method(
-                sel!(acceptsFirstMouse:),
-                OsWindowView::accepts_first_mouse as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(acceptsFirstResponder),
-                OsWindowView::accepts_first_responder as unsafe extern "C-unwind" fn(_, _) -> _,
-            );
-            builder.add_method(
-                sel!(isFlipped),
-                OsWindowView::is_flipped as unsafe extern "C-unwind" fn(_, _) -> _,
-            );
-            builder.add_method(
-                sel!(keyDown:),
-                OsWindowView::key_down as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(keyUp:),
-                OsWindowView::key_up as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(flagsChanged:),
-                OsWindowView::flags_changed as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(mouseMoved:),
-                OsWindowView::mouse_moved as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(mouseDragged:),
-                OsWindowView::mouse_moved as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(rightMouseDragged:),
-                OsWindowView::mouse_moved as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(otherMouseDragged:),
-                OsWindowView::mouse_moved as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(mouseDown:),
-                OsWindowView::mouse_down as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(mouseUp:),
-                OsWindowView::mouse_up as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(rightMouseDown:),
-                OsWindowView::mouse_down as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(rightMouseUp:),
-                OsWindowView::mouse_up as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(otherMouseDown:),
-                OsWindowView::mouse_down as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(otherMouseUp:),
-                OsWindowView::mouse_up as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(mouseExited:),
-                OsWindowView::mouse_exited as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(scrollWheel:),
-                OsWindowView::scroll_wheel as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-
-            // custom
-            builder.add_method(
-                sel!(picoview_drawFrame),
-                OsWindowView::draw_frame as unsafe extern "C-unwind" fn(_, _) -> _,
-            );
-
-            // NSDraggingDestination
-            builder.add_method(
-                sel!(wantsPeriodicDraggingUpdates),
-                OsWindowView::wants_periodic_dragging_updates
-                    as unsafe extern "C-unwind" fn(_, _) -> _,
-            );
-            builder.add_method(
-                sel!(draggingEntered:),
-                OsWindowView::dragging_entered as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(draggingUpdated:),
-                OsWindowView::dragging_updated as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(draggingExited:),
-                OsWindowView::dragging_exited as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(prepareForDragOperation:),
-                OsWindowView::prepare_for_drag_operation
-                    as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(performDragOperation:),
-                OsWindowView::perform_drag_operation as unsafe extern "C-unwind" fn(_, _, _) -> _,
-            );
-        }
-
-        Ok(OsWindowClass(builder.register()))
-    }
-}
-
 impl Deref for OsWindowView {
     type Target = NSView;
 
@@ -718,11 +745,5 @@ impl Deref for OsWindowView {
 impl DerefMut for OsWindowView {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.superclass
-    }
-}
-
-impl Drop for OsWindowClass {
-    fn drop(&mut self) {
-        unsafe { objc_disposeClassPair(self.0 as *const _ as _) };
     }
 }

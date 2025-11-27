@@ -2,7 +2,7 @@ use picoview::{Event, MouseCursor, Point, Size, Window, WindowBuilder};
 use std::time::{Duration, Instant};
 
 fn main() {
-    WindowBuilder::new(|mut window| {
+    WindowBuilder::new(|window| {
         let start = Instant::now();
         let mut last = Instant::now();
 
@@ -11,7 +11,7 @@ fn main() {
         window.set_clipboard_text("test");
 
         // you *have* to make both types explicit otherwise rust complains
-        move |event: Event<'_>, mut window: Window<'_>| match event {
+        move |event: Event<'_>, window: Window<'_>| match event {
             Event::WindowFrame { .. } => {
                 let current = Instant::now();
                 let passed = |d| {
