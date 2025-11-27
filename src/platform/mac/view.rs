@@ -6,7 +6,7 @@ use crate::{
     Error, Event, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder, WindowHandler,
     rwh_06,
 };
-use objc2::rc::{Allocated, Retained, Weak};
+use objc2::rc::{Allocated, Retained, Weak, autoreleasepool};
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2::{
@@ -22,7 +22,8 @@ use objc2_app_kit::{
     NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
+use objc2_core_foundation::{CGPoint, CGSize};
+use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ptr::NonNull;
@@ -60,11 +61,10 @@ pub struct OsWindowClass(&'static AnyClass);
 
 impl OsWindowView {
     pub unsafe fn open_blocking(options: WindowBuilder) -> Result<(), Error> {
-        unsafe {
+        autoreleasepool(|_| unsafe {
             let main_thread = MainThreadMarker::new()
                 .ok_or_else(|| Error::PlatformError("not in main thread".into()))?;
 
-            let pool = NSAutoreleasePool::new();
             let app = NSApp(main_thread);
             app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
@@ -72,32 +72,25 @@ impl OsWindowView {
             let view = Self::create_view(options, false)?;
 
             window.setContentView(Some(&view));
-
-            pool.drain();
             app.run();
-
             Ok(())
-        }
+        })
     }
 
     pub unsafe fn open_embedded(
         options: WindowBuilder,
         parent: rwh_06::RawWindowHandle,
     ) -> Result<(), Error> {
-        unsafe {
+        autoreleasepool(|_| unsafe {
             let parent_view = match parent {
                 rwh_06::RawWindowHandle::AppKit(window) => window.ns_view.as_ptr() as *mut NSView,
                 _ => return Err(Error::InvalidParent),
             };
 
-            let pool = NSAutoreleasePool::new();
             let view = Self::create_view(options, true)?;
-
             (*parent_view).addSubview(&view);
-            pool.drain();
-
             Ok(())
-        }
+        })
     }
 
     unsafe fn create_window(
@@ -201,7 +194,6 @@ impl OsWindowView {
 
         let handler = (options.factory)(Window(&mut &*view));
         view.inner().event_handler.replace(Some(handler));
-
         Ok(view)
     }
 
@@ -514,6 +506,15 @@ impl OsWindow for &OsWindowView {
 
     fn set_size(&mut self, size: Size) {
         unsafe {
+            if !self.inner().is_embedded
+                && let Some(window) = self.window()
+            {
+                window.setContentSize(CGSize {
+                    width: size.width as _,
+                    height: size.height as _,
+                });
+            }
+
             self.setFrameSize(NSSize {
                 width: size.width as _,
                 height: size.height as _,
@@ -523,10 +524,17 @@ impl OsWindow for &OsWindowView {
 
     fn set_position(&mut self, point: Point) {
         unsafe {
-            self.setFrameOrigin(NSPoint {
-                x: point.x as _,
-                y: point.y as _,
-            });
+            if self.inner().is_embedded {
+                self.setFrameOrigin(NSPoint {
+                    x: point.x as _,
+                    y: point.y as _,
+                });
+            } else if let Some(window) = self.window() {
+                window.setFrameOrigin(CGPoint {
+                    x: point.x as _,
+                    y: point.y as _,
+                });
+            }
         }
     }
 

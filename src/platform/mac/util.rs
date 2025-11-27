@@ -30,81 +30,6 @@ fn try_get_cursor(selector: Sel) -> Retained<NSCursor> {
     }
 }
 
-pub fn random_id() -> u32 {
-    static STATE: AtomicU32 = AtomicU32::new(1);
-    STATE
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |r| {
-            let time = SystemTime::now()
-                .duration_since(SystemTime::now())
-                .unwrap_or_default()
-                .as_nanos() as u32;
-
-            let r = r ^ time;
-            Some((r >> 1) ^ ((r & 1).wrapping_neg() & 0x80200003))
-        })
-        .unwrap_or_default()
-}
-
-pub fn get_clipboard_text() -> Option<String> {
-    unsafe {
-        autoreleasepool(|_| {
-            let pasteboard: Option<Retained<NSPasteboard>> =
-                msg_send![NSPasteboard::class(), generalPasteboard];
-            let pasteboard = pasteboard?;
-            let contents = pasteboard.pasteboardItems()?;
-
-            for item in contents {
-                if let Some(string) = item.stringForType(NSPasteboardTypeString) {
-                    return Some(string.to_string());
-                }
-            }
-
-            None
-        })
-    }
-}
-
-pub fn set_clipboard_text(text: &str) -> bool {
-    unsafe {
-        let pasteboard: Option<Retained<NSPasteboard>> =
-            msg_send![NSPasteboard::class(), generalPasteboard];
-        let pasteboard = match pasteboard {
-            Some(pb) => pb,
-            None => return false,
-        };
-
-        pasteboard.clearContents();
-        let string_array = NSArray::from_retained_slice(&[ProtocolObject::from_retained(
-            NSString::from_str(text),
-        )]);
-        pasteboard.writeObjects(&string_array)
-    }
-}
-
-pub fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    unsafe {
-        cmd.pre_exec(move || {
-            match libc::fork() {
-                -1 => return Err(std::io::Error::last_os_error()),
-                0 => (),
-                _ => libc::_exit(0),
-            }
-
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-
-            Ok(())
-        });
-    }
-
-    cmd.spawn().map(|_| ())
-}
-
 pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
     unsafe {
         Some(match cursor {
@@ -153,6 +78,84 @@ pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
             MouseCursor::ZoomOut => NSCursor::zoomOutCursor(),
         })
     }
+}
+
+pub fn random_id() -> u32 {
+    static STATE: AtomicU32 = AtomicU32::new(1);
+    STATE
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |r| {
+            let time = SystemTime::now()
+                .duration_since(SystemTime::now())
+                .unwrap_or_default()
+                .as_nanos() as u32;
+
+            let r = r ^ time;
+            Some((r >> 1) ^ ((r & 1).wrapping_neg() & 0x80200003))
+        })
+        .unwrap_or_default()
+}
+
+pub fn get_clipboard_text() -> Option<String> {
+    unsafe {
+        autoreleasepool(|_| {
+            let pasteboard: Option<Retained<NSPasteboard>> =
+                msg_send![NSPasteboard::class(), generalPasteboard];
+            let pasteboard = pasteboard?;
+            let contents = pasteboard.pasteboardItems()?;
+
+            for i in 0..contents.count() {
+                if let Some(string) = contents
+                    .objectAtIndex(i)
+                    .stringForType(NSPasteboardTypeString)
+                {
+                    return Some(string.to_string());
+                }
+            }
+
+            None
+        })
+    }
+}
+
+pub fn set_clipboard_text(text: &str) -> bool {
+    unsafe {
+        let pasteboard: Option<Retained<NSPasteboard>> =
+            msg_send![NSPasteboard::class(), generalPasteboard];
+        let pasteboard = match pasteboard {
+            Some(pb) => pb,
+            None => return false,
+        };
+
+        pasteboard.clearContents();
+        let string_array = NSArray::from_retained_slice(&[ProtocolObject::from_retained(
+            NSString::from_str(text),
+        )]);
+        pasteboard.writeObjects(&string_array)
+    }
+}
+
+pub fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    unsafe {
+        cmd.pre_exec(move || {
+            match libc::fork() {
+                -1 => return Err(std::io::Error::last_os_error()),
+                0 => (),
+                _ => libc::_exit(0),
+            }
+
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            Ok(())
+        });
+    }
+
+    cmd.spawn().map(|_| ())
 }
 
 pub fn flags2mods(flags: NSEventModifierFlags) -> Modifiers {
