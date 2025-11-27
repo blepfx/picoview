@@ -19,7 +19,7 @@ fn main() {
                         && (last - start) < Duration::from_millis(d)
                 };
 
-                if passed(5000) {
+                if passed(10000) {
                     println!("Resize window");
                     window.set_title("picoview - example");
                     window.set_size(Size {
@@ -38,7 +38,7 @@ fn main() {
                     .expect("failed to open a child window");
                 }
 
-                if passed(15000) {
+                if passed(30000) {
                     println!("Closing window");
                     window.close();
                 }

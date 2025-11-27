@@ -1,22 +1,21 @@
-use objc2::MainThreadMarker;
+use crate::Error;
+use objc2::rc::Retained;
 use objc2_core_foundation::{
     CFRetained, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, kCFRunLoopCommonModes,
 };
-use objc2_foundation::NSPoint;
+use objc2_core_video::{CVDisplayLink, CVOptionFlags, CVReturn, CVTimeStamp};
 use std::ffi::c_void;
-use std::ptr::null_mut;
+use std::ptr::{NonNull, null_mut};
 use std::rc::Rc;
 
-use crate::Error;
-
-extern "C" fn callback(
-    _display_link: *mut c_void,
-    _in_now: *mut c_void,
-    _in_output_time: *mut c_void,
-    _flags_in: u64,
-    _flags_out: *mut u64,
+extern "C-unwind" fn callback(
+    _display_link: NonNull<CVDisplayLink>,
+    _in_now: NonNull<CVTimeStamp>,
+    _in_output_time: NonNull<CVTimeStamp>,
+    _flags_in: CVOptionFlags,
+    _flags_out: NonNull<CVOptionFlags>,
     display_link_context: *mut c_void,
-) -> CVResult {
+) -> CVReturn {
     unsafe {
         let source = &*(display_link_context as *const _ as *const CFRunLoopSource);
         source.signal();
@@ -40,38 +39,36 @@ extern "C-unwind" fn release(info: *const c_void) {
 
 extern "C-unwind" fn perform(info: *mut c_void) {
     let state = unsafe { &*(info as *const DisplayState) };
-    (state.runner)(state.display_id);
+    (state.runner)();
 }
 
 struct DisplayState {
-    runner: Rc<dyn Fn(u32)>,
-    display_id: u32,
+    runner: Box<dyn Fn()>,
 }
 
 pub struct DisplayLink {
-    link: *mut c_void,
+    link: Retained<CVDisplayLink>,
     source: CFRetained<CFRunLoopSource>,
 }
 
+// TODO: multi display setup? idk
 impl DisplayLink {
-    pub fn new(runner: Rc<dyn Fn(u32)>, display_id: u32) -> Result<DisplayLink, Error> {
-        let state = Rc::new(DisplayState { runner, display_id });
-
-        let mut context = CFRunLoopSourceContext {
-            version: 0,
-            info: Rc::into_raw(state) as *mut c_void,
-            retain: Some(retain),
-            release: Some(release),
-            copyDescription: None,
-            equal: None,
-            hash: None,
-            schedule: None,
-            cancel: None,
-            perform: Some(perform),
-        };
-
+    #[allow(deprecated)] // smh
+    pub fn new(runner: Box<dyn Fn()>) -> Result<DisplayLink, Error> {
         unsafe {
-            CGMainDisplayID();
+            let state = Rc::new(DisplayState { runner });
+            let mut context = CFRunLoopSourceContext {
+                version: 0,
+                info: Rc::into_raw(state) as *mut c_void,
+                retain: Some(retain),
+                release: Some(release),
+                copyDescription: None,
+                equal: None,
+                hash: None,
+                schedule: None,
+                cancel: None,
+                perform: Some(perform),
+            };
 
             let source = CFRunLoopSource::new(None, 0, &mut context)
                 .ok_or_else(|| Error::PlatformError("CFRunLoopSource::new".to_owned()))?;
@@ -80,16 +77,20 @@ impl DisplayLink {
             run_loop.add_source(Some(&source), kCFRunLoopCommonModes);
 
             let mut link = null_mut();
-            let result = CVDisplayLinkCreateWithCGDisplay(display_id, &mut link);
+            let result =
+                CVDisplayLink::create_with_active_cg_displays(NonNull::from_mut(&mut link));
             if result != 0 || link.is_null() {
                 return Err(Error::PlatformError(format!(
-                    "CVDisplayLinkCreateWithCGDisplay: {}",
+                    "CVDisplayLink::create_with_active_cg_displays: {}",
                     result
                 )));
             }
 
+            let link = Retained::from_raw(link).unwrap_unchecked();
+
             let result =
-                CVDisplayLinkSetOutputCallback(link, callback, &*source as *const _ as *mut c_void);
+                link.set_output_callback(Some(callback), &*source as *const _ as *mut c_void);
+
             if result != 0 {
                 return Err(Error::PlatformError(format!(
                     "CVDisplayLinkSetOutputCallback: {}",
@@ -97,7 +98,7 @@ impl DisplayLink {
                 )));
             }
 
-            let result = CVDisplayLinkStart(link);
+            let result = link.start();
             if result != 0 {
                 return Err(Error::PlatformError(format!(
                     "CVDisplayLinkStart: {}",
@@ -111,52 +112,11 @@ impl DisplayLink {
 }
 
 impl Drop for DisplayLink {
+    #[allow(deprecated)]
     fn drop(&mut self) {
         unsafe {
-            CVDisplayLinkStop(self.link);
-            CVDisplayLinkRelease(self.link);
-
+            self.link.stop();
             self.source.invalidate();
         }
     }
-}
-
-#[inline]
-pub fn warp_mouse_cursor_position(point: NSPoint, _main_thread: MainThreadMarker) -> bool {
-    unsafe { CGWarpMouseCursorPosition(point) == 0 }
-}
-
-type CVResult = i32;
-type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
-    display_link: *mut c_void,
-    in_now: *mut c_void,
-    in_output_time: *mut c_void,
-    flags_in: u64,
-    flags_out: *mut u64,
-    display_link_context: *mut c_void,
-) -> CVResult;
-
-//TODO: replace this with objc2?
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    pub fn CGMainDisplayID() -> u32;
-    fn CGWarpMouseCursorPosition(point: NSPoint) -> CVResult;
-}
-
-#[link(name = "CoreVideo", kind = "framework")]
-unsafe extern "C" {
-    fn CVDisplayLinkCreateWithCGDisplay(
-        displayID: u32,
-        display_link_out: *mut *mut c_void,
-    ) -> CVResult;
-
-    fn CVDisplayLinkSetOutputCallback(
-        display_link: *mut c_void,
-        callback: CVDisplayLinkOutputCallback,
-        user_info: *mut c_void,
-    ) -> CVResult;
-
-    fn CVDisplayLinkStart(display_link: *mut c_void) -> CVResult;
-    fn CVDisplayLinkStop(display_link: *mut c_void) -> CVResult;
-    fn CVDisplayLinkRelease(display_link: *mut c_void);
 }

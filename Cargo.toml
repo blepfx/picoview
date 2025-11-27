@@ -14,9 +14,11 @@ x11rb = { version = "0.13", features = ["allow-unsafe-code", "cursor", "present"
 
 [target.'cfg(target_os="macos")'.dependencies]
 libc = "0.2"
-objc2 = { version = "0.6", features = ["verify"] }
-objc2-core-foundation = { version = "0.3", features = ["CFRunLoop"], default-features = false }
+objc2 = { version = "0.6", features = ["verify"], default-features = false }
 objc2-foundation = { version = "0.3", features = ["NSThread", "NSOperation"], default-features = false }
+objc2-core-foundation = { version = "0.3", features = ["CFRunLoop"], default-features = false }
+objc2-core-video = { version = "0.3", features = ["CVBase", "CVReturn", "CVDisplayLink", "objc2"], default-features = false }
+objc2-core-graphics = { version = "0.3", features = ["CGError", "CGRemoteOperation"], default-features = false  }
 objc2-app-kit = { version = "0.3", features = [
     "NSGraphics", 
     "NSDirection", 

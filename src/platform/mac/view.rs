@@ -1,7 +1,7 @@
 use super::display::*;
-use super::util::{get_cursor, keycode2key, random_id};
+use super::util::{get_cursor, keycode_to_key, random_id};
 use crate::platform::OsWindow;
-use crate::platform::mac::util::{self, flags2mods};
+use crate::platform::mac::util::{self, flags_to_modifiers};
 use crate::{
     Error, Event, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder, WindowHandler,
     rwh_06,
@@ -23,11 +23,11 @@ use objc2_app_kit::{
     NSTrackingAreaOptions, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
+use objc2_core_graphics::CGWarpMouseCursorPosition;
 use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ptr::NonNull;
-use std::rc::Rc;
 use std::{
     ffi::{CString, c_void},
     ops::{Deref, DerefMut},
@@ -181,14 +181,11 @@ impl OsWindowView {
 
         let display = {
             let view = Weak::from_retained(&view);
-            DisplayLink::new(
-                Rc::new(move |_| {
-                    if let Some(view) = view.load() {
-                        view.send_event(Event::WindowFrame { gl: None });
-                    }
-                }),
-                unsafe { CGMainDisplayID() }, //TODO:: multi display support
-            )?
+            DisplayLink::new(Box::new(move || {
+                if let Some(view) = view.load() {
+                    view.send_event(Event::WindowFrame { gl: None });
+                }
+            }))?
         };
 
         view.set_context(Box::new(OsWindowViewInner {
@@ -261,6 +258,8 @@ impl OsWindowView {
 
     unsafe extern "C" fn dealloc(&self, _cmd: Sel) {
         unsafe {
+            println!("dealloc begin");
+
             let ivar = self
                 .class()
                 .instance_variable(c"_context")
@@ -268,13 +267,17 @@ impl OsWindowView {
 
             let context = *ivar.load::<*mut c_void>(self) as *mut Box<RefCell<OsWindowViewInner>>;
             if !context.is_null() {
+                println!("drop begin");
                 drop(Box::from_raw(context));
+                println!("drop end");
             }
 
             let _: () = msg_send![super(self, NSView::class()), dealloc];
 
             let class: &'static AnyClass = msg_send![self, class];
             objc_disposeClassPair(class as *const _ as *mut _);
+
+            println!("dealloc end");
         }
     }
 
@@ -303,7 +306,7 @@ impl OsWindowView {
     unsafe extern "C" fn key_down(&self, _cmd: Sel, event: *const NSEvent) {
         unsafe {
             let mut capture = false;
-            if let Some(key) = keycode2key((*event).keyCode()) {
+            if let Some(key) = keycode_to_key((*event).keyCode()) {
                 self.send_event(Event::KeyDown {
                     key,
                     capture: &mut capture,
@@ -319,7 +322,7 @@ impl OsWindowView {
     unsafe extern "C" fn key_up(&self, _cmd: Sel, event: *const NSEvent) {
         unsafe {
             let mut capture = false;
-            if let Some(key) = keycode2key((*event).keyCode()) {
+            if let Some(key) = keycode_to_key((*event).keyCode()) {
                 self.send_event(Event::KeyUp {
                     key,
                     capture: &mut capture,
@@ -335,7 +338,7 @@ impl OsWindowView {
     unsafe extern "C" fn flags_changed(&self, _cmd: Sel, event: *const NSEvent) {
         unsafe {
             self.send_event_defer(Event::KeyModifiers {
-                modifiers: flags2mods((*event).modifierFlags()),
+                modifiers: flags_to_modifiers((*event).modifierFlags()),
             });
         }
     }
@@ -403,8 +406,13 @@ impl OsWindowView {
                 return;
             }
 
-            let x = (*event).deltaX() as f32;
-            let y = (*event).deltaY() as f32;
+            let mut x = -(*event).scrollingDeltaX() as f32;
+            let mut y = (*event).scrollingDeltaY() as f32;
+
+            if (*event).hasPreciseScrollingDeltas() {
+                x /= 10.0;
+                y /= 10.0;
+            }
 
             self.send_event_defer(Event::MouseScroll { x, y });
         }
@@ -604,12 +612,11 @@ impl OsWindow for OsWindowView {
             self.removeFromSuperview();
         }
 
-        let is_blocking = self.inner().app.borrow().is_some();
-        if is_blocking && let Some(window) = self.window() {
-            window.close();
-        }
-
         if let Some(app) = self.inner().app.take() {
+            if let Some(window) = self.window() {
+                window.close();
+            }
+
             app.stop(Some(&app));
         }
     }
@@ -651,13 +658,10 @@ impl OsWindow for OsWindowView {
                     .map(|screen| screen.frame().size.height)
                     .unwrap_or_default();
 
-                warp_mouse_cursor_position(
-                    NSPoint::new(
-                        screen_position.x as _,
-                        (screen_height - screen_position.y) as _,
-                    ),
-                    main_thread,
-                );
+                CGWarpMouseCursorPosition(NSPoint::new(
+                    screen_position.x as _,
+                    (screen_height - screen_position.y) as _,
+                ));
             }
         }
     }

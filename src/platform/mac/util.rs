@@ -158,7 +158,7 @@ pub fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
     cmd.spawn().map(|_| ())
 }
 
-pub fn flags2mods(flags: NSEventModifierFlags) -> Modifiers {
+pub fn flags_to_modifiers(flags: NSEventModifierFlags) -> Modifiers {
     const MODMAP: &[(NSEventModifierFlags, Modifiers)] = &[
         (NSEventModifierFlags::CapsLock, Modifiers::CAPS_LOCK),
         (NSEventModifierFlags::Command, Modifiers::META),
@@ -177,7 +177,7 @@ pub fn flags2mods(flags: NSEventModifierFlags) -> Modifiers {
     modifiers
 }
 
-pub fn keycode2key(key: u16) -> Option<Key> {
+pub fn keycode_to_key(key: u16) -> Option<Key> {
     Some(match key {
         0x00 => Key::A,
         0x01 => Key::S,
