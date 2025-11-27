@@ -189,7 +189,7 @@ pub fn keymask2mods(mods: KeyButMask) -> Modifiers {
     ret
 }
 
-pub fn consume_error<T>(result: Result<T, ConnectionError>) -> bool {
+pub fn check_error<T>(result: Result<T, ConnectionError>) -> bool {
     match result {
         Ok(_) => true,
         Err(e) => {

@@ -18,7 +18,6 @@ use std::{
     mem::size_of,
     num::NonZeroIsize,
     ptr::{copy_nonoverlapping, null, null_mut},
-    rc::Rc,
     sync::Arc,
 };
 use windows_sys::Win32::{
@@ -215,7 +214,7 @@ impl WindowImpl {
                 ),
             };
 
-            let event_loop = Rc::new(Self {
+            let event_loop = Box::new(Self {
                 event_handler: RefCell::new((options.factory)(Window(&mut &inner))),
                 event_queue: RefCell::new(VecDeque::new()),
                 gl_context,
@@ -226,7 +225,7 @@ impl WindowImpl {
                 scale: shared.try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
             });
 
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(event_loop) as _);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(event_loop) as _);
             shared.register_pacer(hwnd);
 
             if matches!(mode, OpenMode::Blocking) {
@@ -443,7 +442,7 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe {
-        let window_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowImpl;
+        let window_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowImpl;
         if window_ptr.is_null() {
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
@@ -453,8 +452,7 @@ unsafe extern "system" fn wnd_proc(
                 PostQuitMessage(0);
             }
 
-            drop(Rc::from_raw(window_ptr));
-
+            drop(Box::from_raw(window_ptr));
             return 0;
         }
 

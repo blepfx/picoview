@@ -2,7 +2,7 @@ use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
 use crate::platform::OpenMode;
-use crate::platform::x11::util::consume_error;
+use crate::platform::x11::util::check_error;
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
     WindowHandler, rwh_06,
@@ -72,7 +72,7 @@ impl WindowImpl {
             let window_id = connection
                 .xcb()
                 .generate_id()
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             connection
                 .xcb()
@@ -99,7 +99,7 @@ impl WindowImpl {
                             | EventMask::FOCUS_CHANGE,
                     ),
                 )
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             connection
                 .xcb()
@@ -110,7 +110,7 @@ impl WindowImpl {
                     AtomEnum::ATOM,
                     &[connection.atoms().WM_DELETE_WINDOW],
                 )
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             let (min_size, max_size) = match options.resizable.clone() {
                 None => (options.size, options.size),
@@ -133,7 +133,7 @@ impl WindowImpl {
             ));
             size_hints
                 .set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS)
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             connection
                 .xcb()
@@ -144,7 +144,7 @@ impl WindowImpl {
                     AtomEnum::STRING,
                     options.title.as_bytes(),
                 )
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             connection
                 .xcb()
@@ -159,7 +159,7 @@ impl WindowImpl {
                         connection.atoms()._NET_WM_WINDOW_TYPE_DOCK
                     }],
                 )
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             connection
                 .xcb()
@@ -170,13 +170,13 @@ impl WindowImpl {
                     AtomEnum::ATOM,
                     &[0b10, 0, options.decorations as u32, 0, 0],
                 )
-                .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             if options.visible {
                 connection
                     .xcb()
                     .map_window(window_id)
-                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                    .map_err(|e| Error::PlatformError(e.to_string()))?;
             }
 
             if let Some(position) = options.position {
@@ -188,12 +188,12 @@ impl WindowImpl {
                             .x(position.x as i32)
                             .y(position.y as i32),
                     )
-                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                    .map_err(|e| Error::PlatformError(e.to_string()))?;
             }
 
-            if !connection.flush() {
-                return Err(Error::PlatformError("X11 connection error".into()));
-            }
+            connection
+                .flush()
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             let gl_context = if let Some(config) = options.opengl {
                 match GlContext::new(connection.clone(), window_id as _, config) {
@@ -209,20 +209,20 @@ impl WindowImpl {
                 let event_id = connection
                     .xcb()
                     .generate_id()
-                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                    .map_err(|e| Error::PlatformError(e.to_string()))?;
                 connection
                     .xcb()
                     .present_select_input(event_id, window_id, present::EventMask::COMPLETE_NOTIFY)
-                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                    .map_err(|e| Error::PlatformError(e.to_string()))?;
                 connection
                     .xcb()
                     .present_notify_msc(window_id, 0, 0, 1, 0)
-                    .map_err(|_| Error::PlatformError("X11 connection error".into()))?;
+                    .map_err(|e| Error::PlatformError(e.to_string()))?;
             }
 
-            if !connection.flush() {
-                return Err(Error::PlatformError("X11 connection error".into()));
-            }
+            connection
+                .flush()
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
 
             let (on_closed, when_closed) = sync_channel(0);
             let mut inner = WindowInner {
@@ -252,7 +252,7 @@ impl WindowImpl {
                 scale: connection.os_scale_dpi() as f32 / 96.0,
             });
 
-            connection.add_window_pacer(
+            connection.add_window_event_loop(
                 window_id,
                 Box::new(move |event| match event {
                     Some(event) => {
@@ -455,7 +455,8 @@ impl WindowImpl {
                         .xcb()
                         .present_notify_msc(self.inner.window_id, 0, 0, 1, 0)
                         .ok();
-                    self.inner.connection.flush();
+
+                    check_error(self.inner.connection.flush());
                 }
             }
 
@@ -500,15 +501,15 @@ impl WindowImpl {
         self.handler = Box::new(|_: Event<'_>, _: Window<'_>| {});
         self.inner
             .connection
-            .remove_window_pacer(self.inner.window_id);
+            .remove_window_event_loop(self.inner.window_id);
 
-        consume_error(
+        check_error(
             self.inner
                 .connection
                 .xcb()
                 .destroy_window(self.inner.window_id),
         );
-        self.inner.connection.flush();
+        check_error(self.inner.connection.flush());
     }
 
     fn send_event(&mut self, e: Event) {
@@ -543,7 +544,7 @@ impl crate::platform::OsWindow for WindowInner {
 
         self.last_window_title = title.to_owned();
 
-        consume_error(self.connection.xcb().change_property8(
+        check_error(self.connection.xcb().change_property8(
             PropMode::REPLACE,
             self.window_id,
             AtomEnum::WM_NAME,
@@ -551,7 +552,7 @@ impl crate::platform::OsWindow for WindowInner {
             title.as_bytes(),
         ));
 
-        self.connection.flush();
+        check_error(self.connection.flush());
     }
 
     fn set_cursor_icon(&mut self, cursor: MouseCursor) {
@@ -561,12 +562,12 @@ impl crate::platform::OsWindow for WindowInner {
 
         let xid = self.connection.load_cursor(cursor);
         if xid != 0 {
-            consume_error(self.connection.xcb().change_window_attributes(
+            check_error(self.connection.xcb().change_window_attributes(
                 self.window_id,
                 &ChangeWindowAttributesAux::new().cursor(xid),
             ));
 
-            self.connection.flush();
+            check_error(self.connection.flush());
         }
     }
 
@@ -575,7 +576,7 @@ impl crate::platform::OsWindow for WindowInner {
             return;
         }
 
-        consume_error(self.connection.xcb().warp_pointer(
+        check_error(self.connection.xcb().warp_pointer(
             x11rb::NONE,
             self.window_id,
             0,
@@ -586,7 +587,7 @@ impl crate::platform::OsWindow for WindowInner {
             point.y.round() as i16,
         ));
 
-        self.connection.flush();
+        check_error(self.connection.flush());
     }
 
     fn set_size(&mut self, size: Size) {
@@ -606,13 +607,13 @@ impl crate::platform::OsWindow for WindowInner {
             size_hints.min_size = Some((w_i32, h_i32));
         }
 
-        consume_error(size_hints.set(
+        check_error(size_hints.set(
             self.connection.xcb(),
             self.window_id,
             AtomEnum::WM_NORMAL_HINTS,
         ));
 
-        consume_error(
+        check_error(
             self.connection.xcb().configure_window(
                 self.window_id,
                 &ConfigureWindowAux::new()
@@ -621,7 +622,7 @@ impl crate::platform::OsWindow for WindowInner {
             ),
         );
 
-        self.connection.flush();
+        check_error(self.connection.flush());
     }
 
     fn set_position(&mut self, point: Point) {
@@ -629,7 +630,7 @@ impl crate::platform::OsWindow for WindowInner {
             return;
         }
 
-        consume_error(
+        check_error(
             self.connection.xcb().configure_window(
                 self.window_id,
                 &ConfigureWindowAux::new()
@@ -638,7 +639,7 @@ impl crate::platform::OsWindow for WindowInner {
             ),
         );
 
-        self.connection.flush();
+        check_error(self.connection.flush());
     }
 
     fn set_visible(&mut self, visible: bool) {
@@ -658,17 +659,17 @@ impl crate::platform::OsWindow for WindowInner {
                 config.height = Some(size.height);
             }
 
-            consume_error(self.connection.xcb().map_window(self.window_id));
-            consume_error(
+            check_error(self.connection.xcb().map_window(self.window_id));
+            check_error(
                 self.connection
                     .xcb()
                     .configure_window(self.window_id, &config),
             );
         } else {
-            consume_error(self.connection.xcb().unmap_window(self.window_id));
+            check_error(self.connection.xcb().unmap_window(self.window_id));
         }
 
-        self.connection.flush();
+        check_error(self.connection.flush());
     }
 
     fn open_url(&mut self, url: &str) -> bool {

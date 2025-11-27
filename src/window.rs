@@ -1,5 +1,5 @@
 use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, platform, rwh_06};
-use std::ops::Range;
+use std::{fmt::Debug, ops::Range};
 
 pub trait WindowHandler: 'static {
     fn on_event(&mut self, event: Event, window: Window);
@@ -161,5 +161,27 @@ impl<'a> rwh_06::HasWindowHandle for Window<'a> {
 impl<'a> rwh_06::HasDisplayHandle for Window<'a> {
     fn display_handle(&self) -> Result<rwh_06::DisplayHandle<'_>, rwh_06::HandleError> {
         unsafe { Ok(rwh_06::DisplayHandle::borrow_raw(self.0.display_handle())) }
+    }
+}
+
+impl<'a> Debug for Window<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Window")
+            .field(&self.0.window_handle())
+            .finish()
+    }
+}
+
+impl Debug for WindowBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowBuilder")
+            .field("visible", &self.visible)
+            .field("decorations", &self.decorations)
+            .field("title", &self.title)
+            .field("size", &self.size)
+            .field("resizable", &self.resizable)
+            .field("position", &self.position)
+            .field("opengl", &self.opengl)
+            .finish_non_exhaustive()
     }
 }

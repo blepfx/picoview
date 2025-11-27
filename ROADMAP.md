@@ -30,7 +30,7 @@
 | Pixel scaling abstraction                             | :ok:     | :x:      | :ok:     | High     |
 | Set position                                          | :ok:[^5] | :x:      | :ok:     | Medium   |
 | Set size                                              | :ok:     | :x:      | :ok:     | High     |
-| User resizable                                        | :x:      | :x:      | :ok:     | High     |
+| User resizable                                        | :ok:     | :x:      | :ok:     | High     |
 | Set title                                             | :ok:     | :x:      | :ok:     | Medium   |
 | Set visibility                                        | :ok:     | :x:      | :ok:     | Medium   |
 | Close window                                          | :ok:     | :x:      | :ok:     | High     |
@@ -43,6 +43,6 @@
 [^2]: Currently only DWM waiting is supported, ideally we would have to do per-monitor DXGI wait.
 [^3]: Currently only main monitor sync is supported
 [^4]: Currently broken on XWayland, so it fallbacks to a fixed 60hz timer (use XRandR to get screen refresh rate?)
-[^5]: Initial (`None`) position is broken (should be centered), children position is broken (should be parent-relative).
-[^6]: Some DAWS tend to consume key events meant for plugins, keyboard capturing is meant to avoid that when needed
+[^5]: Initial (`None`) position is broken (should be centered).
+[^6]: Some DAWs consume key events meant for plugins, keyboard capturing is meant to avoid that when needed
 [^7]: Broken on XWayland, seems to be a Wayland limitation?
