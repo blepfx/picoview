@@ -11,11 +11,9 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::sync::mpsc::{SyncSender, sync_channel};
+use std::time::Duration;
 use x11rb::connection::Connection as XConnection;
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
-use x11rb::protocol::present::CompleteKind;
-use x11rb::protocol::present::{self, ConnectionExt as ConnectionExtPresent};
 use x11rb::protocol::xproto::KeyButMask;
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
@@ -38,11 +36,12 @@ pub struct WindowImpl {
 
     is_closed: Cell<bool>,
     is_destroyed: Cell<bool>,
+    refresh_interval: Cell<Duration>,
     is_resizeable: bool,
-    on_closed: SyncSender<()>,
 
     last_modifiers: Cell<Modifiers>,
     last_cursor: Cell<MouseCursor>,
+    last_cursor_in_bounds: Cell<bool>,
     last_window_position: Cell<Option<Point>>,
     last_window_size: Cell<Option<Size>>,
     last_window_visible: Cell<bool>,
@@ -54,7 +53,7 @@ pub struct WindowImpl {
 impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
         unsafe {
-            let connection = Connection::get()?;
+            let connection = Connection::create()?;
 
             let parent_window_id = match mode {
                 OpenMode::Embedded(rwh_06::RawWindowHandle::Xcb(window)) => window.window.get(),
@@ -201,41 +200,33 @@ impl WindowImpl {
                 None
             };
 
-            if !connection.is_manual_tick() {
-                let event_id = connection
-                    .xcb()
-                    .generate_id()
-                    .map_err(|e| Error::PlatformError(e.to_string()))?;
-                connection
-                    .xcb()
-                    .present_select_input(event_id, window_id, present::EventMask::COMPLETE_NOTIFY)
-                    .map_err(|e| Error::PlatformError(e.to_string()))?;
-                connection
-                    .xcb()
-                    .present_notify_msc(window_id, 0, 0, 1, 0)
-                    .map_err(|e| Error::PlatformError(e.to_string()))?;
-            }
+            let refresh_interval = {
+                let rate = connection
+                    .refresh_rate_for_window(window_id)
+                    .map_err(|e| Error::PlatformError(e.to_string()))?
+                    .unwrap_or(60.0);
+                Duration::from_secs_f32(1000.0 / rate)
+            };
 
             connection
                 .flush()
                 .map_err(|e| Error::PlatformError(e.to_string()))?;
 
-            let (on_closed, when_closed) = sync_channel(0);
-
             let window = Self {
                 window_id,
                 connection: connection.clone(),
 
-                on_closed,
                 is_closed: Cell::new(false),
                 is_destroyed: Cell::new(false),
                 is_resizeable: options.resizable.is_some(),
+                refresh_interval: Cell::new(refresh_interval),
 
                 last_modifiers: Cell::new(Modifiers::empty()),
                 last_cursor: Cell::new(MouseCursor::Default),
                 last_window_position: Cell::new(None),
                 last_window_size: Cell::new(None),
                 last_window_visible: Cell::new(options.visible),
+                last_cursor_in_bounds: Cell::new(false),
 
                 handler: RefCell::new(None),
                 gl_context,
@@ -249,43 +240,38 @@ impl WindowImpl {
                 scale: connection.os_scale_dpi() as f32 / 96.0,
             });
 
-            connection.add_window_event_loop(
-                window_id,
-                Box::new(move |event| match event {
-                    Some(event) => {
-                        window.handle_event(event);
-                    }
-                    None => {
-                        window.handle_frame();
-                    }
-                }),
-            );
-
-            if matches!(mode, OpenMode::Blocking) {
-                let _ = when_closed.recv();
+            match mode {
+                OpenMode::Blocking => window.run_event_loop(),
+                OpenMode::Embedded(..) => {
+                    std::thread::spawn(|| window.run_event_loop().ok());
+                    Ok(())
+                }
             }
-
-            Ok(())
         }
+    }
+
+    fn run_event_loop(self) -> Result<(), Error> {
+        while !self.is_closed.get() {
+            match self
+                .connection
+                .poll_event_timeout(Some(self.refresh_interval.get()))
+            {
+                Ok(None) => self.handle_frame(),
+                Ok(Some(event)) => self.handle_event(&event),
+                Err(e) => return Err(Error::PlatformError(e.to_string())),
+            }
+        }
+
+        self.handle_destroy()
     }
 
     fn handle_frame(&self) {
-        if self.is_closed.get() {
-            return;
-        }
-
         self.send_event(Event::WindowFrame {
             gl: self.gl_context.as_ref().map(|x| x as &dyn crate::GlContext),
         });
-
-        self.handle_destroy();
     }
 
     fn handle_event(&self, event: &XEvent) {
-        if self.is_closed.get() {
-            return;
-        }
-
         match event {
             XEvent::ClientMessage(event) => {
                 if event.format == 32
@@ -404,6 +390,8 @@ impl WindowImpl {
             }
 
             XEvent::MotionNotify(e) => {
+                self.last_cursor_in_bounds.set(true);
+
                 self.handle_modifiers(util::keymask2mods(e.state));
                 self.send_event(Event::MouseMove {
                     relative: Point {
@@ -426,7 +414,7 @@ impl WindowImpl {
                         | KeyButMask::BUTTON5,
                 );
 
-                if grabbed {
+                if grabbed || !self.last_cursor_in_bounds.replace(false) {
                     return;
                 }
 
@@ -441,18 +429,6 @@ impl WindowImpl {
                 self.send_event(Event::WindowFocus { focus: false });
             }
 
-            XEvent::PresentCompleteNotify(e) if !self.connection.is_manual_tick() => {
-                if e.kind == CompleteKind::NOTIFY_MSC {
-                    self.handle_frame();
-                    self.connection
-                        .xcb()
-                        .present_notify_msc(self.window_id, 0, 0, 1, 0)
-                        .ok();
-
-                    check_error(self.connection.flush());
-                }
-            }
-
             XEvent::Expose(e) => {
                 self.send_event(Event::WindowInvalidate {
                     top: e.y as u32,
@@ -465,13 +441,10 @@ impl WindowImpl {
             XEvent::DestroyNotify(_) => {
                 self.is_closed.set(true);
                 self.is_destroyed.set(true);
-                self.on_closed.try_send(()).ok();
             }
 
             _ => {}
         }
-
-        self.handle_destroy();
     }
 
     fn handle_modifiers(&self, modifiers: Modifiers) {
@@ -480,17 +453,20 @@ impl WindowImpl {
         }
     }
 
-    fn handle_destroy(&self) {
-        if !self.is_closed.get() || self.is_destroyed.replace(true) {
-            return;
+    fn handle_destroy(self) -> Result<(), Error> {
+        self.handler.take();
+
+        if !self.is_destroyed.get() {
+            self.connection
+                .xcb()
+                .destroy_window(self.window_id)
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
+            self.connection
+                .flush()
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
         }
 
-        // drop the handler here, so it could do clean up when the window is still alive
-        self.handler.take();
-        self.connection.remove_window_event_loop(self.window_id);
-
-        check_error(self.connection.xcb().destroy_window(self.window_id));
-        check_error(self.connection.flush());
+        Ok(())
     }
 
     fn send_event(&self, e: Event) {

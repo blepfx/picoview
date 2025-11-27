@@ -4,20 +4,16 @@ use std::{
     collections::HashMap,
     ffi::{CStr, c_int, c_void},
     os::fd::{AsFd, AsRawFd},
-    sync::{
-        Arc, Mutex, Weak,
-        mpsc::{Receiver, Sender, channel},
-    },
-    thread,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 use x11_dl::xlib::{Display, XErrorEvent, Xlib};
 use x11rb::{
-    connection::{Connection as XConnection, RequestConnection},
+    connection::Connection as XConnection,
     cursor::Handle,
-    errors::ConnectionError,
+    errors::{ConnectionError, ReplyError},
     protocol::{
-        Event, present,
+        Event,
         xproto::{ConnectionExt, Screen, Window},
     },
     resource_manager,
@@ -54,14 +50,10 @@ thread_local! {
 unsafe impl Send for Connection {}
 unsafe impl Sync for Connection {}
 
-pub type WindowHandler = Box<dyn FnMut(Option<&Event>) + Send + 'static>;
 pub struct Connection {
     connection: XCBConnection,
     display: *mut Display,
     screen: c_int,
-
-    loop_manual: bool,
-    event_loop_sender: Sender<(Window, Option<WindowHandler>)>,
 
     atoms: Atoms,
     cursor_handle: Handle,
@@ -72,17 +64,65 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn get() -> Result<Arc<Self>, Error> {
-        static INSTANCE: Mutex<Weak<Connection>> = Mutex::new(Weak::new());
+    pub fn create() -> Result<Arc<Self>, Error> {
+        unsafe {
+            let xlib_xcb = x11_dl::xlib_xcb::Xlib_xcb::open().map_err(|_| {
+                Error::PlatformError(
+                    "No libx11-xcb found, you might need to install a dependency".into(),
+                )
+            })?;
 
-        let mut lock = INSTANCE.lock().expect("poisoned");
-        if let Some(conn) = lock.upgrade() {
-            return Ok(conn);
+            let xlib = x11_dl::xlib::Xlib::open().map_err(|_| {
+                Error::PlatformError(
+                    "No libx11 found, you might need to install a dependency".into(),
+                )
+            })?;
+
+            let display = (xlib.XOpenDisplay)(std::ptr::null());
+            if display.is_null() {
+                return Err(Error::PlatformError("Failed to open X11 display".into()));
+            }
+
+            let xcb_connection = (xlib_xcb.XGetXCBConnection)(display);
+            if xcb_connection.is_null() {
+                return Err(Error::PlatformError("Failed to open XCB connection".into()));
+            }
+
+            (xlib.XSetErrorHandler)(Some(error_handler));
+            (xlib_xcb.XSetEventQueueOwner)(
+                display,
+                x11_dl::xlib_xcb::XEventQueueOwner::XCBOwnsEventQueue,
+            );
+            let screen = (xlib.XDefaultScreen)(display);
+
+            let connection = XCBConnection::from_raw_xcb_connection(xcb_connection as _, false)
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
+            let atoms = Atoms::new(&connection)
+                .map_err(|e| Error::PlatformError(e.to_string()))?
+                .reply()
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
+            let resource_manager = resource_manager::new_from_default(&connection)
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
+            let cursor_handle = Handle::new(&connection, screen as usize, &resource_manager)
+                .map_err(|e| Error::PlatformError(e.to_string()))?
+                .reply()
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
+
+            let connection = Arc::new(Self {
+                xlib: Box::new(xlib),
+
+                connection,
+                display,
+                screen,
+
+                atoms,
+                cursor_handle,
+                cursor_cache: Mutex::new(CursorCache::new()),
+                resource_manager,
+            });
+
+            Ok(connection)
         }
-
-        let conn = Self::create()?;
-        *lock = Arc::downgrade(&conn);
-        Ok(conn)
     }
 
     pub fn last_error(&self) -> Option<String> {
@@ -133,6 +173,10 @@ impl Connection {
             .unwrap_or(96)
     }
 
+    pub fn refresh_rate_for_window(&self, _window: Window) -> Result<Option<f32>, ReplyError> {
+        Ok(Some(60.0)) // TODO: implement
+    }
+
     pub fn raw_connection(&self) -> *mut c_void {
         self.connection.get_raw_xcb_connection()
     }
@@ -150,106 +194,7 @@ impl Connection {
         )
     }
 
-    pub fn is_manual_tick(&self) -> bool {
-        self.loop_manual
-    }
-
-    pub fn add_window_event_loop(&self, window: Window, handler: WindowHandler) {
-        if self
-            .event_loop_sender
-            .send((window, Some(handler)))
-            .is_err()
-        {
-            panic!("event loop is closed?");
-        }
-    }
-
-    pub fn remove_window_event_loop(&self, window: Window) {
-        if self.event_loop_sender.send((window, None)).is_err() {
-            panic!("event loop is closed?");
-        }
-    }
-
-    fn create() -> Result<Arc<Self>, Error> {
-        unsafe {
-            let xlib_xcb = x11_dl::xlib_xcb::Xlib_xcb::open().map_err(|_| {
-                Error::PlatformError(
-                    "No libx11-xcb found, you might need to install a dependency".into(),
-                )
-            })?;
-            let xlib = x11_dl::xlib::Xlib::open().map_err(|_| {
-                Error::PlatformError(
-                    "No libx11 found, you might need to install a dependency".into(),
-                )
-            })?;
-
-            let display = (xlib.XOpenDisplay)(std::ptr::null());
-            if display.is_null() {
-                return Err(Error::PlatformError("Failed to open X11 display".into()));
-            }
-
-            let xcb_connection = (xlib_xcb.XGetXCBConnection)(display);
-            if xcb_connection.is_null() {
-                return Err(Error::PlatformError("Failed to open XCB connection".into()));
-            }
-
-            (xlib.XSetErrorHandler)(Some(error_handler));
-            (xlib_xcb.XSetEventQueueOwner)(
-                display,
-                x11_dl::xlib_xcb::XEventQueueOwner::XCBOwnsEventQueue,
-            );
-            let screen = (xlib.XDefaultScreen)(display);
-
-            let connection = XCBConnection::from_raw_xcb_connection(xcb_connection as _, false)
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-            let atoms = Atoms::new(&connection)
-                .map_err(|e| Error::PlatformError(e.to_string()))?
-                .reply()
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-            let resource_manager = resource_manager::new_from_default(&connection)
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-            let cursor_handle = Handle::new(&connection, screen as usize, &resource_manager)
-                .map_err(|e| Error::PlatformError(e.to_string()))?
-                .reply()
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-            let ext_present = connection
-                .extension_information(present::X11_EXTENSION_NAME)
-                .ok()
-                .flatten()
-                .is_some();
-
-            // TODO: find a proper way to fix frame sync on xwayland
-            let is_xwayland = connection
-                .extension_information("XWAYLAND")
-                .ok()
-                .flatten()
-                .is_some();
-
-            let (loop_sender, loop_receiver) = channel();
-            let connection = Arc::new(Self {
-                xlib: Box::new(xlib),
-
-                connection,
-                display,
-                screen,
-
-                loop_manual: !ext_present || is_xwayland,
-                event_loop_sender: loop_sender,
-
-                atoms,
-                cursor_handle,
-                cursor_cache: Mutex::new(CursorCache::new()),
-                resource_manager,
-            });
-
-            run_event_loop(Arc::downgrade(&connection), loop_receiver);
-
-            Ok(connection)
-        }
-    }
-
-    fn poll_event_single(
+    pub fn poll_event_timeout(
         &self,
         timeout: Option<Duration>,
     ) -> Result<Option<Event>, ConnectionError> {
@@ -289,67 +234,6 @@ impl Drop for Connection {
             (self.xlib.XCloseDisplay)(self.display);
         }
     }
-}
-
-fn run_event_loop(
-    connection: Weak<Connection>,
-    handler_receiver: Receiver<(Window, Option<WindowHandler>)>,
-) {
-    const FRAME_INTERVAL: Duration = Duration::from_micros(16_666);
-    const FRAME_PADDING: Duration = Duration::from_micros(200);
-
-    let mut event_timer = Instant::now();
-    let mut event_handlers = HashMap::new();
-
-    thread::spawn(move || {
-        while let Some(connection) = connection.upgrade() {
-            let deadline = if connection.is_manual_tick() {
-                if Instant::now() >= event_timer {
-                    event_timer = Instant::max(
-                        event_timer + FRAME_INTERVAL,
-                        Instant::now() - FRAME_INTERVAL,
-                    );
-                }
-                Some(event_timer)
-            } else {
-                None
-            };
-
-            let timeout =
-                deadline.map(|t| t.saturating_duration_since(Instant::now()) + FRAME_PADDING);
-
-            let event = match connection.poll_event_single(timeout) {
-                Ok(event) => event,
-                Err(e) => {
-                    if cfg!(debug_assertions) {
-                        panic!("x11 event loop error: {:?}", e);
-                    }
-
-                    continue;
-                }
-            };
-
-            while let Ok((window, handler)) = handler_receiver.try_recv() {
-                match handler {
-                    Some(handler) => event_handlers.insert(window, handler),
-                    None => event_handlers.remove(&window),
-                };
-            }
-
-            match event.as_ref().and_then(event_window_id) {
-                Some(window) => {
-                    if let Some(handler) = event_handlers.get_mut(&window) {
-                        handler(event.as_ref());
-                    }
-                }
-                None => {
-                    for (_, handler) in event_handlers.iter_mut() {
-                        handler(event.as_ref());
-                    }
-                }
-            };
-        }
-    });
 }
 
 unsafe extern "C" fn error_handler(_dpy: *mut Display, err: *mut XErrorEvent) -> i32 {
@@ -457,42 +341,4 @@ impl CursorCache {
 
         None
     }
-}
-
-fn event_window_id(event: &Event) -> Option<Window> {
-    Some(match event {
-        Event::ButtonPress(e) => e.event,
-        Event::ButtonRelease(e) => e.event,
-        Event::CirculateNotify(e) => e.window,
-        Event::CirculateRequest(e) => e.window,
-        Event::ClientMessage(e) => e.window,
-        Event::ColormapNotify(e) => e.window,
-        Event::ConfigureNotify(e) => e.event,
-        Event::ConfigureRequest(e) => e.window,
-        Event::CreateNotify(e) => e.window,
-        Event::DestroyNotify(e) => e.window,
-        Event::EnterNotify(e) => e.event,
-        Event::Expose(e) => e.window,
-        Event::FocusIn(e) => e.event,
-        Event::FocusOut(e) => e.event,
-        Event::GravityNotify(e) => e.window,
-        Event::KeyPress(e) => e.event,
-        Event::KeyRelease(e) => e.event,
-        Event::LeaveNotify(e) => e.event,
-        Event::MapNotify(e) => e.window,
-        Event::MapRequest(e) => e.window,
-        Event::MotionNotify(e) => e.event,
-        Event::PropertyNotify(e) => e.window,
-        Event::ReparentNotify(e) => e.window,
-        Event::ResizeRequest(e) => e.window,
-        Event::UnmapNotify(e) => e.window,
-        Event::VisibilityNotify(e) => e.window,
-        Event::PresentCompleteNotify(e) => e.window,
-        Event::PresentConfigureNotify(e) => e.window,
-        Event::PresentIdleNotify(e) => e.window,
-        Event::PresentRedirectNotify(e) => e.window,
-        Event::XfixesCursorNotify(e) => e.window,
-        Event::XfixesSelectionNotify(e) => e.window,
-        _ => return None,
-    })
 }

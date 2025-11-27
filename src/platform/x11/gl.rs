@@ -4,16 +4,13 @@ use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
 use std::fmt::Debug;
 use std::os::raw::{c_int, c_ulong};
-use std::ptr::{null, null_mut};
+use std::ptr::null;
 use std::sync::Arc;
 use x11_dl::glx;
 use x11_dl::xlib;
 
 const GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20B2;
 const CONTEXT_ES2_PROFILE_BIT_EXT: i32 = 0x00000004;
-
-type GlXSwapIntervalEXT =
-    unsafe extern "C" fn(dpy: *mut xlib::Display, drawable: glx::GLXDrawable, interval: i32);
 type GlXCreateContextAttribsARB = unsafe extern "C" fn(
     dpy: *mut xlib::Display,
     fbc: glx::GLXFBConfig,
@@ -63,9 +60,6 @@ impl GlContext {
 
             let ext_es_support = extensions.contains("GLX_EXT_create_context_es2_profile")
                 || extensions.contains("GLX_EXT_create_context_es_profile");
-            let ext_swap_control = extensions.contains("GLX_EXT_swap_control")
-                || extensions.contains("GLX_SGI_swap_control")
-                || extensions.contains("GLX_MESA_swap_control");
             let ext_multisample = version >= (1, 4) || extensions.contains("GLX_ARB_multisample");
             let ext_framebuffer_srgb = extensions.contains("GLX_ARB_framebuffer_sRGB")
                 || extensions.contains("GLX_EXT_framebuffer_sRGB");
@@ -204,21 +198,6 @@ impl GlContext {
             if context.is_null() {
                 return Err(Error::OpenGlError("GLX context creation error".into()));
             }
-
-            if ext_swap_control {
-                let glXSwapIntervalEXT =
-                    (lib_glx.glXGetProcAddress)(c"glXSwapIntervalEXT".as_ptr() as *const _)
-                        .map(|addr| std::mem::transmute::<_, GlXSwapIntervalEXT>(addr));
-
-                if let Some(glXSwapIntervalEXT) = glXSwapIntervalEXT
-                    && (lib_glx.glXMakeCurrent)(connection.raw_display(), window, context) != 0
-                {
-                    glXSwapIntervalEXT(connection.raw_display(), window, 0);
-                    (lib_glx.glXMakeCurrent)(connection.raw_display(), 0, null_mut());
-                }
-            }
-
-            check_error(&connection)?;
 
             Ok(GlContext {
                 connection,
