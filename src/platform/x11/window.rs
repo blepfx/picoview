@@ -38,8 +38,7 @@ pub struct WindowImpl {
     is_closed: Cell<bool>,
     is_destroyed: Cell<bool>,
     is_resizeable: bool,
-
-    refresh_interval: Cell<Duration>,
+    refresh_interval: Duration,
 
     last_modifiers: Cell<Modifiers>,
     last_cursor: Cell<MouseCursor>,
@@ -205,11 +204,8 @@ impl WindowImpl {
         };
 
         let refresh_interval = {
-            let rate = connection
-                .refresh_rate_for_window(window_id)
-                .map_err(|e| Error::PlatformError(e.to_string()))?
-                .unwrap_or(60.0);
-            Duration::from_secs_f32(1.0 / rate)
+            let rate = connection.refresh_rate().ok().flatten().unwrap_or(60.0);
+            Duration::from_secs_f64(1.0 / rate)
         };
 
         connection
@@ -223,7 +219,7 @@ impl WindowImpl {
             is_closed: Cell::new(false),
             is_destroyed: Cell::new(false),
             is_resizeable: options.resizable.is_some(),
-            refresh_interval: Cell::new(refresh_interval),
+            refresh_interval,
 
             last_modifiers: Cell::new(Modifiers::empty()),
             last_cursor: Cell::new(MouseCursor::Default),
@@ -264,11 +260,11 @@ impl WindowImpl {
         while !self.is_closed.get() {
             let curr_frame = Instant::now();
             let wait_time = match next_frame.checked_duration_since(curr_frame) {
-                Some(wait_time) => wait_time + Duration::from_millis(1),
+                Some(wait_time) => wait_time,
                 None => {
-                    next_frame = (next_frame + self.refresh_interval.get()).max(curr_frame);
+                    next_frame = (next_frame + self.refresh_interval).max(curr_frame);
                     self.handle_frame();
-                    Duration::ZERO
+                    continue;
                 }
             };
 

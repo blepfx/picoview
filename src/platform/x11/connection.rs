@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     ffi::{CStr, c_int, c_void},
     os::fd::AsRawFd,
+    ptr::null,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -14,7 +15,8 @@ use x11rb::{
     errors::{ConnectionError, ReplyError},
     protocol::{
         Event,
-        xproto::{ConnectionExt, Screen, Window},
+        randr::ConnectionExt,
+        xproto::{ConnectionExt as RandrConnectionExt, Screen},
     },
     resource_manager,
     xcb_ffi::XCBConnection,
@@ -177,8 +179,31 @@ impl Connection {
             .unwrap_or(96)
     }
 
-    pub fn refresh_rate_for_window(&self, _window: Window) -> Result<Option<f32>, ReplyError> {
-        Ok(Some(60.0)) // TODO: implement
+    pub fn refresh_rate(&self) -> Result<Option<f64>, ReplyError> {
+        let screen_resources = self
+            .connection
+            .randr_get_screen_resources_current(self.default_root().root)?
+            .reply()?;
+
+        let mut max_rate: Option<f64> = None;
+        for crtc in screen_resources.crtcs.iter() {
+            let crtc_info = self
+                .connection
+                .randr_get_crtc_info(*crtc, screen_resources.config_timestamp)?
+                .reply()?;
+
+            if crtc_info.mode != 0 {
+                for mode in screen_resources.modes.iter() {
+                    if mode.id == crtc_info.mode {
+                        let rate =
+                            mode.dot_clock as f64 / (mode.htotal as f64 * mode.vtotal as f64);
+                        max_rate = max_rate.map(|prev| prev.max(rate)).or(Some(rate));
+                    }
+                }
+            }
+        }
+
+        Ok(max_rate)
     }
 
     pub fn raw_connection(&self) -> *mut c_void {
@@ -202,19 +227,28 @@ impl Connection {
         &self,
         timeout: Option<Duration>,
     ) -> Result<Option<Event>, ConnectionError> {
+        let timeout = match timeout {
+            Some(timeout) => timeout,
+            None => return self.connection.wait_for_event().map(Some),
+        };
+
         if let Some(event) = self.connection.poll_for_event()? {
             return Ok(Some(event));
         }
 
         let result = unsafe {
-            libc::poll(
+            libc::ppoll(
                 &mut libc::pollfd {
                     fd: self.connection.as_raw_fd(),
                     events: libc::POLLIN,
                     revents: 0,
                 },
                 1 as _,
-                timeout.map(|x| x.as_millis() as i32).unwrap_or(-1) as _,
+                &libc::timespec {
+                    tv_sec: timeout.as_secs() as _,
+                    tv_nsec: timeout.subsec_nanos() as _,
+                },
+                null(),
             )
         };
 
