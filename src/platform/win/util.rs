@@ -3,13 +3,10 @@ use std::{
     ffi::{CStr, OsString},
     os::windows::ffi::OsStrExt,
     ptr::null_mut,
-    thread::sleep,
-    time::Duration,
 };
 use windows_sys::{
     Win32::{
         Foundation::{GetLastError, HINSTANCE, HWND, POINT, RECT},
-        Graphics::Dwm::{DwmFlush, DwmIsCompositionEnabled},
         System::{
             Com::CoCreateGuid,
             Diagnostics::Debug::{
@@ -102,11 +99,11 @@ pub unsafe fn from_widestring(wide: *const u16) -> String {
     }
 }
 
-unsafe extern "C" {
-    static __ImageBase: IMAGE_DOS_HEADER;
-}
-
 pub fn hinstance() -> HINSTANCE {
+    unsafe extern "C" {
+        unsafe static __ImageBase: IMAGE_DOS_HEADER;
+    }
+
     unsafe { &__ImageBase as *const IMAGE_DOS_HEADER as _ }
 }
 
@@ -142,21 +139,6 @@ pub fn check_error(assert: bool, message: &'static str) -> Result<(), crate::Err
     }
 
     Ok(())
-}
-
-pub fn wait_vsync() {
-    let waited = unsafe {
-        let mut pfenabled = 0;
-        if DwmIsCompositionEnabled(&mut pfenabled) == 0 && pfenabled != 0 {
-            DwmFlush() == 0
-        } else {
-            false
-        }
-    };
-
-    if !waited {
-        sleep(Duration::from_millis(16));
-    }
 }
 
 pub fn scan_code_to_key(scan_code: u32) -> Option<Key> {

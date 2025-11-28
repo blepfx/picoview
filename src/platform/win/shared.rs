@@ -1,7 +1,4 @@
-use super::{
-    util::{load_function_dynamic, wait_vsync},
-    window::WM_USER_FRAME_PACER,
-};
+use super::util::load_function_dynamic;
 use crate::{
     Error, MouseCursor,
     platform::win::{
@@ -12,11 +9,7 @@ use crate::{
 use std::{
     mem::zeroed,
     ptr::null_mut,
-    sync::{
-        Arc, Mutex, Weak,
-        mpsc::{Receiver, Sender, TryRecvError, channel},
-    },
-    thread::spawn,
+    sync::{Arc, Mutex, Weak},
 };
 use windows_sys::{
     Win32::{
@@ -39,8 +32,6 @@ unsafe impl Sync for Win32Shared {}
 pub struct Win32Shared {
     cursor_cache: CursorCache,
     keyboard_hook: HHOOK,
-
-    loop_sender: Sender<(usize, bool)>,
 
     dl_set_thread_dpi_awareness_context: Option<unsafe fn(usize) -> usize>,
     dl_get_dpi_for_window: Option<unsafe fn(HWND) -> u32>,
@@ -83,21 +74,10 @@ impl Win32Shared {
         }
     }
 
-    pub fn register_pacer(&self, window: HWND) {
-        let _ = self.loop_sender.send((window as usize, true));
-    }
-
-    pub fn unregister_pacer(&self, window: HWND) {
-        let _ = self.loop_sender.send((window as usize, false));
-    }
-
     fn create() -> Result<Arc<Self>, Error> {
         unsafe {
-            let (loop_sender, loop_receiver) = channel();
-
             let conn = Arc::new(Self {
                 cursor_cache: CursorCache::load(),
-                loop_sender,
 
                 keyboard_hook: SetWindowsHookExW(
                     WH_GETMESSAGE,
@@ -113,7 +93,6 @@ impl Win32Shared {
                 dl_get_dpi_for_window: load_function_dynamic(c"user32.dll", c"GetDpiForWindow"),
             });
 
-            run_pacer_loop(loop_receiver);
             Ok(conn)
         }
     }
@@ -125,36 +104,6 @@ impl Drop for Win32Shared {
             UnhookWindowsHookEx(self.keyboard_hook);
         }
     }
-}
-
-fn run_pacer_loop(loop_receiver: Receiver<(usize, bool)>) {
-    let mut pacers = vec![];
-
-    spawn(move || {
-        loop {
-            match loop_receiver.try_recv() {
-                Ok((hwnd, true)) => {
-                    pacers.push(hwnd);
-                }
-                Ok((hwnd, false)) => {
-                    if let Some(index) = pacers.iter().position(|x| *x == hwnd) {
-                        pacers.swap_remove(index);
-                    }
-                }
-                Err(TryRecvError::Disconnected) => break,
-                Err(TryRecvError::Empty) => {}
-            }
-
-            for hwnd in pacers.iter() {
-                let hwnd = *hwnd as HWND;
-                unsafe {
-                    SendMessageW(hwnd, WM_USER_FRAME_PACER, 0, 0);
-                }
-            }
-
-            wait_vsync();
-        }
-    });
 }
 
 unsafe extern "system" fn keyboard_hook_proc(

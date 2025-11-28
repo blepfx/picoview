@@ -8,7 +8,10 @@ use super::{
 };
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
-    platform::{OpenMode, win::util::window_size_from_client_size},
+    platform::{
+        OpenMode,
+        win::{util::window_size_from_client_size, vsync::VSyncCallback},
+    },
     rwh_06,
 };
 use std::{
@@ -41,16 +44,16 @@ use windows_sys::Win32::{
             SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
             SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetWindowLongPtrW, SetWindowPos,
             SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA,
-            WM_DESTROY, WM_DPICHANGED, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-            WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
-            WM_SIZE, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD,
-            WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_VISIBLE, XBUTTON1, XBUTTON2,
+            WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_KILLFOCUS,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
+            WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
+            WS_CHILD, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_VISIBLE, XBUTTON1, XBUTTON2,
         },
     },
 };
 
-pub const WM_USER_FRAME_PACER: u32 = WM_USER + 1;
+pub const WM_USER_VSYNC: u32 = WM_USER + 1;
 pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
 pub const WM_USER_KEY_DOWN: u32 = WM_USER + 3;
 pub const WM_USER_KEY_UP: u32 = WM_USER + 4;
@@ -66,6 +69,7 @@ pub struct WindowImpl {
 
     window_hwnd: HWND,
     window_class: u16,
+    vsync_callback: VSyncCallback,
 
     owns_event_loop: bool,
     min_window_size: POINT,
@@ -189,6 +193,7 @@ impl WindowImpl {
                 state_current_modifiers: Cell::new(Modifiers::empty()),
                 state_focused: Cell::new(false),
 
+                vsync_callback: VSyncCallback::new(hwnd),
                 window_class,
                 window_hwnd: hwnd,
 
@@ -201,6 +206,7 @@ impl WindowImpl {
                         .unwrap_or(Size::MAX),
                     dwstyle,
                 ),
+
                 min_window_size: window_size_from_client_size(
                     options
                         .resizable
@@ -228,7 +234,6 @@ impl WindowImpl {
             });
 
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(window) as _);
-            shared.register_pacer(hwnd);
 
             if matches!(mode, OpenMode::Blocking) {
                 run_event_loop(null_mut());
@@ -269,7 +274,6 @@ impl Drop for WindowImpl {
         unsafe {
             SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
             UnregisterClassW(self.window_class as _, hinstance());
-            self.shared.unregister_pacer(self.window_hwnd);
         }
     }
 }
@@ -462,10 +466,22 @@ unsafe extern "system" fn wnd_proc(
             WM_MOVE => {
                 let x = ((lparam >> 0) & 0xFFFF) as i16 as f32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
+
+                window.vsync_callback.notify_moved();
                 window.send_event_defer(Event::WindowMove {
                     origin: Point { x, y },
                 });
 
+                0
+            }
+
+            WM_SHOWWINDOW => {
+                window.vsync_callback.notify_display_change();
+                0
+            }
+
+            WM_DISPLAYCHANGE => {
+                window.vsync_callback.notify_display_change();
                 0
             }
 
@@ -476,6 +492,7 @@ unsafe extern "system" fn wnd_proc(
                     size: Size { width, height },
                 });
 
+                window.vsync_callback.notify_display_change();
                 0
             }
 
@@ -660,7 +677,7 @@ unsafe extern "system" fn wnd_proc(
                 if capture { 1 } else { 0 }
             }
 
-            WM_USER_FRAME_PACER => {
+            WM_USER_VSYNC => {
                 let modifiers = get_modifiers_async();
 
                 if window.state_current_modifiers.replace(modifiers) != modifiers {
