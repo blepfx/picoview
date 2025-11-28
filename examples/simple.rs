@@ -1,4 +1,4 @@
-use picoview::{Event, MouseCursor, Point, Size, Window, WindowBuilder};
+use picoview::{Event, MouseCursor, Point, Size, WindowBuilder};
 use std::time::{Duration, Instant};
 
 fn main() {
@@ -10,8 +10,7 @@ fn main() {
         println!("clipboard contents: {:?}", window.get_clipboard_text());
         window.set_clipboard_text("test");
 
-        // you *have* to make both types explicit otherwise rust complains
-        move |event: Event<'_>, window: Window<'_>| match event {
+        Box::new(move |event| match event {
             Event::WindowFrame { .. } => {
                 let current = Instant::now();
                 let passed = |d| {
@@ -28,13 +27,13 @@ fn main() {
                     });
 
                     WindowBuilder::new(|_| {
-                        |event: Event<'_>, _: Window<'_>| {
+                        Box::new(|event| {
                             if !matches!(event, Event::WindowFrame { .. }) {
                                 println!("child {:?}", event);
                             }
-                        }
+                        })
                     })
-                    .open_parented(&window)
+                    .open_parented(window)
                     .expect("failed to open a child window");
                 }
 
@@ -58,7 +57,7 @@ fn main() {
             _ => {
                 println!("{:?}", event);
             }
-        }
+        })
     })
     .with_title("picoview - simple")
     .with_size((200, 200))

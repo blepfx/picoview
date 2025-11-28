@@ -1,9 +1,9 @@
-use picoview::{Event, GlConfig, GlFormat, GlVersion, Point, Window, WindowBuilder};
+use picoview::{Event, GlConfig, GlFormat, GlVersion, Point, WindowBuilder};
 use std::mem::transmute;
 
 fn main() {
-    WindowBuilder::new(|_| {
-        move |event: Event<'_>, window: Window<'_>| match event {
+    WindowBuilder::new(|window| {
+        Box::new(move |event| match event {
             Event::WindowFrame { gl: Some(gl) } => unsafe {
                 let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
                     transmute(gl.get_proc_address(c"glClearColor"));
@@ -34,7 +34,7 @@ fn main() {
             }
 
             _ => {}
-        }
+        })
     })
     .with_opengl(GlConfig {
         version: GlVersion::Core(3, 1),

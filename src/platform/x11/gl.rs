@@ -65,7 +65,7 @@ impl GlContext {
                 || extensions.contains("GLX_EXT_framebuffer_sRGB");
             let ext_context = extensions.contains("GLX_ARB_create_context");
 
-            let (fb_config, fb_visual) = {
+            let (fb_config, fb_config_list, fb_visual) = {
                 let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
 
                 let mut fb_attribs = vec![
@@ -109,18 +109,18 @@ impl GlContext {
                 fb_attribs.push(0);
 
                 let mut n_configs = 0;
-                let fb_config = (lib_glx.glXChooseFBConfig)(
+                let fb_config_list = (lib_glx.glXChooseFBConfig)(
                     connection.raw_display(),
                     connection.default_screen_index(),
                     fb_attribs.as_ptr(),
                     &mut n_configs,
                 );
 
-                if n_configs <= 0 || fb_config.is_null() {
+                if n_configs <= 0 || fb_config_list.is_null() {
                     return Err(Error::OpenGlError("no matching config".into()));
                 }
 
-                let fb_config = *fb_config;
+                let fb_config = *fb_config_list;
                 let fb_visual =
                     (lib_glx.glXGetVisualFromFBConfig)(connection.raw_display(), fb_config);
                 if fb_visual.is_null() {
@@ -129,7 +129,7 @@ impl GlContext {
 
                 check_error(&connection)?;
 
-                (fb_config, fb_visual)
+                (fb_config, fb_config_list, fb_visual)
             };
 
             let glXCreateContextAttribsARB = ext_context
@@ -192,6 +192,9 @@ impl GlContext {
                     1,
                 )
             };
+
+            (connection.xlib().XFree)(fb_visual as *mut _);
+            (connection.xlib().XFree)(fb_config_list as *mut _);
 
             check_error(&connection)?;
 

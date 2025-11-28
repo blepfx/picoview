@@ -1,15 +1,13 @@
 use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, platform, rwh_06};
 use std::{fmt::Debug, ops::Range};
 
-pub trait WindowHandler: 'static {
-    fn on_event(&mut self, event: Event, window: Window);
-}
-
-impl<H: FnMut(Event, Window) + 'static> WindowHandler for H {
-    fn on_event(&mut self, event: Event, window: Window) {
-        (self)(event, window);
-    }
-}
+// the reason this is a box is because making this with traits is extremely annoying,
+// especially when closures are involved
+// https://github.com/rust-lang/rust/issues/70263
+//
+// performance overhead of dynamic dispatch is extremely low anyway
+pub type WindowFactory =
+    Box<dyn for<'a> FnOnce(Window<'a>) -> Box<dyn FnMut(Event) + 'a> + Send + 'static>;
 
 #[non_exhaustive]
 pub struct WindowBuilder {
@@ -24,12 +22,13 @@ pub struct WindowBuilder {
     pub position: Option<Point>,
     pub opengl: Option<GlConfig>,
 
-    #[allow(clippy::type_complexity)]
-    pub factory: Box<dyn (FnOnce(Window) -> Box<dyn WindowHandler>) + Send>,
+    pub factory: WindowFactory,
 }
 
 impl WindowBuilder {
-    pub fn new<W: WindowHandler>(factory: impl FnOnce(Window) -> W + Send + 'static) -> Self {
+    pub fn new(
+        factory: impl for<'a> FnOnce(Window<'a>) -> Box<dyn FnMut(Event) + 'a> + Send + 'static,
+    ) -> Self {
         Self {
             visible: true,
             decorations: true,
@@ -43,7 +42,7 @@ impl WindowBuilder {
 
             position: None,
             opengl: None,
-            factory: Box::new(|w| Box::new((factory)(w))),
+            factory: Box::new(factory),
         }
     }
 
@@ -108,6 +107,7 @@ impl WindowBuilder {
 }
 
 #[repr(transparent)]
+#[derive(Clone, Copy)]
 pub struct Window<'a>(pub(crate) &'a dyn platform::OsWindow);
 
 impl<'a> Window<'a> {

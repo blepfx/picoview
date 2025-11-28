@@ -149,6 +149,10 @@ impl Connection {
         &self.connection
     }
 
+    pub fn xlib(&self) -> &Xlib {
+        &self.xlib
+    }
+
     pub fn atoms(&self) -> &Atoms {
         &self.atoms
     }

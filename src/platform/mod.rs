@@ -21,7 +21,7 @@ pub enum OpenMode {
     Embedded(rwh_06::RawWindowHandle),
 }
 
-pub trait OsWindow {
+pub trait OsWindow /* : !Send + !Sync */ {
     fn window_handle(&self) -> rwh_06::RawWindowHandle;
     fn display_handle(&self) -> rwh_06::RawDisplayHandle;
 

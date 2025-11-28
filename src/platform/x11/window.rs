@@ -5,12 +5,13 @@ use crate::platform::OpenMode;
 use crate::platform::x11::util::check_error;
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
-    WindowHandler, rwh_06,
+    WindowFactory, rwh_06,
 };
 use std::cell::{Cell, RefCell};
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection as XConnection;
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
@@ -46,213 +47,219 @@ pub struct WindowImpl {
     last_window_size: Cell<Option<Size>>,
     last_window_visible: Cell<bool>,
 
-    handler: RefCell<Option<Box<dyn WindowHandler>>>,
+    #[allow(clippy::type_complexity)]
+    handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
     gl_context: Option<GlContext>,
 }
 
 impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
-        unsafe {
-            let connection = Connection::create()?;
+        let connection = Connection::create()?;
 
-            let parent_window_id = match mode {
-                OpenMode::Embedded(rwh_06::RawWindowHandle::Xcb(window)) => window.window.get(),
-                OpenMode::Embedded(rwh_06::RawWindowHandle::Xlib(window)) => window.window as u32,
-                OpenMode::Embedded(_) => {
-                    return Err(Error::InvalidParent);
-                }
-                OpenMode::Blocking => connection.default_root().root,
-            };
-
-            let window_id = connection
-                .xcb()
-                .generate_id()
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-            connection
-                .xcb()
-                .create_window(
-                    COPY_DEPTH_FROM_PARENT,
-                    window_id,
-                    parent_window_id,
-                    0,
-                    0,
-                    options.size.width as _,
-                    options.size.height as _,
-                    0,
-                    WindowClass::INPUT_OUTPUT,
-                    COPY_FROM_PARENT,
-                    &CreateWindowAux::new().event_mask(
-                        EventMask::EXPOSURE
-                            | EventMask::BUTTON_PRESS
-                            | EventMask::BUTTON_RELEASE
-                            | EventMask::STRUCTURE_NOTIFY
-                            | EventMask::KEY_PRESS
-                            | EventMask::KEY_RELEASE
-                            | EventMask::LEAVE_WINDOW
-                            | EventMask::POINTER_MOTION
-                            | EventMask::FOCUS_CHANGE,
-                    ),
-                )
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-            connection
-                .xcb()
-                .change_property32(
-                    PropMode::REPLACE,
-                    window_id,
-                    connection.atoms().WM_PROTOCOLS,
-                    AtomEnum::ATOM,
-                    &[connection.atoms().WM_DELETE_WINDOW],
-                )
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-            let (min_size, max_size) = match options.resizable.clone() {
-                None => (options.size, options.size),
-                Some(range) => (range.start, range.end),
-            };
-
-            let mut size_hints = WmSizeHints::new();
-            size_hints.size = Some((
-                WmSizeHintsSpecification::ProgramSpecified,
-                options.size.width.try_into().unwrap_or(i32::MAX),
-                options.size.height.try_into().unwrap_or(i32::MAX),
-            ));
-            size_hints.max_size = Some((
-                max_size.width.try_into().unwrap_or(i32::MAX),
-                max_size.height.try_into().unwrap_or(i32::MAX),
-            ));
-            size_hints.min_size = Some((
-                min_size.width.try_into().unwrap_or(i32::MAX),
-                min_size.height.try_into().unwrap_or(i32::MAX),
-            ));
-            size_hints
-                .set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS)
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-            connection
-                .xcb()
-                .change_property8(
-                    PropMode::REPLACE,
-                    window_id,
-                    AtomEnum::WM_NAME,
-                    AtomEnum::STRING,
-                    options.title.as_bytes(),
-                )
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-            connection
-                .xcb()
-                .change_property32(
-                    PropMode::REPLACE,
-                    window_id,
-                    connection.atoms()._NET_WM_WINDOW_TYPE,
-                    AtomEnum::ATOM,
-                    &[if options.decorations {
-                        connection.atoms()._NET_WM_WINDOW_TYPE_NORMAL
-                    } else {
-                        connection.atoms()._NET_WM_WINDOW_TYPE_DOCK
-                    }],
-                )
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-            connection
-                .xcb()
-                .change_property32(
-                    PropMode::REPLACE,
-                    window_id,
-                    connection.atoms()._MOTIF_WM_HINTS,
-                    AtomEnum::ATOM,
-                    &[0b10, 0, options.decorations as u32, 0, 0],
-                )
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-            if options.visible {
-                connection
-                    .xcb()
-                    .map_window(window_id)
-                    .map_err(|e| Error::PlatformError(e.to_string()))?;
+        let parent_window_id = match mode {
+            OpenMode::Embedded(rwh_06::RawWindowHandle::Xcb(window)) => window.window.get(),
+            OpenMode::Embedded(rwh_06::RawWindowHandle::Xlib(window)) => window.window as u32,
+            OpenMode::Embedded(_) => {
+                return Err(Error::InvalidParent);
             }
+            OpenMode::Blocking => connection.default_root().root,
+        };
 
-            if let Some(position) = options.position {
-                connection
-                    .xcb()
-                    .configure_window(
-                        window_id,
-                        &ConfigureWindowAux::new()
-                            .x(position.x as i32)
-                            .y(position.y as i32),
-                    )
-                    .map_err(|e| Error::PlatformError(e.to_string()))?;
-            }
+        let window_id = connection
+            .xcb()
+            .generate_id()
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
 
+        connection
+            .xcb()
+            .create_window(
+                COPY_DEPTH_FROM_PARENT,
+                window_id,
+                parent_window_id,
+                0,
+                0,
+                options.size.width as _,
+                options.size.height as _,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new().event_mask(
+                    EventMask::EXPOSURE
+                        | EventMask::BUTTON_PRESS
+                        | EventMask::BUTTON_RELEASE
+                        | EventMask::STRUCTURE_NOTIFY
+                        | EventMask::KEY_PRESS
+                        | EventMask::KEY_RELEASE
+                        | EventMask::LEAVE_WINDOW
+                        | EventMask::POINTER_MOTION
+                        | EventMask::FOCUS_CHANGE,
+                ),
+            )
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
+
+        connection
+            .xcb()
+            .change_property32(
+                PropMode::REPLACE,
+                window_id,
+                connection.atoms().WM_PROTOCOLS,
+                AtomEnum::ATOM,
+                &[connection.atoms().WM_DELETE_WINDOW],
+            )
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
+
+        let (min_size, max_size) = match options.resizable.clone() {
+            None => (options.size, options.size),
+            Some(range) => (range.start, range.end),
+        };
+
+        let mut size_hints = WmSizeHints::new();
+        size_hints.size = Some((
+            WmSizeHintsSpecification::ProgramSpecified,
+            options.size.width.try_into().unwrap_or(i32::MAX),
+            options.size.height.try_into().unwrap_or(i32::MAX),
+        ));
+        size_hints.max_size = Some((
+            max_size.width.try_into().unwrap_or(i32::MAX),
+            max_size.height.try_into().unwrap_or(i32::MAX),
+        ));
+        size_hints.min_size = Some((
+            min_size.width.try_into().unwrap_or(i32::MAX),
+            min_size.height.try_into().unwrap_or(i32::MAX),
+        ));
+        size_hints
+            .set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS)
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
+
+        connection
+            .xcb()
+            .change_property8(
+                PropMode::REPLACE,
+                window_id,
+                AtomEnum::WM_NAME,
+                AtomEnum::STRING,
+                options.title.as_bytes(),
+            )
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
+
+        connection
+            .xcb()
+            .change_property32(
+                PropMode::REPLACE,
+                window_id,
+                connection.atoms()._NET_WM_WINDOW_TYPE,
+                AtomEnum::ATOM,
+                &[if options.decorations {
+                    connection.atoms()._NET_WM_WINDOW_TYPE_NORMAL
+                } else {
+                    connection.atoms()._NET_WM_WINDOW_TYPE_DOCK
+                }],
+            )
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
+
+        connection
+            .xcb()
+            .change_property32(
+                PropMode::REPLACE,
+                window_id,
+                connection.atoms()._MOTIF_WM_HINTS,
+                AtomEnum::ATOM,
+                &[0b10, 0, options.decorations as u32, 0, 0],
+            )
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
+
+        if options.visible {
             connection
-                .flush()
+                .xcb()
+                .map_window(window_id)
                 .map_err(|e| Error::PlatformError(e.to_string()))?;
+        }
 
-            let gl_context = if let Some(config) = options.opengl {
+        if let Some(position) = options.position {
+            connection
+                .xcb()
+                .configure_window(
+                    window_id,
+                    &ConfigureWindowAux::new()
+                        .x(position.x as i32)
+                        .y(position.y as i32),
+                )
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
+        }
+
+        connection
+            .flush()
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
+
+        let gl_context = if let Some(config) = options.opengl {
+            unsafe {
                 match GlContext::new(connection.clone(), window_id as _, config) {
                     Ok(gl) => Some(gl),
                     Err(_) if config.optional => None,
                     Err(e) => return Err(e),
                 }
-            } else {
-                None
-            };
+            }
+        } else {
+            None
+        };
 
-            let refresh_interval = {
-                let rate = connection
-                    .refresh_rate_for_window(window_id)
-                    .map_err(|e| Error::PlatformError(e.to_string()))?
-                    .unwrap_or(60.0);
-                Duration::from_secs_f32(1.0 / rate)
-            };
+        let refresh_interval = {
+            let rate = connection
+                .refresh_rate_for_window(window_id)
+                .map_err(|e| Error::PlatformError(e.to_string()))?
+                .unwrap_or(60.0);
+            Duration::from_secs_f32(1.0 / rate)
+        };
 
-            connection
-                .flush()
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
+        connection
+            .flush()
+            .map_err(|e| Error::PlatformError(e.to_string()))?;
 
-            let window = Self {
-                window_id,
-                connection: connection.clone(),
+        let window = Box::new(Self {
+            window_id,
+            connection: connection.clone(),
 
-                is_closed: Cell::new(false),
-                is_destroyed: Cell::new(false),
-                is_resizeable: options.resizable.is_some(),
-                refresh_interval: Cell::new(refresh_interval),
+            is_closed: Cell::new(false),
+            is_destroyed: Cell::new(false),
+            is_resizeable: options.resizable.is_some(),
+            refresh_interval: Cell::new(refresh_interval),
 
-                last_modifiers: Cell::new(Modifiers::empty()),
-                last_cursor: Cell::new(MouseCursor::Default),
-                last_window_position: Cell::new(None),
-                last_window_size: Cell::new(None),
-                last_window_visible: Cell::new(options.visible),
-                last_cursor_in_bounds: Cell::new(false),
+            last_modifiers: Cell::new(Modifiers::empty()),
+            last_cursor: Cell::new(MouseCursor::Default),
+            last_window_position: Cell::new(None),
+            last_window_size: Cell::new(None),
+            last_window_visible: Cell::new(options.visible),
+            last_cursor_in_bounds: Cell::new(false),
 
-                handler: RefCell::new(None),
-                gl_context,
-            };
+            handler: RefCell::new(None),
+            gl_context,
+        });
 
-            window
-                .handler
-                .replace(Some((options.factory)(Window(&window))));
-
-            window.send_event(Event::WindowScale {
-                scale: connection.os_scale_dpi() as f32 / 96.0,
-            });
-
-            match mode {
-                OpenMode::Blocking => window.run_event_loop(),
-                OpenMode::Embedded(..) => {
-                    std::thread::spawn(|| window.run_event_loop().ok());
-                    Ok(())
-                }
+        match mode {
+            OpenMode::Blocking => window.run_event_loop(options.factory),
+            OpenMode::Embedded(..) => {
+                thread::spawn(|| window.run_event_loop(options.factory).ok());
+                Ok(())
             }
         }
     }
 
-    fn run_event_loop(self) -> Result<(), Error> {
-        let mut next_frame = Instant::now();
+    fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), Error> {
+        // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so because:
+        //  - because our window instance is boxed, it has a stable address for the whole lifetime of the window
+        //  - we manually dispose of our handler before WindowImpl gets dropped (see drop impl)
+        //  - we promise to not move WindowImpl (and by extension the handler) to a different thread (as that would violate WindowHandler !Send requirement)
+        unsafe {
+            self.handler
+                .replace(Some((factory)(Window(&*(&*self as *const Self)))));
+        }
 
+        self.send_event(Event::WindowScale {
+            scale: self.connection.os_scale_dpi() as f32 / 96.0,
+        });
+
+        // main loop
+        let mut next_frame = Instant::now();
         while !self.is_closed.get() {
             let curr_frame = Instant::now();
             let wait_time = match next_frame.checked_duration_since(curr_frame) {
@@ -271,7 +278,20 @@ impl WindowImpl {
             }
         }
 
-        self.handle_destroy()
+        // destroy logic
+        self.handler.take();
+
+        if !self.is_destroyed.get() {
+            self.connection
+                .xcb()
+                .destroy_window(self.window_id)
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
+            self.connection
+                .flush()
+                .map_err(|e| Error::PlatformError(e.to_string()))?;
+        }
+
+        Ok(())
     }
 
     fn handle_frame(&self) {
@@ -462,25 +482,9 @@ impl WindowImpl {
         }
     }
 
-    fn handle_destroy(self) -> Result<(), Error> {
-        self.handler.take();
-
-        if !self.is_destroyed.get() {
-            self.connection
-                .xcb()
-                .destroy_window(self.window_id)
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-            self.connection
-                .flush()
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-        }
-
-        Ok(())
-    }
-
     fn send_event(&self, e: Event) {
         if let Some(handler) = &mut *self.handler.borrow_mut() {
-            handler.on_event(e, Window(self))
+            handler(e)
         }
     }
 }
@@ -648,5 +652,12 @@ impl crate::platform::OsWindow for WindowImpl {
 
     fn set_clipboard_text(&self, _text: &str) -> bool {
         false
+    }
+}
+
+impl Drop for WindowImpl {
+    fn drop(&mut self) {
+        // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends on WindowImpl
+        self.handler.take();
     }
 }
