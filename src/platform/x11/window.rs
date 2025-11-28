@@ -84,8 +84,7 @@ impl WindowImpl {
                 WindowClass::INPUT_OUTPUT,
                 COPY_FROM_PARENT,
                 &CreateWindowAux::new().event_mask(
-                    EventMask::EXPOSURE
-                        | EventMask::BUTTON_PRESS
+                    EventMask::BUTTON_PRESS
                         | EventMask::BUTTON_RELEASE
                         | EventMask::STRUCTURE_NOTIFY
                         | EventMask::KEY_PRESS
@@ -453,15 +452,6 @@ impl WindowImpl {
 
             XEvent::FocusOut(_) => {
                 self.send_event(Event::WindowFocus { focus: false });
-            }
-
-            XEvent::Expose(e) => {
-                self.send_event(Event::WindowInvalidate {
-                    top: e.y as u32,
-                    left: e.x as u32,
-                    bottom: e.y as u32 + e.height as u32,
-                    right: e.x as u32 + e.width as u32,
-                });
             }
 
             XEvent::DestroyNotify(_) => {

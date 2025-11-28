@@ -244,72 +244,24 @@ pub enum Key {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Event<'a> {
-    WindowFocus {
-        focus: bool,
-    },
-
-    WindowScale {
-        scale: f32,
-    },
-
-    WindowMove {
-        origin: Point,
-    },
-
-    WindowResize {
-        size: Size,
-    },
-
-    WindowInvalidate {
-        top: u32,
-        left: u32,
-        bottom: u32,
-        right: u32,
-    },
-
-    WindowFrame {
-        gl: Option<&'a dyn GlContext>,
-    },
-
-    MouseMove {
-        relative: Point,
-        absolute: Point,
-    },
+    WindowFocus { focus: bool },
+    WindowScale { scale: f32 },
+    WindowMove { origin: Point },
+    WindowResize { size: Size },
+    WindowFrame { gl: Option<&'a dyn GlContext> },
 
     MouseLeave,
-    MouseDown {
-        button: MouseButton,
-    },
-    MouseUp {
-        button: MouseButton,
-    },
-    MouseScroll {
-        x: f32,
-        y: f32,
-    },
+    MouseMove { relative: Point, absolute: Point },
+    MouseDown { button: MouseButton },
+    MouseUp { button: MouseButton },
+    MouseScroll { x: f32, y: f32 },
 
-    KeyModifiers {
-        modifiers: Modifiers,
-    },
+    KeyModifiers { modifiers: Modifiers },
+    KeyDown { key: Key, capture: &'a mut bool },
+    KeyUp { key: Key, capture: &'a mut bool },
 
-    KeyDown {
-        key: Key,
-        capture: &'a mut bool,
-    },
-
-    KeyUp {
-        key: Key,
-        capture: &'a mut bool,
-    },
-
-    DragHover {
-        files: &'a [PathBuf],
-    },
-
-    DragAccept {
-        files: &'a [PathBuf],
-    },
-
+    DragHover { files: &'a [PathBuf] },
+    DragAccept { files: &'a [PathBuf] },
     DragCancel,
 }
 
