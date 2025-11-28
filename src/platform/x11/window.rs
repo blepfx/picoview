@@ -248,7 +248,7 @@ impl WindowImpl {
         // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so because:
         //  - because our window instance is boxed, it has a stable address for the whole lifetime of the window
         //  - we manually dispose of our handler before WindowImpl gets dropped (see drop impl)
-        //  - we promise to not move WindowImpl (and by extension the handler) to a different thread (as that would violate WindowHandler !Send requirement)
+        //  - we promise to not move WindowImpl (and by extension the handler) to a different thread (as that would violate the handler's !Send requirement)
         unsafe {
             self.handler
                 .replace(Some((factory)(Window(&*(&*self as *const Self)))));
