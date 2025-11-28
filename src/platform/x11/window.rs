@@ -37,8 +37,9 @@ pub struct WindowImpl {
 
     is_closed: Cell<bool>,
     is_destroyed: Cell<bool>,
-    refresh_interval: Cell<Duration>,
     is_resizeable: bool,
+
+    refresh_interval: Cell<Duration>,
 
     last_modifiers: Cell<Modifiers>,
     last_cursor: Cell<MouseCursor>,

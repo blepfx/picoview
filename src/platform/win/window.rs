@@ -8,7 +8,6 @@ use super::{
 };
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
-    WindowHandler,
     platform::{OpenMode, win::util::window_size_from_client_size},
     rwh_06,
 };
@@ -57,14 +56,12 @@ pub const WM_USER_KEY_DOWN: u32 = WM_USER + 3;
 pub const WM_USER_KEY_UP: u32 = WM_USER + 4;
 
 pub struct WindowImpl {
-    inner: WindowInner,
     gl_context: Option<GlContext>,
 
-    event_handler: RefCell<Box<dyn WindowHandler>>,
+    #[allow(clippy::type_complexity)]
+    event_handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
     event_queue: RefCell<VecDeque<Event<'static>>>,
-}
 
-pub struct WindowInner {
     shared: Arc<Win32Shared>,
 
     window_hwnd: HWND,
@@ -184,7 +181,7 @@ impl WindowImpl {
                 None => None,
             };
 
-            let inner = WindowInner {
+            let window = Box::new(Self {
                 shared: shared.clone(),
 
                 state_mouse_capture: Cell::new(0),
@@ -212,20 +209,25 @@ impl WindowImpl {
                         .unwrap_or(Size::MIN),
                     dwstyle,
                 ),
-            };
 
-            let event_loop = Box::new(Self {
-                event_handler: RefCell::new((options.factory)(Window(&inner))),
+                event_handler: RefCell::new(None),
                 event_queue: RefCell::new(VecDeque::new()),
                 gl_context,
-                inner,
             });
 
-            event_loop.send_event(Event::WindowScale {
+            // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so because:
+            //  - because our window instance is boxed, it has a stable address for the whole lifetime of the window
+            //  - we manually dispose of our handler before WindowImpl gets dropped (see drop impl)
+            //  - we promise to not move WindowImpl (and by extension the handler) to a different thread (as that would violate the handler's !Send requirement)
+            window
+                .event_handler
+                .replace(Some((options.factory)(Window(&*(&*window as *const Self)))));
+
+            window.send_event(Event::WindowScale {
                 scale: shared.try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
             });
 
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(event_loop) as _);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(window) as _);
             shared.register_pacer(hwnd);
 
             if matches!(mode, OpenMode::Blocking) {
@@ -238,10 +240,12 @@ impl WindowImpl {
 
     fn send_event(&self, event: Event) {
         if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
-            handler.on_event(event, Window(&self.inner));
+            if let Some(handler) = handler.as_mut() {
+                (handler)(event);
 
-            for event in self.event_queue.borrow_mut().drain(..) {
-                handler.on_event(event, Window(&self.inner));
+                for event in self.event_queue.borrow_mut().drain(..) {
+                    (handler)(event);
+                }
             }
         } else if cfg!(debug_assertions) {
             panic!("send_event reentrancy")
@@ -260,20 +264,17 @@ impl WindowImpl {
 impl Drop for WindowImpl {
     fn drop(&mut self) {
         // drop the handler here, so it could do clean up when the window is still alive
-        drop(
-            self.event_handler
-                .replace(Box::new(|_: Event<'_>, _: crate::Window<'_>| {})),
-        );
+        self.event_handler.take();
 
         unsafe {
-            SetWindowLongPtrW(self.inner.window_hwnd, GWLP_USERDATA, 0);
-            UnregisterClassW(self.inner.window_class as _, hinstance());
-            self.inner.shared.unregister_pacer(self.inner.window_hwnd);
+            SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
+            UnregisterClassW(self.window_class as _, hinstance());
+            self.shared.unregister_pacer(self.window_hwnd);
         }
     }
 }
 
-impl crate::platform::OsWindow for WindowInner {
+impl crate::platform::OsWindow for WindowImpl {
     fn close(&self) {
         unsafe {
             PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
@@ -448,7 +449,7 @@ unsafe extern "system" fn wnd_proc(
         }
 
         if msg == WM_DESTROY {
-            if (*window_ptr).inner.owns_event_loop {
+            if (*window_ptr).owns_event_loop {
                 PostQuitMessage(0);
             }
 
@@ -503,12 +504,11 @@ unsafe extern "system" fn wnd_proc(
                 };
 
                 if window
-                    .inner
                     .state_mouse_capture
-                    .replace(window.inner.state_mouse_capture.get() + 1)
+                    .replace(window.state_mouse_capture.get() + 1)
                     == 0
                 {
-                    SetCapture(window.inner.window_hwnd);
+                    SetCapture(window.window_hwnd);
                 }
 
                 0
@@ -532,9 +532,8 @@ unsafe extern "system" fn wnd_proc(
                 }
 
                 if window
-                    .inner
                     .state_mouse_capture
-                    .replace(window.inner.state_mouse_capture.get().saturating_sub(1))
+                    .replace(window.state_mouse_capture.get().saturating_sub(1))
                     != 0
                 {
                     SetCapture(null_mut());
@@ -600,7 +599,7 @@ unsafe extern "system" fn wnd_proc(
 
             WM_SETCURSOR => {
                 if lparam as u32 & 0xffff == HTCLIENT {
-                    let cursor = window.inner.state_current_cursor.get();
+                    let cursor = window.state_current_cursor.get();
 
                     if cursor.is_null() {
                         ShowCursor(0);
@@ -617,15 +616,15 @@ unsafe extern "system" fn wnd_proc(
 
             WM_GETMINMAXINFO => {
                 let info = lparam as *mut MINMAXINFO;
-                (*info).ptMinTrackSize = window.inner.min_window_size;
-                (*info).ptMaxTrackSize = window.inner.max_window_size;
-                (*info).ptMaxSize = window.inner.max_window_size;
+                (*info).ptMinTrackSize = window.min_window_size;
+                (*info).ptMaxTrackSize = window.max_window_size;
+                (*info).ptMaxSize = window.max_window_size;
 
                 0
             }
 
             WM_SETFOCUS => {
-                if !window.inner.state_focused.replace(true) {
+                if !window.state_focused.replace(true) {
                     window.send_event_defer(Event::WindowFocus { focus: true });
                 }
 
@@ -633,7 +632,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_KILLFOCUS => {
-                if window.inner.state_focused.replace(false) {
+                if window.state_focused.replace(false) {
                     window.send_event_defer(Event::WindowFocus { focus: false });
                 }
 
@@ -664,7 +663,7 @@ unsafe extern "system" fn wnd_proc(
             WM_USER_FRAME_PACER => {
                 let modifiers = get_modifiers_async();
 
-                if window.inner.state_current_modifiers.replace(modifiers) != modifiers {
+                if window.state_current_modifiers.replace(modifiers) != modifiers {
                     window.send_event_defer(Event::KeyModifiers { modifiers });
                 }
 
