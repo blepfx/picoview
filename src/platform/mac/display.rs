@@ -51,7 +51,6 @@ pub struct DisplayLink {
     source: CFRetained<CFRunLoopSource>,
 }
 
-// TODO: multi display setup? idk
 impl DisplayLink {
     #[allow(deprecated)] // smh
     pub fn new(runner: Box<dyn Fn()>) -> Result<DisplayLink, Error> {
@@ -93,7 +92,7 @@ impl DisplayLink {
 
             if result != 0 {
                 return Err(Error::PlatformError(format!(
-                    "CVDisplayLinkSetOutputCallback: {}",
+                    "CVDisplayLink::set_output_callback: {}",
                     result
                 )));
             }
@@ -101,7 +100,7 @@ impl DisplayLink {
             let result = link.start();
             if result != 0 {
                 return Err(Error::PlatformError(format!(
-                    "CVDisplayLinkStart: {}",
+                    "CVDisplayLink::start: {}",
                     result
                 )));
             }

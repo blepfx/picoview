@@ -17,11 +17,14 @@ use objc2::{
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
     NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindow, NSWindowStyleMask,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowDidBecomeKeyNotification,
+    NSWindowDidResignKeyNotification, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_core_graphics::CGWarpMouseCursorPosition;
-use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSArray, NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize, NSString,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::{CString, c_void};
@@ -100,13 +103,19 @@ impl OsWindowView {
                 NSSize::new(options.size.width as f64, options.size.height as f64),
             );
 
+            let mut style = NSWindowStyleMask::Titled
+                | NSWindowStyleMask::Closable
+                | NSWindowStyleMask::Miniaturizable;
+
+            if options.resizable.is_some() {
+                style |= NSWindowStyleMask::Resizable;
+            }
+
             let window = NSWindow::alloc(main_thread);
             let window = NSWindow::initWithContentRect_styleMask_backing_defer(
                 window,
                 rect,
-                NSWindowStyleMask::Titled
-                    | NSWindowStyleMask::Closable
-                    | NSWindowStyleMask::Miniaturizable,
+                style,
                 NSBackingStoreType::Buffered,
                 false,
             );
@@ -119,8 +128,6 @@ impl OsWindowView {
                 window.makeKeyAndOrderFront(None);
             }
 
-            window.setTitle(&NSString::from_str(&options.title));
-
             if let Some(range) = options.resizable.clone() {
                 window.setContentMinSize(NSSize::new(
                     range.start.width as f64,
@@ -131,6 +138,8 @@ impl OsWindowView {
                     range.end.height as f64,
                 ));
             }
+
+            window.setTitle(&NSString::from_str(&options.title));
 
             Ok(window)
         }
@@ -168,6 +177,20 @@ impl OsWindowView {
                 None,
             );
 
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                &view.view,
+                sel!(picoview_handleNotification:),
+                Some(NSWindowDidBecomeKeyNotification),
+                None,
+            );
+
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                &view.view,
+                sel!(picoview_handleNotification:),
+                Some(NSWindowDidResignKeyNotification),
+                None,
+            );
+
             let dragged_types = NSArray::arrayWithObject(NSPasteboardTypeFileURL);
             view.view.addTrackingArea(&tracking_area);
             view.view.registerForDraggedTypes(&dragged_types);
@@ -183,7 +206,7 @@ impl OsWindowView {
             }))?
         };
 
-        view.set_context(Box::new(OsWindowViewInner {
+        view.set_inner(Box::new(OsWindowViewInner {
             _display_link: display,
             application: RefCell::new(blocking),
             event_queue: RefCell::new(VecDeque::default()),
@@ -226,7 +249,7 @@ impl OsWindowView {
         }
     }
 
-    fn set_context(&self, context: Box<OsWindowViewInner>) {
+    fn set_inner(&self, context: Box<OsWindowViewInner>) {
         unsafe {
             self.view
                 .class()
@@ -273,8 +296,8 @@ impl OsWindowView {
                 println!("drop end");
             }
 
+            NSNotificationCenter::defaultCenter().removeObserver(&self.view);
             let _: () = msg_send![super(self, NSView::class()), dealloc];
-
             let class: &'static AnyClass = msg_send![self, class];
             objc_disposeClassPair(class as *const _ as *mut _);
 
@@ -428,6 +451,26 @@ impl OsWindowView {
         self.send_event(Event::WindowFrame { gl: None });
     }
 
+    unsafe extern "C" fn handle_notification(&self, _cmd: Sel, notif: &NSNotification) {
+        unsafe {
+            let Some(object) = notif.object() else { return };
+            let Some(window) = self.view.window() else {
+                return;
+            };
+            let Some(first_responder) = window.firstResponder() else {
+                return;
+            };
+
+            if std::ptr::addr_eq(&*object, &*window)
+                && std::ptr::addr_eq(&*first_responder, &*self.view)
+            {
+                self.send_event_defer(Event::WindowFocus {
+                    focus: window.isKeyWindow(),
+                });
+            }
+        }
+    }
+
     // NSDraggingDestination
     unsafe extern "C" fn wants_periodic_dragging_updates(&self, _cmd: Sel) -> Bool {
         Bool::NO
@@ -574,6 +617,10 @@ impl OsWindowView {
             builder.add_method(
                 sel!(picoview_drawFrame),
                 Self::draw_frame as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
+                sel!(picoview_handleNotification:),
+                Self::handle_notification as unsafe extern "C" fn(_, _, _) -> _,
             );
 
             // NSDraggingDestination
