@@ -7,9 +7,10 @@ use super::{
     },
 };
 use crate::{
-    Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
+    Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
+    WindowBuilder, WindowWaker,
     platform::{
-        OpenMode,
+        OpenMode, PlatformWaker, PlatformWindow,
         win::{util::window_size_from_client_size, vsync::VSyncCallback},
     },
     rwh_06,
@@ -20,7 +21,10 @@ use std::{
     mem::size_of,
     num::NonZeroIsize,
     ptr::{copy_nonoverlapping, null, null_mut},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
@@ -57,6 +61,7 @@ pub const WM_USER_VSYNC: u32 = WM_USER + 1;
 pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
 pub const WM_USER_KEY_DOWN: u32 = WM_USER + 3;
 pub const WM_USER_KEY_UP: u32 = WM_USER + 4;
+pub const WM_USER_WAKEUP: u32 = WM_USER + 5;
 
 pub struct WindowImpl {
     gl_context: Option<GlContext>,
@@ -66,6 +71,7 @@ pub struct WindowImpl {
     event_queue: RefCell<VecDeque<Event<'static>>>,
 
     shared: Arc<Win32Shared>,
+    waker: Arc<WindowWakerImpl>,
 
     window_hwnd: HWND,
     window_class: u16,
@@ -81,12 +87,20 @@ pub struct WindowImpl {
     state_mouse_capture: Cell<u32>,
 }
 
+pub struct WindowWakerImpl {
+    window_hwnd: HWND,
+    window_open: AtomicBool,
+}
+
+unsafe impl Send for WindowWakerImpl {}
+unsafe impl Sync for WindowWakerImpl {}
+
 impl WindowImpl {
     pub unsafe fn is_our_window(hwnd: HWND) -> bool {
         unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as usize as isize }
     }
 
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
         unsafe {
             let parent = match mode {
                 OpenMode::Embedded(rwh_06::RawWindowHandle::Win32(window)) => {
@@ -187,6 +201,10 @@ impl WindowImpl {
 
             let window = Box::new(Self {
                 shared: shared.clone(),
+                waker: Arc::new(WindowWakerImpl {
+                    window_hwnd: hwnd,
+                    window_open: AtomicBool::new(true),
+                }),
 
                 state_mouse_capture: Cell::new(0),
                 state_current_cursor: Cell::new(shared.load_cursor(MouseCursor::Default)),
@@ -233,13 +251,14 @@ impl WindowImpl {
                 scale: shared.try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
             });
 
+            let waker = window.waker();
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(window) as _);
 
             if matches!(mode, OpenMode::Blocking) {
                 run_event_loop(null_mut());
             }
 
-            Ok(())
+            Ok(waker)
         }
     }
 
@@ -268,6 +287,9 @@ impl WindowImpl {
 
 impl Drop for WindowImpl {
     fn drop(&mut self) {
+        // subsequent wakeups should fail
+        self.waker.window_open.store(false, Ordering::Release);
+
         // drop the handler here, so it could do clean up when the window is still alive
         self.event_handler.take();
 
@@ -278,11 +300,15 @@ impl Drop for WindowImpl {
     }
 }
 
-impl crate::platform::OsWindow for WindowImpl {
+impl PlatformWindow for WindowImpl {
     fn close(&self) {
         unsafe {
             PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
         }
+    }
+
+    fn waker(&self) -> WindowWaker {
+        WindowWaker(self.waker.clone())
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -437,6 +463,19 @@ impl crate::platform::OsWindow for WindowImpl {
         }
 
         false
+    }
+}
+
+impl PlatformWaker for WindowWakerImpl {
+    fn wakeup(&self) -> Result<(), WakeupError> {
+        if self.window_open.load(Ordering::Acquire) {
+            unsafe {
+                PostMessageW(self.window_hwnd, WM_USER_WAKEUP, 0, 0);
+                Ok(())
+            }
+        } else {
+            Err(WakeupError::Disconnected)
+        }
     }
 }
 
@@ -691,6 +730,11 @@ unsafe extern "system" fn wnd_proc(
                         .map(|x| x as &dyn crate::GlContext),
                 });
 
+                0
+            }
+
+            WM_USER_WAKEUP => {
+                window.send_event_defer(Event::Wakeup);
                 0
             }
 
