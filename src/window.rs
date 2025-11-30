@@ -25,11 +25,9 @@ pub struct WindowBuilder {
     pub factory: WindowFactory,
 }
 
-#[repr(transparent)]
 #[derive(Clone)]
 pub struct WindowWaker(pub(crate) Arc<dyn platform::PlatformWaker>);
 
-#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct Window<'a>(pub(crate) &'a dyn platform::PlatformWindow);
 
@@ -76,10 +74,6 @@ impl<'a> Window<'a> {
 }
 
 impl WindowWaker {
-    pub fn disconnected() -> Self {
-        WindowWaker(Arc::new(()))
-    }
-
     pub fn wakeup(&self) -> Result<(), WakeupError> {
         self.0.wakeup()
     }
@@ -203,5 +197,11 @@ impl Debug for WindowBuilder {
 impl Debug for WindowWaker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("WindowWaker").finish_non_exhaustive()
+    }
+}
+
+impl Default for WindowWaker {
+    fn default() -> Self {
+        Self(Arc::new(()))
     }
 }

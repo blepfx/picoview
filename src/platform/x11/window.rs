@@ -245,7 +245,7 @@ impl WindowImpl {
         match mode {
             OpenMode::Blocking => {
                 window.run_event_loop(options.factory)?;
-                Ok(WindowWaker::disconnected())
+                Ok(WindowWaker::default())
             }
             OpenMode::Embedded(..) => {
                 let waker = window.waker();
