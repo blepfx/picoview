@@ -315,6 +315,7 @@ impl WindowImpl {
         match event {
             XEvent::ClientMessage(e) => {
                 if e.format == 32
+                    && e.type_ == self.connection.atoms().WM_PROTOCOLS
                     && e.data.as_data32()[0] == self.connection.atoms().WM_DELETE_WINDOW
                 {
                     self.is_closed.set(true);
