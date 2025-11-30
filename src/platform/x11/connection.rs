@@ -42,6 +42,8 @@ x11rb::atom_manager! {
         // See: https://tronche.com/gui/x/icccm/sec-2.html#s-2.6.2
         TEXT,
         TEXT_MIME_UNKNOWN: b"text/plain",
+
+        PICOVIEW_WAKEUP,
     }
 }
 

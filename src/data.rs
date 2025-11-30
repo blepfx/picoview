@@ -244,6 +244,8 @@ pub enum Key {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Event<'a> {
+    Wakeup,
+
     WindowFocus { focus: bool },
     WindowScale { scale: f32 },
     WindowMove { origin: Point },
@@ -270,4 +272,9 @@ pub enum Error {
     PlatformError(String),
     OpenGlError(String),
     InvalidParent,
+}
+
+#[derive(Debug)]
+pub enum WakeupError {
+    Disconnected,
 }

@@ -26,15 +26,17 @@ fn main() {
                         height: 300,
                     });
 
-                    WindowBuilder::new(|_| {
+                    let waker = WindowBuilder::new(|_| {
                         Box::new(|event| {
                             if !matches!(event, Event::WindowFrame { .. }) {
                                 println!("child {:?}", event);
                             }
                         })
                     })
-                    .open_parented(window)
+                    .open_embedded(window)
                     .expect("failed to open a child window");
+
+                    waker.wakeup().unwrap();
                 }
 
                 if passed(30000) {

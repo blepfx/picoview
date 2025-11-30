@@ -1,21 +1,21 @@
 use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
-use crate::platform::OpenMode;
 use crate::platform::x11::util::check_error;
+use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
-    Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder,
-    WindowFactory, rwh_06,
+    Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
+    WindowBuilder, WindowFactory, WindowWaker, rwh_06,
 };
 use std::cell::{Cell, RefCell};
 use std::num::NonZero;
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection as XConnection;
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
-use x11rb::protocol::xproto::KeyButMask;
+use x11rb::protocol::xproto::{CLIENT_MESSAGE_EVENT, ClientMessageEvent, KeyButMask};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
     protocol::{
@@ -33,7 +33,9 @@ unsafe impl Send for WindowImpl {}
 
 pub struct WindowImpl {
     window_id: u32,
+
     connection: Arc<Connection>,
+    waker: Arc<WindowWakerImpl>,
 
     is_closed: Cell<bool>,
     is_destroyed: Cell<bool>,
@@ -52,8 +54,13 @@ pub struct WindowImpl {
     gl_context: Option<GlContext>,
 }
 
+pub struct WindowWakerImpl {
+    window_id: u32,
+    connection: Weak<Connection>,
+}
+
 impl WindowImpl {
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<(), Error> {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
         let connection = Connection::create()?;
 
         let parent_window_id = match mode {
@@ -214,6 +221,10 @@ impl WindowImpl {
         let window = Box::new(Self {
             window_id,
             connection: connection.clone(),
+            waker: Arc::new(WindowWakerImpl {
+                window_id,
+                connection: Arc::downgrade(&connection),
+            }),
 
             is_closed: Cell::new(false),
             is_destroyed: Cell::new(false),
@@ -232,10 +243,14 @@ impl WindowImpl {
         });
 
         match mode {
-            OpenMode::Blocking => window.run_event_loop(options.factory),
+            OpenMode::Blocking => {
+                window.run_event_loop(options.factory)?;
+                Ok(WindowWaker::disconnected())
+            }
             OpenMode::Embedded(..) => {
+                let waker = window.waker();
                 thread::spawn(|| window.run_event_loop(options.factory).ok());
-                Ok(())
+                Ok(waker)
             }
         }
     }
@@ -298,11 +313,15 @@ impl WindowImpl {
 
     fn handle_event(&self, event: &XEvent) {
         match event {
-            XEvent::ClientMessage(event) => {
-                if event.format == 32
-                    && event.data.as_data32()[0] == self.connection.atoms().WM_DELETE_WINDOW
+            XEvent::ClientMessage(e) => {
+                if e.format == 32
+                    && e.data.as_data32()[0] == self.connection.atoms().WM_DELETE_WINDOW
                 {
                     self.is_closed.set(true);
+                }
+
+                if e.format == 32 && e.type_ == self.connection.atoms().PICOVIEW_WAKEUP {
+                    self.send_event(Event::Wakeup);
                 }
             }
 
@@ -476,9 +495,13 @@ impl WindowImpl {
     }
 }
 
-impl crate::platform::OsWindow for WindowImpl {
+impl PlatformWindow for WindowImpl {
     fn close(&self) {
         self.is_closed.set(true);
+    }
+
+    fn waker(&self) -> WindowWaker {
+        WindowWaker(self.waker.clone())
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -639,6 +662,35 @@ impl crate::platform::OsWindow for WindowImpl {
 
     fn set_clipboard_text(&self, _text: &str) -> bool {
         false
+    }
+}
+
+impl PlatformWaker for WindowWakerImpl {
+    fn wakeup(&self) -> Result<(), WakeupError> {
+        if let Some(connection) = self.connection.upgrade() {
+            let Ok(request) = connection.xcb().send_event(
+                false,
+                self.window_id,
+                EventMask::NO_EVENT,
+                ClientMessageEvent {
+                    response_type: CLIENT_MESSAGE_EVENT,
+                    format: 32,
+                    sequence: 0,
+                    window: self.window_id,
+                    type_: connection.atoms().PICOVIEW_WAKEUP,
+                    data: [0; 20].into(),
+                },
+            ) else {
+                return Err(WakeupError::Disconnected);
+            };
+
+            match request.check() {
+                Err(_) => Err(WakeupError::Disconnected),
+                Ok(_) => Ok(()),
+            }
+        } else {
+            Err(WakeupError::Disconnected)
+        }
     }
 }
 

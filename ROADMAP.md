@@ -40,7 +40,7 @@
 | Cursor warping                                        | :ok:     | :ok:     | :ok:[^6] | Medium   |
 
 [^1]: Only a single global scaling factor is supported (no per-monitor scaling)
-[^2]: It is possible to use the DXGI api for lower latency (we only use DWMFlush for now)
+[^2]: It is possible to use the DXGI api for lower latency [?] (we only use DWMFlush for now)
 [^3]: XPresent seems unreliable; we fallback to doing manual frame events with poll timeout (synced to XRandR provided refresh rates)
 [^4]: Initial (`None`) position is broken (should be centered).
 [^5]: Some DAWs consume key events meant for plugins, keyboard capturing is meant to avoid that when needed

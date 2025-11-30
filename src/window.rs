@@ -1,5 +1,5 @@
-use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, platform, rwh_06};
-use std::{fmt::Debug, ops::Range};
+use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, WakeupError, platform, rwh_06};
+use std::{fmt::Debug, ops::Range, sync::Arc};
 
 // the reason this is a box is because making this with traits is extremely annoying,
 // especially when closures are involved
@@ -23,6 +23,66 @@ pub struct WindowBuilder {
     pub opengl: Option<GlConfig>,
 
     pub factory: WindowFactory,
+}
+
+#[repr(transparent)]
+#[derive(Clone)]
+pub struct WindowWaker(pub(crate) Arc<dyn platform::PlatformWaker>);
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Window<'a>(pub(crate) &'a dyn platform::PlatformWindow);
+
+impl<'a> Window<'a> {
+    pub fn close(&self) {
+        self.0.close();
+    }
+
+    pub fn set_title(&self, title: &str) {
+        self.0.set_title(title);
+    }
+
+    pub fn set_cursor_icon(&self, icon: MouseCursor) {
+        self.0.set_cursor_icon(icon);
+    }
+
+    pub fn set_cursor_position(&self, pos: impl Into<Point>) {
+        self.0.set_cursor_position(pos.into());
+    }
+
+    pub fn set_size(&self, size: impl Into<Size>) {
+        self.0.set_size(size.into());
+    }
+
+    pub fn set_position(&self, pos: impl Into<Point>) {
+        self.0.set_position(pos.into());
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        self.0.set_visible(visible);
+    }
+
+    pub fn open_url(&self, url: &str) -> bool {
+        self.0.open_url(url)
+    }
+
+    pub fn get_clipboard_text(&self) -> Option<String> {
+        self.0.get_clipboard_text()
+    }
+
+    pub fn set_clipboard_text(&self, text: &str) -> bool {
+        self.0.set_clipboard_text(text)
+    }
+}
+
+impl WindowWaker {
+    pub fn disconnected() -> Self {
+        WindowWaker(Arc::new(()))
+    }
+
+    pub fn wakeup(&self) -> Result<(), WakeupError> {
+        self.0.wakeup()
+    }
 }
 
 impl WindowBuilder {
@@ -93,62 +153,16 @@ impl WindowBuilder {
     }
 
     pub fn open_blocking(self) -> Result<(), Error> {
-        unsafe { platform::open_window(self, platform::OpenMode::Blocking) }
+        unsafe { platform::open_window(self, platform::OpenMode::Blocking).map(|_| ()) }
     }
 
-    pub fn open_parented(self, parent: impl rwh_06::HasWindowHandle) -> Result<(), Error> {
+    pub fn open_embedded(self, parent: impl rwh_06::HasWindowHandle) -> Result<WindowWaker, Error> {
         let handle = parent
             .window_handle()
             .map_err(|_| Error::InvalidParent)?
             .as_raw();
 
         unsafe { platform::open_window(self, platform::OpenMode::Embedded(handle)) }
-    }
-}
-
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub struct Window<'a>(pub(crate) &'a dyn platform::OsWindow);
-
-impl<'a> Window<'a> {
-    pub fn close(&self) {
-        self.0.close();
-    }
-
-    pub fn set_title(&self, title: &str) {
-        self.0.set_title(title);
-    }
-
-    pub fn set_cursor_icon(&self, icon: MouseCursor) {
-        self.0.set_cursor_icon(icon);
-    }
-
-    pub fn set_cursor_position(&self, pos: impl Into<Point>) {
-        self.0.set_cursor_position(pos.into());
-    }
-
-    pub fn set_size(&self, size: impl Into<Size>) {
-        self.0.set_size(size.into());
-    }
-
-    pub fn set_position(&self, pos: impl Into<Point>) {
-        self.0.set_position(pos.into());
-    }
-
-    pub fn set_visible(&self, visible: bool) {
-        self.0.set_visible(visible);
-    }
-
-    pub fn open_url(&self, url: &str) -> bool {
-        self.0.open_url(url)
-    }
-
-    pub fn get_clipboard_text(&self) -> Option<String> {
-        self.0.get_clipboard_text()
-    }
-
-    pub fn set_clipboard_text(&self, text: &str) -> bool {
-        self.0.set_clipboard_text(text)
     }
 }
 
@@ -183,5 +197,11 @@ impl Debug for WindowBuilder {
             .field("position", &self.position)
             .field("opengl", &self.opengl)
             .finish_non_exhaustive()
+    }
+}
+
+impl Debug for WindowWaker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("WindowWaker").finish_non_exhaustive()
     }
 }
