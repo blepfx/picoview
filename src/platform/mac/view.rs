@@ -1,8 +1,11 @@
 use super::display::*;
-use super::util::{get_cursor, keycode_to_key, random_id};
-use crate::platform::OsWindow;
-use crate::platform::mac::util::{self, flags_to_modifiers};
-use crate::{Error, Event, MouseButton, MouseCursor, Point, Size, Window, WindowBuilder, rwh_06};
+use super::util::{flags_to_modifiers, get_cursor, keycode_to_key, random_id};
+use crate::platform::mac::util::{get_clipboard_text, set_clipboard_text, spawn_detached};
+use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
+use crate::{
+    Error, Event, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
+    WindowWaker, rwh_06,
+};
 use objc2::rc::{Allocated, Retained, Weak, autoreleasepool};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
@@ -23,21 +26,31 @@ use objc2_app_kit::{
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_core_graphics::CGWarpMouseCursorPosition;
 use objc2_foundation::{
-    NSArray, NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize, NSString,
+    NSArray, NSNotification, NSNotificationCenter, NSObjectNSThreadPerformAdditions, NSPoint,
+    NSRect, NSSize, NSString,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::{CString, c_void};
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 #[repr(C)]
-pub struct OsWindowView {
+pub struct WindowView {
     view: NSView,
 }
 
-struct OsWindowViewInner {
+struct WindowViewWaker {
+    weak: Weak<WindowView>,
+}
+
+unsafe impl Send for WindowViewWaker {}
+unsafe impl Sync for WindowViewWaker {}
+
+struct WindowViewInner {
     _display_link: DisplayLink,
     application: RefCell<Option<Retained<NSApplication>>>,
+    waker: Arc<WindowViewWaker>,
 
     event_queue: RefCell<VecDeque<Event<'static>>>,
     current_cursor: Cell<MouseCursor>,
@@ -48,46 +61,45 @@ struct OsWindowViewInner {
     is_closed: Cell<bool>,
 }
 
-unsafe impl RefEncode for OsWindowView {
+unsafe impl RefEncode for WindowView {
     const ENCODING_REF: Encoding = NSView::ENCODING_REF;
 }
 
-unsafe impl Message for OsWindowView {}
+unsafe impl Message for WindowView {}
 
-impl OsWindowView {
-    pub unsafe fn open_blocking(options: WindowBuilder) -> Result<(), Error> {
-        autoreleasepool(|_| unsafe {
-            let main_thread = MainThreadMarker::new()
-                .ok_or_else(|| Error::PlatformError("not in main thread".into()))?;
+impl WindowView {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
+        match mode {
+            OpenMode::Blocking => autoreleasepool(|_| unsafe {
+                let main_thread = MainThreadMarker::new()
+                    .ok_or_else(|| Error::PlatformError("not in main thread".into()))?;
 
-            let app = NSApp(main_thread);
-            app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+                let app = NSApp(main_thread);
+                app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-            let window = Self::create_window(&options, main_thread)?;
-            let view = Self::create_view(options, Some(app.clone()))?;
+                let window = Self::create_window(&options, main_thread)?;
+                let view = Self::create_view(options, Some(app.clone()))?;
 
-            window.setContentView(Some(&view.view));
-            //window.setDelegate(Some(&view));
+                window.setContentView(Some(&view.view));
+                //window.setDelegate(Some(&view));
 
-            app.run();
-            Ok(())
-        })
-    }
+                app.run();
+                Ok(WindowWaker::default())
+            }),
 
-    pub unsafe fn open_embedded(
-        options: WindowBuilder,
-        parent: rwh_06::RawWindowHandle,
-    ) -> Result<(), Error> {
-        autoreleasepool(|_| unsafe {
-            let parent_view = match parent {
-                rwh_06::RawWindowHandle::AppKit(window) => window.ns_view.as_ptr() as *mut NSView,
-                _ => return Err(Error::InvalidParent),
-            };
+            OpenMode::Embedded(parent) => autoreleasepool(|_| unsafe {
+                let parent_view = match parent {
+                    rwh_06::RawWindowHandle::AppKit(window) => {
+                        window.ns_view.as_ptr() as *mut NSView
+                    }
+                    _ => return Err(Error::InvalidParent),
+                };
 
-            let view = Self::create_view(options, None)?;
-            (*parent_view).addSubview(&view.view);
-            Ok(())
-        })
+                let view = Self::create_view(options, None)?;
+                (*parent_view).addSubview(&view.view);
+                Ok(view.waker())
+            }),
+        }
     }
 
     unsafe fn create_window(
@@ -163,8 +175,8 @@ impl OsWindowView {
         );
 
         let view = unsafe {
-            let view: Allocated<OsWindowView> = msg_send![class, alloc];
-            let view: Retained<OsWindowView> = msg_send![view, initWithFrame: rect];
+            let view: Allocated<WindowView> = msg_send![class, alloc];
+            let view: Retained<WindowView> = msg_send![view, initWithFrame: rect];
 
             let tracking_area = NSTrackingArea::initWithRect_options_owner_userInfo(
                 NSTrackingArea::alloc(),
@@ -206,11 +218,17 @@ impl OsWindowView {
             }))?
         };
 
-        view.set_inner(Box::new(OsWindowViewInner {
+        view.set_inner(Box::new(WindowViewInner {
             _display_link: display,
             application: RefCell::new(blocking),
+
+            waker: Arc::new(WindowViewWaker {
+                weak: Weak::from_retained(&view),
+            }),
+
             event_queue: RefCell::new(VecDeque::default()),
             event_handler: RefCell::new(None),
+
             current_cursor: Cell::new(MouseCursor::Default),
             is_closed: Cell::new(false),
         }));
@@ -249,7 +267,7 @@ impl OsWindowView {
         }
     }
 
-    fn set_inner(&self, context: Box<OsWindowViewInner>) {
+    fn set_inner(&self, context: Box<WindowViewInner>) {
         unsafe {
             self.view
                 .class()
@@ -260,14 +278,15 @@ impl OsWindowView {
         }
     }
 
-    fn inner(&self) -> &OsWindowViewInner {
+    fn inner(&self) -> &WindowViewInner {
         unsafe {
             let ivar = self
                 .view
                 .class()
                 .instance_variable(c"_context")
                 .unwrap_unchecked();
-            let context = *ivar.load::<*mut c_void>(&self.view) as *mut OsWindowViewInner;
+            let context = *ivar.load::<*mut c_void>(&self.view) as *mut WindowViewInner;
+            assert!(!context.is_null());
             &*context
         }
     }
@@ -288,7 +307,7 @@ impl OsWindowView {
                 .unwrap_unchecked();
 
             let context =
-                *ivar.load::<*mut c_void>(&self.view) as *mut Box<RefCell<OsWindowViewInner>>;
+                *ivar.load::<*mut c_void>(&self.view) as *mut Box<RefCell<WindowViewInner>>;
 
             if !context.is_null() {
                 println!("drop begin");
@@ -449,6 +468,10 @@ impl OsWindowView {
     // custom
     unsafe extern "C" fn draw_frame(&self, _cmd: Sel) {
         self.send_event(Event::WindowFrame { gl: None });
+    }
+
+    unsafe extern "C" fn wakeup(&self, _cmd: Sel) {
+        self.send_event(Event::Wakeup);
     }
 
     unsafe extern "C" fn handle_notification(&self, _cmd: Sel, notif: &NSNotification) {
@@ -619,6 +642,10 @@ impl OsWindowView {
                 Self::draw_frame as unsafe extern "C" fn(_, _) -> _,
             );
             builder.add_method(
+                sel!(picoview_wakeup),
+                Self::wakeup as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
                 sel!(picoview_handleNotification:),
                 Self::handle_notification as unsafe extern "C" fn(_, _, _) -> _,
             );
@@ -654,7 +681,7 @@ impl OsWindowView {
     }
 }
 
-impl OsWindow for OsWindowView {
+impl PlatformWindow for WindowView {
     fn close(&self) {
         if self.inner().is_closed.replace(true) {
             return;
@@ -671,6 +698,10 @@ impl OsWindow for OsWindowView {
 
             app.stop(Some(&app));
         }
+    }
+
+    fn waker(&self) -> WindowWaker {
+        WindowWaker(self.inner().waker.clone())
     }
 
     fn set_title(&self, title: &str) {
@@ -767,15 +798,15 @@ impl OsWindow for OsWindowView {
     }
 
     fn open_url(&self, url: &str) -> bool {
-        util::spawn_detached(std::process::Command::new("/usr/bin/open").arg(url)).is_ok()
+        spawn_detached(std::process::Command::new("/usr/bin/open").arg(url)).is_ok()
     }
 
     fn get_clipboard_text(&self) -> Option<String> {
-        util::get_clipboard_text()
+        get_clipboard_text()
     }
 
     fn set_clipboard_text(&self, text: &str) -> bool {
-        util::set_clipboard_text(text)
+        set_clipboard_text(text)
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -791,7 +822,26 @@ impl OsWindow for OsWindowView {
     }
 }
 
-impl Drop for OsWindowView {
+impl PlatformWaker for WindowViewWaker {
+    fn wakeup(&self) -> Result<(), WakeupError> {
+        if let Some(view) = self.weak.load() {
+            unsafe {
+                view.view
+                    .performSelectorOnMainThread_withObject_waitUntilDone(
+                        sel!(picoview_wakeup),
+                        None,
+                        false,
+                    );
+            }
+
+            Ok(())
+        } else {
+            Err(WakeupError::Disconnected)
+        }
+    }
+}
+
+impl Drop for WindowView {
     fn drop(&mut self) {
         // we need to drop this before OsWindowView gets dropped, see the safety comment at the handler initialization place
         self.inner().event_handler.take();
