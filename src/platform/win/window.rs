@@ -18,7 +18,7 @@ use crate::{
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
-    mem::size_of,
+    mem::{size_of, zeroed},
     num::NonZeroIsize,
     ptr::{copy_nonoverlapping, null, null_mut},
     sync::{
@@ -27,7 +27,7 @@ use std::{
     },
 };
 use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
+    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::ClientToScreen,
     System::{
         Com::CoInitialize,
@@ -43,16 +43,17 @@ use windows_sys::Win32::{
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
             CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_STYLE,
-            GWLP_USERDATA, GWLP_WNDPROC, GetWindowLongPtrW, GetWindowLongW, HCURSOR, HTCLIENT,
-            IDC_ARROW, LoadCursorW, MINMAXINFO, PostMessageW, PostQuitMessage, RegisterClassW,
-            SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetWindowLongPtrW, SetWindowPos,
-            SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA,
-            WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_KILLFOCUS,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-            WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
-            WS_CHILD, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_VISIBLE, XBUTTON1, XBUTTON2,
+            GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDesktopWindow, GetWindowLongPtrW,
+            GetWindowLongW, HCURSOR, HTCLIENT, IDC_ARROW, LoadCursorW, MINMAXINFO, PostMessageW,
+            PostQuitMessage, RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetCursorPos,
+            SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI,
+            UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+            WM_GETMINMAXINFO, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+            WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN,
+            WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_USER,
+            WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_POPUP,
+            WS_SIZEBOX, WS_VISIBLE, XBUTTON1, XBUTTON2,
         },
     },
 };
@@ -167,20 +168,29 @@ impl WindowImpl {
             };
 
             let size = window_size_from_client_size(options.size, dwstyle);
+            let (pos_x, pos_y) = match options.position {
+                Some(point) => (point.x as i32, point.y as i32),
+                None if !parent.is_null() => (0, 0),
+                None => {
+                    let mut rect = RECT { ..zeroed() };
+                    if GetClientRect(GetDesktopWindow(), &mut rect) != 0 {
+                        (
+                            rect.left + (rect.right - rect.left - size.x) / 2,
+                            rect.top + (rect.bottom - rect.top - size.y) / 2,
+                        )
+                    } else {
+                        (CW_USEDEFAULT, CW_USEDEFAULT)
+                    }
+                }
+            };
 
             let hwnd = CreateWindowExW(
                 0,
                 window_class as _,
                 window_title.as_ptr() as _,
                 dwstyle,
-                options
-                    .position
-                    .map(|pos| pos.x as i32)
-                    .unwrap_or(CW_USEDEFAULT),
-                options
-                    .position
-                    .map(|pos| pos.y as i32)
-                    .unwrap_or(CW_USEDEFAULT),
+                pos_x,
+                pos_y,
                 size.x,
                 size.y,
                 parent as _,
