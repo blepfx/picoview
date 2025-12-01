@@ -1,9 +1,11 @@
-use crate::{Key, Modifiers};
+use crate::{Key, Modifiers, MouseCursor, platform::x11::connection::Connection};
+use libc::c_uint;
 use std::{
+    ffi::CStr,
     os::unix::process::CommandExt,
     process::{Command, Stdio},
 };
-use x11rb::{errors::ConnectionError, protocol::xproto::KeyButMask};
+use x11::xlib::{ControlMask, LockMask, Mod1Mask, Mod2Mask, Mod4Mask, ShiftMask};
 
 pub fn open_url(path: &str) -> bool {
     if spawn_detached(Command::new("xdg-open").arg(path)).is_ok() {
@@ -49,7 +51,7 @@ pub fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
     cmd.spawn().map(|_| ())
 }
 
-pub fn hwcode2key(code: u8) -> Option<Key> {
+pub fn keycode_to_key(code: u32) -> Option<Key> {
     Some(match code {
         0x09 => Key::Escape,
         0x0A => Key::D1,
@@ -160,7 +162,7 @@ pub fn hwcode2key(code: u8) -> Option<Key> {
     })
 }
 
-pub fn hwcode2mods(code: u8) -> Modifiers {
+pub fn keycode_to_mods(code: u32) -> Modifiers {
     match code {
         0x25 | 0x69 => Modifiers::CTRL,
         0x32 | 0x3E => Modifiers::SHIFT,
@@ -170,34 +172,70 @@ pub fn hwcode2mods(code: u8) -> Modifiers {
     }
 }
 
-pub fn keymask2mods(mods: KeyButMask) -> Modifiers {
-    const MAP: &[(KeyButMask, Modifiers)] = &[
-        (KeyButMask::SHIFT, Modifiers::SHIFT),
-        (KeyButMask::CONTROL, Modifiers::CTRL),
-        (KeyButMask::MOD1, Modifiers::ALT),
-        (KeyButMask::MOD4, Modifiers::META),
-        (KeyButMask::MOD2, Modifiers::NUM_LOCK),
-        (KeyButMask::LOCK, Modifiers::CAPS_LOCK),
+pub fn keymask_to_mods(mods: c_uint) -> Modifiers {
+    const MAP: &[(c_uint, Modifiers)] = &[
+        (ShiftMask, Modifiers::SHIFT),
+        (ControlMask, Modifiers::CTRL),
+        (Mod1Mask, Modifiers::ALT),
+        (Mod4Mask, Modifiers::META),
+        (Mod2Mask, Modifiers::NUM_LOCK),
+        (LockMask, Modifiers::CAPS_LOCK),
     ];
 
     let mut ret = Modifiers::empty();
     for (mask, modifiers) in MAP {
-        if mods.contains(*mask) {
+        if (mods & *mask) != 0 {
             ret |= *modifiers;
         }
     }
     ret
 }
 
-pub fn check_error<T>(result: Result<T, ConnectionError>) -> bool {
-    match result {
-        Ok(_) => true,
-        Err(e) => {
-            if cfg!(debug_assertions) {
-                panic!("x11 connection error: {}", e);
+pub fn get_cursor(conn: &Connection, cursor: MouseCursor) -> u64 {
+    fn load(conn: &Connection, names: &[&'static CStr]) -> u64 {
+        for name in names {
+            let cursor = conn.cursor(Some(*name));
+            if cursor != 0 {
+                return cursor;
             }
-
-            false
         }
+
+        conn.cursor(Some(c"left_ptr"))
+    }
+
+    match cursor {
+        MouseCursor::Default => load(conn, &[c"left_ptr"]),
+        MouseCursor::Hand => load(conn, &[c"hand2", c"hand1"]),
+        MouseCursor::HandGrabbing => load(conn, &[c"closedhand", c"grabbing"]),
+        MouseCursor::Help => load(conn, &[c"question_arrow"]),
+        MouseCursor::Hidden => conn.cursor(None),
+        MouseCursor::Text => load(conn, &[c"text", c"xterm"]),
+        MouseCursor::VerticalText => load(conn, &[c"vertical-text"]),
+        MouseCursor::Working => load(conn, &[c"watch"]),
+        MouseCursor::PtrWorking => load(conn, &[c"left_ptr_watch"]),
+        MouseCursor::NotAllowed => load(conn, &[c"crossed_circle"]),
+        MouseCursor::PtrNotAllowed => load(conn, &[c"no-drop", c"crossed_circle"]),
+        MouseCursor::ZoomIn => load(conn, &[c"zoom-in"]),
+        MouseCursor::ZoomOut => load(conn, &[c"zoom-out"]),
+        MouseCursor::Alias => load(conn, &[c"link"]),
+        MouseCursor::Copy => load(conn, &[c"copy"]),
+        MouseCursor::Move => load(conn, &[c"move"]),
+        MouseCursor::AllScroll => load(conn, &[c"all-scroll"]),
+        MouseCursor::Cell => load(conn, &[c"plus"]),
+        MouseCursor::Crosshair => load(conn, &[c"crosshair"]),
+        MouseCursor::EResize => load(conn, &[c"right_side"]),
+        MouseCursor::NResize => load(conn, &[c"top_side"]),
+        MouseCursor::NeResize => load(conn, &[c"top_right_corner"]),
+        MouseCursor::NwResize => load(conn, &[c"top_left_corner"]),
+        MouseCursor::SResize => load(conn, &[c"bottom_side"]),
+        MouseCursor::SeResize => load(conn, &[c"bottom_right_corner"]),
+        MouseCursor::SwResize => load(conn, &[c"bottom_left_corner"]),
+        MouseCursor::WResize => load(conn, &[c"left_side"]),
+        MouseCursor::EwResize => load(conn, &[c"h_double_arrow"]),
+        MouseCursor::NsResize => load(conn, &[c"v_double_arrow"]),
+        MouseCursor::NwseResize => load(conn, &[c"bd_double_arrow", c"size_bdiag"]),
+        MouseCursor::NeswResize => load(conn, &[c"fd_double_arrow", c"size_fdiag"]),
+        MouseCursor::ColResize => load(conn, &[c"split_h", c"h_double_arrow"]),
+        MouseCursor::RowResize => load(conn, &[c"split_v", c"v_double_arrow"]),
     }
 }

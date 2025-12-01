@@ -7,12 +7,11 @@ use std::{fmt::Debug, path::PathBuf};
 pub enum MouseCursor {
     #[default]
     Default,
+    Hidden,
 
     Hand,
     HandGrabbing,
     Help,
-
-    Hidden,
 
     Text,
     VerticalText,

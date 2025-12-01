@@ -20,7 +20,7 @@ See [ROADMAP.md](ROADMAP.md) for more info.
 Install dependencies, e.g.:
 
 ```sh
-sudo apt-get install libx11-dev libxcb1-dev libx11-xcb-dev libgl1-mesa-dev
+sudo apt-get install libx11-dev libgl1-mesa-dev
 ```
 
 ## License

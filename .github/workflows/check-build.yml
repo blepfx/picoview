@@ -20,7 +20,7 @@ jobs:
       if: contains(matrix.os, 'ubuntu')
       run: |
         sudo apt-get update
-        sudo apt-get install -y libx11-dev libxcb1-dev libx11-xcb-dev libgl1-mesa-dev
+        sudo apt-get install -y libx11-dev libgl1-mesa-dev
     - name: Install rust stable
       uses: dtolnay/rust-toolchain@stable
       with:

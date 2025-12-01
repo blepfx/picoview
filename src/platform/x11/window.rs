@@ -1,40 +1,40 @@
 use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
-use crate::platform::x11::util::check_error;
+use crate::platform::x11::connection::ATOM_PICOVIEW_WAKEUP;
+use crate::platform::x11::util::get_cursor;
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
     WindowBuilder, WindowFactory, WindowWaker, rwh_06,
 };
+use libc::c_ulong;
 use std::cell::{Cell, RefCell};
-use std::num::NonZero;
-use std::ptr::NonNull;
-use std::sync::{Arc, Weak};
+use std::ffi::CString;
+use std::mem::zeroed;
+use std::ptr::null_mut;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use x11rb::connection::Connection as XConnection;
-use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
-use x11rb::protocol::xproto::{CLIENT_MESSAGE_EVENT, ClientMessageEvent, KeyButMask};
-use x11rb::{
-    COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
-    protocol::{
-        Event as XEvent,
-        xproto::{
-            AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux,
-            ConnectionExt as ConnectionExtXProto, CreateWindowAux, EventMask, PropMode,
-            WindowClass,
-        },
-    },
-    wrapper::ConnectionExt as ConnectionExtWrapper,
+use x11::xlib::{
+    Button1Mask, Button2Mask, Button3Mask, Button4Mask, Button5Mask, ButtonPress, ButtonPressMask,
+    ButtonRelease, ButtonReleaseMask, CWCursor, CWEventMask, CWHeight, CWWidth, CWX, CWY,
+    ClientMessage, ClientMessageData, ConfigureNotify, CopyFromParent, DestroyNotify,
+    FocusChangeMask, FocusIn, FocusOut, InputOutput, KeyPress, KeyPressMask, KeyRelease,
+    KeyReleaseMask, LeaveNotify, LeaveWindowMask, MotionNotify, NoEventMask, NotifyNormal,
+    PMaxSize, PMinSize, PSize, PointerMotionMask, PropModeReplace, StructureNotifyMask,
+    XChangeProperty, XChangeWindowAttributes, XClientMessageEvent, XConfigureWindow, XCreateWindow,
+    XDestroyWindow, XEvent, XFlush, XFree, XMapWindow, XSendEvent, XSetWMName, XSetWMNormalHints,
+    XSetWMProtocols, XSetWindowAttributes, XSizeHints, XStringListToTextProperty, XSync,
+    XTextProperty, XUnmapWindow, XWarpPointer, XWindowChanges,
 };
 
 unsafe impl Send for WindowImpl {}
 
 pub struct WindowImpl {
-    window_id: u32,
+    window_id: c_ulong,
 
-    connection: Arc<Connection>,
+    connection: Connection,
     waker: Arc<WindowWakerImpl>,
 
     is_closed: Cell<bool>,
@@ -55,435 +55,414 @@ pub struct WindowImpl {
 }
 
 pub struct WindowWakerImpl {
-    window_id: u32,
-    connection: Weak<Connection>,
+    window_id: c_ulong,
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
-        let connection = Connection::create()?;
+        unsafe {
+            let connection = Connection::create()?;
+            let parent_window_id = match mode {
+                OpenMode::Blocking => connection.default_root(),
+                OpenMode::Embedded(rwh_06::RawWindowHandle::Xcb(window)) => {
+                    window.window.get() as u64
+                }
+                OpenMode::Embedded(rwh_06::RawWindowHandle::Xlib(window)) => window.window,
+                OpenMode::Embedded(_) => return Err(Error::InvalidParent),
+            };
 
-        let parent_window_id = match mode {
-            OpenMode::Embedded(rwh_06::RawWindowHandle::Xcb(window)) => window.window.get(),
-            OpenMode::Embedded(rwh_06::RawWindowHandle::Xlib(window)) => window.window as u32,
-            OpenMode::Embedded(_) => {
-                return Err(Error::InvalidParent);
-            }
-            OpenMode::Blocking => connection.default_root().root,
-        };
-
-        let window_id = connection
-            .xcb()
-            .generate_id()
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-        connection
-            .xcb()
-            .create_window(
-                COPY_DEPTH_FROM_PARENT,
-                window_id,
+            let window_id = XCreateWindow(
+                connection.display(),
                 parent_window_id,
                 0,
                 0,
                 options.size.width as _,
                 options.size.height as _,
                 0,
-                WindowClass::INPUT_OUTPUT,
-                COPY_FROM_PARENT,
-                &CreateWindowAux::new().event_mask(
-                    EventMask::BUTTON_PRESS
-                        | EventMask::BUTTON_RELEASE
-                        | EventMask::STRUCTURE_NOTIFY
-                        | EventMask::KEY_PRESS
-                        | EventMask::KEY_RELEASE
-                        | EventMask::LEAVE_WINDOW
-                        | EventMask::POINTER_MOTION
-                        | EventMask::FOCUS_CHANGE,
-                ),
-            )
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
+                CopyFromParent,
+                InputOutput as u32,
+                null_mut(),
+                CWEventMask,
+                &mut XSetWindowAttributes {
+                    event_mask: ButtonPressMask
+                        | ButtonReleaseMask
+                        | StructureNotifyMask
+                        | KeyPressMask
+                        | KeyReleaseMask
+                        | LeaveWindowMask
+                        | PointerMotionMask
+                        | FocusChangeMask,
+                    ..zeroed()
+                },
+            );
 
-        connection
-            .xcb()
-            .change_property32(
-                PropMode::REPLACE,
+            let (min_size, max_size) = match options.resizable.clone() {
+                None => (options.size, options.size),
+                Some(range) => (range.start, range.end),
+            };
+
+            XSetWMProtocols(
+                connection.display(),
                 window_id,
-                connection.atoms().WM_PROTOCOLS,
-                AtomEnum::ATOM,
-                &[connection.atoms().WM_DELETE_WINDOW],
-            )
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
+                &mut connection.atom(c"WM_DELETE_WINDOW"),
+                1,
+            );
 
-        let (min_size, max_size) = match options.resizable.clone() {
-            None => (options.size, options.size),
-            Some(range) => (range.start, range.end),
-        };
-
-        let mut size_hints = WmSizeHints::new();
-        size_hints.size = Some((
-            WmSizeHintsSpecification::ProgramSpecified,
-            options.size.width.try_into().unwrap_or(i32::MAX),
-            options.size.height.try_into().unwrap_or(i32::MAX),
-        ));
-        size_hints.max_size = Some((
-            max_size.width.try_into().unwrap_or(i32::MAX),
-            max_size.height.try_into().unwrap_or(i32::MAX),
-        ));
-        size_hints.min_size = Some((
-            min_size.width.try_into().unwrap_or(i32::MAX),
-            min_size.height.try_into().unwrap_or(i32::MAX),
-        ));
-        size_hints
-            .set(connection.xcb(), window_id, AtomEnum::WM_NORMAL_HINTS)
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-        connection
-            .xcb()
-            .change_property8(
-                PropMode::REPLACE,
+            XSetWMNormalHints(
+                connection.display(),
                 window_id,
-                AtomEnum::WM_NAME,
-                AtomEnum::STRING,
-                options.title.as_bytes(),
-            )
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
+                &mut XSizeHints {
+                    flags: PMinSize | PMaxSize | PSize,
+                    width: options.size.width.try_into().unwrap_or(i32::MAX),
+                    height: options.size.height.try_into().unwrap_or(i32::MAX),
+                    min_width: min_size.width.try_into().unwrap_or(i32::MAX),
+                    min_height: min_size.height.try_into().unwrap_or(i32::MAX),
+                    max_width: max_size.width.try_into().unwrap_or(i32::MAX),
+                    max_height: max_size.height.try_into().unwrap_or(i32::MAX),
+                    ..zeroed()
+                },
+            );
 
-        connection
-            .xcb()
-            .change_property32(
-                PropMode::REPLACE,
+            let title =
+                CString::new(options.title).map_err(|e| Error::PlatformError(e.to_string()))?;
+            let mut text = XTextProperty { ..zeroed() };
+            let status = XStringListToTextProperty(&mut (title.as_ptr() as *mut _), 1, &mut text);
+            if status != 0 {
+                XSetWMName(connection.display(), window_id, &mut text);
+                XFree(text.value as *mut _);
+            }
+
+            let data: [u32; 1] = [if options.decorations {
+                connection.atom(c"_NET_WM_WINDOW_TYPE_NORMAL") as u32
+            } else {
+                connection.atom(c"_NET_WM_WINDOW_TYPE_DOCK") as u32
+            }];
+
+            XChangeProperty(
+                connection.display(),
                 window_id,
-                connection.atoms()._NET_WM_WINDOW_TYPE,
-                AtomEnum::ATOM,
-                &[if options.decorations {
-                    connection.atoms()._NET_WM_WINDOW_TYPE_NORMAL
-                } else {
-                    connection.atoms()._NET_WM_WINDOW_TYPE_DOCK
-                }],
-            )
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
+                connection.atom(c"_NET_WM_WINDOW_TYPE"),
+                connection.atom(c"ATOM"),
+                32,
+                PropModeReplace,
+                data.as_ptr() as *mut _,
+                data.len() as _,
+            );
 
-        connection
-            .xcb()
-            .change_property32(
-                PropMode::REPLACE,
+            let data: [u32; 5] = [0b10, 0, options.decorations as u32, 0, 0];
+
+            XChangeProperty(
+                connection.display(),
                 window_id,
-                connection.atoms()._MOTIF_WM_HINTS,
-                AtomEnum::ATOM,
-                &[0b10, 0, options.decorations as u32, 0, 0],
-            )
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
+                connection.atom(c"_MOTIF_WM_HINTS"),
+                connection.atom(c"ATOM"),
+                32,
+                PropModeReplace,
+                data.as_ptr() as *mut _,
+                data.len() as _,
+            );
 
-        if options.visible {
-            connection
-                .xcb()
-                .map_window(window_id)
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-        }
+            if options.visible {
+                XMapWindow(connection.display(), window_id);
+            }
 
-        if let Some(position) = options.position {
-            connection
-                .xcb()
-                .configure_window(
+            if let Some(position) = options.position {
+                XConfigureWindow(
+                    connection.display(),
                     window_id,
-                    &ConfigureWindowAux::new()
-                        .x(position.x as i32)
-                        .y(position.y as i32),
-                )
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-        }
+                    (CWX | CWY) as _,
+                    &mut XWindowChanges {
+                        x: position.x as i32,
+                        y: position.y as i32,
+                        ..zeroed()
+                    },
+                );
+            }
 
-        connection
-            .flush()
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
-
-        let gl_context = if let Some(config) = options.opengl {
-            unsafe {
-                match GlContext::new(connection.clone(), window_id as _, config) {
+            let gl_context = if let Some(config) = options.opengl {
+                match GlContext::new(&connection, window_id as _, config) {
                     Ok(gl) => Some(gl),
                     Err(_) if config.optional => None,
                     Err(e) => return Err(e),
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
-        let refresh_interval = {
-            let rate = connection.refresh_rate().ok().flatten().unwrap_or(60.0);
-            Duration::from_secs_f64(1.0 / rate)
-        };
+            let refresh_interval =
+                Duration::from_secs_f64(1.0 / connection.refresh_rate().unwrap_or(60.0));
 
-        connection
-            .flush()
-            .map_err(|e| Error::PlatformError(e.to_string()))?;
+            XSync(connection.display(), 0);
+            connection.check_error().map_err(Error::PlatformError)?;
 
-        let window = Box::new(Self {
-            window_id,
-            connection: connection.clone(),
-            waker: Arc::new(WindowWakerImpl {
+            let window = Box::new(Self {
                 window_id,
-                connection: Arc::downgrade(&connection),
-            }),
+                connection,
+                waker: Arc::new(WindowWakerImpl {
+                    window_id,
+                    connection: Arc::new(Mutex::new(Connection::create()?)),
+                }),
 
-            is_closed: Cell::new(false),
-            is_destroyed: Cell::new(false),
-            is_resizeable: options.resizable.is_some(),
-            refresh_interval,
+                is_closed: Cell::new(false),
+                is_destroyed: Cell::new(false),
+                is_resizeable: options.resizable.is_some(),
+                refresh_interval,
 
-            last_modifiers: Cell::new(Modifiers::empty()),
-            last_cursor: Cell::new(MouseCursor::Default),
-            last_window_position: Cell::new(None),
-            last_window_size: Cell::new(None),
-            last_window_visible: Cell::new(options.visible),
-            last_cursor_in_bounds: Cell::new(false),
+                last_modifiers: Cell::new(Modifiers::empty()),
+                last_cursor: Cell::new(MouseCursor::Default),
+                last_window_position: Cell::new(None),
+                last_window_size: Cell::new(None),
+                last_window_visible: Cell::new(options.visible),
+                last_cursor_in_bounds: Cell::new(false),
 
-            handler: RefCell::new(None),
-            gl_context,
-        });
+                handler: RefCell::new(None),
+                gl_context,
+            });
 
-        match mode {
-            OpenMode::Blocking => {
-                window.run_event_loop(options.factory)?;
-                Ok(WindowWaker::default())
-            }
-            OpenMode::Embedded(..) => {
-                let waker = window.waker();
-                thread::spawn(|| window.run_event_loop(options.factory).ok());
-                Ok(waker)
+            match mode {
+                OpenMode::Blocking => {
+                    window.run_event_loop(options.factory)?;
+                    Ok(WindowWaker::default())
+                }
+                OpenMode::Embedded(..) => {
+                    let waker = window.waker();
+                    thread::spawn(|| window.run_event_loop(options.factory).ok());
+                    Ok(waker)
+                }
             }
         }
     }
 
+    #[allow(clippy::boxed_local)]
     fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), Error> {
-        // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so because:
-        //  - because our window instance is boxed, it has a stable address for the whole lifetime of the window
-        //  - we manually dispose of our handler before WindowImpl gets dropped (see drop impl)
-        //  - we promise to not move WindowImpl (and by extension the handler) to a different thread (as that would violate the handler's !Send requirement)
         unsafe {
+            // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so because:
+            //  - because our window instance is boxed, it has a stable address for the whole lifetime of the window
+            //  - we manually dispose of our handler before WindowImpl gets dropped (see drop impl)
+            //  - we promise to not move WindowImpl (and by extension the handler) to a different thread (as that would violate the handler's !Send requirement)
             self.handler
                 .replace(Some((factory)(Window(&*(&*self as *const Self)))));
-        }
 
-        self.send_event(Event::WindowScale {
-            scale: self.connection.os_scale_dpi() as f32 / 96.0,
-        });
+            self.send_event(Event::WindowScale {
+                scale: self.connection.scale_dpi().map_or(1.0, |x| x / 96.0),
+            });
 
-        // main loop
-        let mut next_frame = Instant::now();
-        while !self.is_closed.get() {
-            let curr_frame = Instant::now();
-            let wait_time = match next_frame.checked_duration_since(curr_frame) {
-                Some(wait_time) => wait_time,
-                None => {
-                    next_frame = (next_frame + self.refresh_interval).max(curr_frame);
-                    self.handle_frame();
-                    continue;
+            // main loop
+            let mut next_frame = Instant::now();
+            while !self.is_closed.get() {
+                let curr_frame = Instant::now();
+                let wait_time = match next_frame.checked_duration_since(curr_frame) {
+                    Some(wait_time) => wait_time,
+                    None => {
+                        next_frame = (next_frame + self.refresh_interval).max(curr_frame);
+                        self.handle_frame();
+                        continue;
+                    }
+                };
+
+                XFlush(self.connection.display());
+                self.connection
+                    .check_error()
+                    .map_err(Error::PlatformError)?;
+
+                if let Some(event) = self.connection.poll_event_timeout(Some(wait_time))? {
+                    self.handle_event(event);
                 }
-            };
-
-            match self.connection.poll_event_timeout(Some(wait_time)) {
-                Ok(None) => {}
-                Ok(Some(event)) => self.handle_event(&event),
-                Err(e) => return Err(Error::PlatformError(e.to_string())),
             }
+
+            self.destroy()
         }
-
-        // destroy logic
-        self.handler.take();
-
-        if !self.is_destroyed.get() {
-            self.connection
-                .xcb()
-                .destroy_window(self.window_id)
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-            self.connection
-                .flush()
-                .map_err(|e| Error::PlatformError(e.to_string()))?;
-        }
-
-        Ok(())
     }
 
     fn handle_frame(&self) {
-        self.send_event(Event::WindowFrame {
-            gl: self.gl_context.as_ref().map(|x| x as &dyn crate::GlContext),
-        });
-    }
-
-    fn handle_event(&self, event: &XEvent) {
-        match event {
-            XEvent::ClientMessage(e) => {
-                if e.format == 32
-                    && e.type_ == self.connection.atoms().WM_PROTOCOLS
-                    && e.data.as_data32()[0] == self.connection.atoms().WM_DELETE_WINDOW
-                {
-                    self.is_closed.set(true);
-                }
-
-                if e.format == 32 && e.type_ == self.connection.atoms().PICOVIEW_WAKEUP {
-                    self.send_event(Event::Wakeup);
-                }
+        match &self.gl_context {
+            Some(context) => {
+                let scope = context.scope(&self.connection);
+                self.send_event(Event::WindowFrame { gl: Some(&scope) });
             }
-
-            XEvent::ConfigureNotify(e) => {
-                let is_synthetic = e.response_type & 0x80 == 0;
-                let origin = Point {
-                    x: e.x as f32,
-                    y: e.y as f32,
-                };
-
-                let size = Size {
-                    width: e.width as u32,
-                    height: e.height as u32,
-                };
-
-                if !is_synthetic && self.last_window_position.replace(Some(origin)) != Some(origin)
-                {
-                    self.send_event(Event::WindowMove { origin });
-                }
-
-                if self.last_window_size.replace(Some(size)) != Some(size) {
-                    self.send_event(Event::WindowResize { size });
-                }
+            None => {
+                self.send_event(Event::WindowFrame { gl: None });
             }
-
-            XEvent::ButtonPress(e) => {
-                self.handle_modifiers(util::keymask2mods(e.state));
-
-                let event = match e.detail {
-                    1 => Event::MouseDown {
-                        button: MouseButton::Left,
-                    },
-                    2 => Event::MouseDown {
-                        button: MouseButton::Middle,
-                    },
-                    3 => Event::MouseDown {
-                        button: MouseButton::Right,
-                    },
-                    8 => Event::MouseDown {
-                        button: MouseButton::Back,
-                    },
-                    9 => Event::MouseDown {
-                        button: MouseButton::Forward,
-                    },
-                    4 => Event::MouseScroll { x: 0.0, y: 1.0 },
-                    5 => Event::MouseScroll { x: 0.0, y: -1.0 },
-                    6 => Event::MouseScroll { x: 1.0, y: 0.0 },
-                    7 => Event::MouseScroll { x: -1.0, y: 0.0 },
-                    _ => return,
-                };
-
-                self.send_event(Event::MouseMove {
-                    relative: Point {
-                        x: e.event_x as f32,
-                        y: e.event_y as f32,
-                    },
-                    absolute: Point {
-                        x: e.root_x as f32,
-                        y: e.root_y as f32,
-                    },
-                });
-                self.send_event(event);
-            }
-
-            XEvent::ButtonRelease(e) => {
-                self.handle_modifiers(util::keymask2mods(e.state));
-
-                let button = match e.detail {
-                    1 => MouseButton::Left,
-                    2 => MouseButton::Middle,
-                    3 => MouseButton::Right,
-                    8 => MouseButton::Back,
-                    9 => MouseButton::Forward,
-                    _ => return,
-                };
-
-                self.send_event(Event::MouseMove {
-                    relative: Point {
-                        x: e.event_x as f32,
-                        y: e.event_y as f32,
-                    },
-                    absolute: Point {
-                        x: e.root_x as f32,
-                        y: e.root_y as f32,
-                    },
-                });
-                self.send_event(Event::MouseUp { button });
-            }
-
-            XEvent::KeyPress(e) => {
-                self.handle_modifiers(util::keymask2mods(e.state) | util::hwcode2mods(e.detail));
-
-                if let Some(key) = util::hwcode2key(e.detail) {
-                    self.send_event(Event::KeyDown {
-                        key,
-                        capture: &mut false, //TODO: key capture?
-                    });
-                }
-            }
-
-            XEvent::KeyRelease(e) => {
-                self.handle_modifiers(util::keymask2mods(e.state) - util::hwcode2mods(e.detail));
-
-                if let Some(key) = util::hwcode2key(e.detail) {
-                    self.send_event(Event::KeyUp {
-                        key,
-                        capture: &mut false,
-                    });
-                }
-            }
-
-            XEvent::MotionNotify(e) => {
-                self.last_cursor_in_bounds.set(true);
-
-                self.handle_modifiers(util::keymask2mods(e.state));
-                self.send_event(Event::MouseMove {
-                    relative: Point {
-                        x: e.event_x as f32,
-                        y: e.event_y as f32,
-                    },
-                    absolute: Point {
-                        x: e.root_x as f32,
-                        y: e.root_y as f32,
-                    },
-                });
-            }
-
-            XEvent::LeaveNotify(e) => {
-                let grabbed = e.state.intersects(
-                    KeyButMask::BUTTON1
-                        | KeyButMask::BUTTON2
-                        | KeyButMask::BUTTON3
-                        | KeyButMask::BUTTON4
-                        | KeyButMask::BUTTON5,
-                );
-
-                if grabbed || !self.last_cursor_in_bounds.replace(false) {
-                    return;
-                }
-
-                self.send_event(Event::MouseLeave);
-            }
-
-            XEvent::FocusIn(_) => {
-                self.send_event(Event::WindowFocus { focus: true });
-            }
-
-            XEvent::FocusOut(_) => {
-                self.send_event(Event::WindowFocus { focus: false });
-            }
-
-            XEvent::DestroyNotify(_) => {
-                self.is_closed.set(true);
-                self.is_destroyed.set(true);
-            }
-
-            _ => {}
         }
     }
 
-    fn handle_modifiers(&self, modifiers: Modifiers) {
+    #[allow(non_upper_case_globals)]
+    fn handle_event(&self, event: XEvent) {
+        unsafe {
+            match event.type_ {
+                ClientMessage => {
+                    let event = event.client_message;
+                    if event.format == 32
+                        && event.message_type == self.connection.atom(c"WM_PROTOCOLS") as _
+                        && event.data.get_long(0) == self.connection.atom(c"WM_DELETE_WINDOW") as _
+                    {
+                        self.is_closed.set(true);
+                    }
+
+                    if event.format == 32
+                        && event.message_type == self.connection.atom(c"PICOVIEW_WAKEUP") as _
+                    {
+                        self.send_event(Event::Wakeup);
+                    }
+                }
+                ConfigureNotify => {
+                    let event = event.configure;
+                    let is_synthetic = event.type_ & 0x80 == 0;
+
+                    let origin = Point {
+                        x: event.x as f32,
+                        y: event.y as f32,
+                    };
+
+                    let size = Size {
+                        width: event.width as u32,
+                        height: event.height as u32,
+                    };
+
+                    if !is_synthetic
+                        && self.last_window_position.replace(Some(origin)) != Some(origin)
+                    {
+                        self.send_event(Event::WindowMove { origin });
+                    }
+
+                    if self.last_window_size.replace(Some(size)) != Some(size) {
+                        self.send_event(Event::WindowResize { size });
+                    }
+                }
+                ButtonPress | ButtonRelease => {
+                    let event = event.button;
+
+                    self.handle_event_modifiers(util::keymask_to_mods(event.state));
+
+                    let result = match event.button {
+                        1 | 2 | 3 | 8 | 9 => {
+                            let button = match event.button {
+                                1 => MouseButton::Left,
+                                2 => MouseButton::Middle,
+                                3 => MouseButton::Right,
+                                8 => MouseButton::Back,
+                                9 => MouseButton::Forward,
+                                _ => return,
+                            };
+
+                            if event.type_ == ButtonPress {
+                                Event::MouseDown { button }
+                            } else {
+                                Event::MouseUp { button }
+                            }
+                        }
+
+                        4..=7 if event.type_ == ButtonPress => match event.button {
+                            4 => Event::MouseScroll { x: 0.0, y: 1.0 },
+                            5 => Event::MouseScroll { x: 0.0, y: -1.0 },
+                            6 => Event::MouseScroll { x: 1.0, y: 0.0 },
+                            7 => Event::MouseScroll { x: -1.0, y: 0.0 },
+                            _ => return,
+                        },
+
+                        _ => return,
+                    };
+
+                    self.send_event(Event::MouseMove {
+                        relative: Point {
+                            x: event.x as f32,
+                            y: event.y as f32,
+                        },
+                        absolute: Point {
+                            x: event.x_root as f32,
+                            y: event.y_root as f32,
+                        },
+                    });
+
+                    self.send_event(result);
+                }
+                KeyPress => {
+                    let event = event.key;
+                    self.handle_event_modifiers(
+                        util::keymask_to_mods(event.state) | util::keycode_to_mods(event.keycode),
+                    );
+
+                    if let Some(key) = util::keycode_to_key(event.keycode) {
+                        self.send_event(Event::KeyDown {
+                            key,
+                            capture: &mut false, //TODO: key capture?
+                        });
+                    }
+                }
+                KeyRelease => {
+                    let event = event.key;
+                    self.handle_event_modifiers(
+                        util::keymask_to_mods(event.state) - util::keycode_to_mods(event.keycode),
+                    );
+
+                    if let Some(key) = util::keycode_to_key(event.keycode) {
+                        self.send_event(Event::KeyUp {
+                            key,
+                            capture: &mut false, //TODO: key capture?
+                        });
+                    }
+                }
+                MotionNotify => {
+                    let event = event.motion;
+                    self.last_cursor_in_bounds.set(true);
+                    self.handle_event_modifiers(util::keymask_to_mods(event.state));
+                    self.send_event(Event::MouseMove {
+                        relative: Point {
+                            x: event.x as f32,
+                            y: event.y as f32,
+                        },
+                        absolute: Point {
+                            x: event.x_root as f32,
+                            y: event.y_root as f32,
+                        },
+                    });
+                }
+                LeaveNotify => {
+                    const ANY_BUTTON: u32 =
+                        Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask;
+
+                    let event = event.crossing;
+
+                    self.handle_event_modifiers(util::keymask_to_mods(event.state));
+
+                    let grabbed = (event.state & ANY_BUTTON) != 0;
+                    if grabbed || !self.last_cursor_in_bounds.replace(false) {
+                        return;
+                    }
+
+                    self.send_event(Event::MouseMove {
+                        relative: Point {
+                            x: event.x as f32,
+                            y: event.y as f32,
+                        },
+                        absolute: Point {
+                            x: event.x_root as f32,
+                            y: event.y_root as f32,
+                        },
+                    });
+                    self.send_event(Event::MouseLeave);
+                }
+                FocusIn | FocusOut => {
+                    let event = event.focus_change;
+                    if event.mode != NotifyNormal {
+                        return;
+                    }
+
+                    self.send_event(Event::WindowFocus {
+                        focus: event.type_ == FocusIn,
+                    });
+                }
+                DestroyNotify => {
+                    self.is_closed.set(true);
+                    self.is_destroyed.set(true);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn handle_event_modifiers(&self, modifiers: Modifiers) {
         if self.last_modifiers.replace(modifiers) != modifiers {
             self.send_event(Event::KeyModifiers { modifiers });
         }
@@ -492,6 +471,28 @@ impl WindowImpl {
     fn send_event(&self, e: Event) {
         if let Some(handler) = &mut *self.handler.borrow_mut() {
             handler(e)
+        }
+    }
+
+    fn destroy(mut self) -> Result<(), Error> {
+        unsafe {
+            // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends on WindowImpl
+            self.handler.take();
+
+            if let Some(gl) = self.gl_context.take() {
+                gl.close(&self.connection)
+            }
+
+            if !self.is_destroyed.get() {
+                XDestroyWindow(self.connection.display(), self.window_id);
+            }
+
+            XSync(self.connection.display(), 0);
+            self.connection
+                .check_error()
+                .map_err(Error::PlatformError)?;
+
+            Ok(())
         }
     }
 }
@@ -506,18 +507,11 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
-        unsafe {
-            rwh_06::RawWindowHandle::Xcb(rwh_06::XcbWindowHandle::new(NonZero::new_unchecked(
-                self.window_id,
-            )))
-        }
+        rwh_06::RawWindowHandle::Xlib(rwh_06::XlibWindowHandle::new(self.window_id))
     }
 
     fn display_handle(&self) -> rwh_06::RawDisplayHandle {
-        rwh_06::RawDisplayHandle::Xcb(rwh_06::XcbDisplayHandle::new(
-            NonNull::new(self.connection.raw_connection()),
-            self.connection.default_screen_index(),
-        ))
+        rwh_06::RawDisplayHandle::Xlib(self.connection.display_handle())
     }
 
     fn set_title(&self, title: &str) {
@@ -525,15 +519,17 @@ impl PlatformWindow for WindowImpl {
             return;
         }
 
-        check_error(self.connection.xcb().change_property8(
-            PropMode::REPLACE,
-            self.window_id,
-            AtomEnum::WM_NAME,
-            AtomEnum::STRING,
-            title.as_bytes(),
-        ));
-
-        check_error(self.connection.flush());
+        if let Ok(title) = CString::new(title.to_owned()) {
+            unsafe {
+                let mut text = XTextProperty { ..zeroed() };
+                let status =
+                    XStringListToTextProperty(&mut (title.as_ptr() as *mut _), 1, &mut text);
+                if status != 0 {
+                    XSetWMName(self.connection.display(), self.window_id, &mut text);
+                    XFree(text.value as *mut _);
+                }
+            }
+        }
     }
 
     fn set_cursor_icon(&self, cursor: MouseCursor) {
@@ -541,14 +537,16 @@ impl PlatformWindow for WindowImpl {
             return;
         }
 
-        let xid = self.connection.load_cursor(cursor);
-        if xid != 0 {
-            check_error(self.connection.xcb().change_window_attributes(
-                self.window_id,
-                &ChangeWindowAttributesAux::new().cursor(xid),
-            ));
-
-            check_error(self.connection.flush());
+        unsafe {
+            let cursor = get_cursor(&self.connection, cursor);
+            if cursor != 0 {
+                XChangeWindowAttributes(
+                    self.connection.display(),
+                    self.window_id,
+                    CWCursor,
+                    &mut XSetWindowAttributes { cursor, ..zeroed() },
+                );
+            }
         }
     }
 
@@ -557,18 +555,19 @@ impl PlatformWindow for WindowImpl {
             return;
         }
 
-        check_error(self.connection.xcb().warp_pointer(
-            x11rb::NONE,
-            self.window_id,
-            0,
-            0,
-            0,
-            0,
-            point.x.round() as i16,
-            point.y.round() as i16,
-        ));
-
-        check_error(self.connection.flush());
+        unsafe {
+            XWarpPointer(
+                self.connection.display(),
+                0,
+                self.window_id,
+                0,
+                0,
+                0,
+                0,
+                point.x.round() as i32,
+                point.y.round() as i32,
+            );
+        }
     }
 
     fn set_size(&self, size: Size) {
@@ -576,34 +575,51 @@ impl PlatformWindow for WindowImpl {
             return;
         }
 
-        let mut size_hints = WmSizeHints::new();
-        let (w_i32, h_i32) = (
+        let (width, height) = (
             size.width.try_into().unwrap_or(i32::MAX),
             size.height.try_into().unwrap_or(i32::MAX),
         );
 
-        size_hints.size = Some((WmSizeHintsSpecification::ProgramSpecified, w_i32, h_i32));
-        if !self.is_resizeable {
-            size_hints.max_size = Some((w_i32, h_i32));
-            size_hints.min_size = Some((w_i32, h_i32));
-        }
+        unsafe {
+            if self.is_resizeable {
+                XSetWMNormalHints(
+                    self.connection.display(),
+                    self.window_id,
+                    &mut XSizeHints {
+                        flags: PSize,
+                        width,
+                        height,
+                        ..zeroed()
+                    },
+                );
+            } else {
+                XSetWMNormalHints(
+                    self.connection.display(),
+                    self.window_id,
+                    &mut XSizeHints {
+                        flags: PSize | PMaxSize | PMinSize,
+                        width,
+                        height,
+                        max_width: width,
+                        max_height: height,
+                        min_width: width,
+                        min_height: height,
+                        ..zeroed()
+                    },
+                );
+            }
 
-        check_error(size_hints.set(
-            self.connection.xcb(),
-            self.window_id,
-            AtomEnum::WM_NORMAL_HINTS,
-        ));
-
-        check_error(
-            self.connection.xcb().configure_window(
+            XConfigureWindow(
+                self.connection.display(),
                 self.window_id,
-                &ConfigureWindowAux::new()
-                    .width(size.width)
-                    .height(size.height),
-            ),
-        );
-
-        check_error(self.connection.flush());
+                (CWWidth | CWHeight) as _,
+                &mut XWindowChanges {
+                    width,
+                    height,
+                    ..zeroed()
+                },
+            );
+        }
     }
 
     fn set_position(&self, point: Point) {
@@ -611,16 +627,18 @@ impl PlatformWindow for WindowImpl {
             return;
         }
 
-        check_error(
-            self.connection.xcb().configure_window(
+        unsafe {
+            XConfigureWindow(
+                self.connection.display(),
                 self.window_id,
-                &ConfigureWindowAux::new()
-                    .x(point.x as i32)
-                    .y(point.y as i32),
-            ),
-        );
-
-        check_error(self.connection.flush());
+                (CWX | CWY) as _,
+                &mut XWindowChanges {
+                    x: point.x as i32,
+                    y: point.y as i32,
+                    ..zeroed()
+                },
+            );
+        }
     }
 
     fn set_visible(&self, visible: bool) {
@@ -628,29 +646,39 @@ impl PlatformWindow for WindowImpl {
             return;
         }
 
-        if visible {
-            let mut config = ConfigureWindowAux::new();
-            if let Some(point) = self.last_window_position.get() {
-                config.x = Some(point.x as i32);
-                config.y = Some(point.y as i32);
-            }
+        unsafe {
+            if visible {
+                if let Some(point) = self.last_window_position.get() {
+                    XConfigureWindow(
+                        self.connection.display(),
+                        self.window_id,
+                        (CWX | CWY) as _,
+                        &mut XWindowChanges {
+                            x: point.x as i32,
+                            y: point.y as i32,
+                            ..zeroed()
+                        },
+                    );
+                }
 
-            if let Some(size) = self.last_window_size.get() {
-                config.width = Some(size.width);
-                config.height = Some(size.height);
-            }
+                if let Some(size) = self.last_window_size.get() {
+                    XConfigureWindow(
+                        self.connection.display(),
+                        self.window_id,
+                        (CWWidth | CWHeight) as _,
+                        &mut XWindowChanges {
+                            width: size.width.try_into().unwrap_or(i32::MAX),
+                            height: size.height.try_into().unwrap_or(i32::MAX),
+                            ..zeroed()
+                        },
+                    );
+                }
 
-            check_error(self.connection.xcb().map_window(self.window_id));
-            check_error(
-                self.connection
-                    .xcb()
-                    .configure_window(self.window_id, &config),
-            );
-        } else {
-            check_error(self.connection.xcb().unmap_window(self.window_id));
+                XMapWindow(self.connection.display(), self.window_id);
+            } else {
+                XUnmapWindow(self.connection.display(), self.window_id);
+            }
         }
-
-        check_error(self.connection.flush());
     }
 
     fn open_url(&self, url: &str) -> bool {
@@ -668,36 +696,31 @@ impl PlatformWindow for WindowImpl {
 
 impl PlatformWaker for WindowWakerImpl {
     fn wakeup(&self) -> Result<(), WakeupError> {
-        if let Some(connection) = self.connection.upgrade() {
-            let Ok(request) = connection.xcb().send_event(
-                false,
+        let conn = self.connection.lock().expect("poisoned");
+
+        unsafe {
+            XSendEvent(
+                conn.display(),
                 self.window_id,
-                EventMask::NO_EVENT,
-                ClientMessageEvent {
-                    response_type: CLIENT_MESSAGE_EVENT,
-                    format: 32,
-                    sequence: 0,
-                    window: self.window_id,
-                    type_: connection.atoms().PICOVIEW_WAKEUP,
-                    data: [0; 20].into(),
+                1,
+                NoEventMask,
+                &mut XEvent {
+                    client_message: XClientMessageEvent {
+                        type_: ClientMessage,
+                        serial: 0,
+                        send_event: 1,
+                        display: conn.display(),
+                        window: self.window_id,
+                        message_type: conn.atom(ATOM_PICOVIEW_WAKEUP),
+                        format: 32,
+                        data: ClientMessageData::new(),
+                    },
                 },
-            ) else {
-                return Err(WakeupError::Disconnected);
-            };
-
-            match request.check() {
-                Err(_) => Err(WakeupError::Disconnected),
-                Ok(_) => Ok(()),
-            }
-        } else {
-            Err(WakeupError::Disconnected)
+            );
+            XFlush(conn.display());
         }
-    }
-}
 
-impl Drop for WindowImpl {
-    fn drop(&mut self) {
-        // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends on WindowImpl
-        self.handler.take();
+        // TODO: check if we are dead?
+        Ok(())
     }
 }
