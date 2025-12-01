@@ -2,7 +2,7 @@ use picoview::{Event, MouseCursor, Point, Size, WindowBuilder};
 use std::time::{Duration, Instant};
 
 fn main() {
-    WindowBuilder::new(|window| {   
+    WindowBuilder::new(|window| {
         let start = Instant::now();
         let mut last = Instant::now();
 
