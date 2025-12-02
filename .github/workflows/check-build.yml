@@ -5,28 +5,48 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: -Dwarnings
+      RUSTFLAGS: -Dwarnings -Zsanitize=address -Zbuild-std 
       RUSTDOCFLAGS: -Dwarnings
       RUST_BACKTRACE: 1
       DISPLAY: :99
     steps:
     - uses: actions/checkout@v4
     - name: Install X11 and GL dependencies
-      if: contains(matrix.os, 'ubuntu')
       run: |
         sudo apt-get update
         sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev xvfb x11-utils
     - name: Start Xvfb
-      if: contains(matrix.os, 'ubuntu')
       run: |
         sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
+    - name: Install rust nightly
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        toolchain: nightly
+        components: rustfmt, clippy
+    - name: Build
+      run: cargo build --workspace --all-targets --all-features
+    - name: Run Tests
+      run: |
+        cargo test --workspace --all-targets --all-features
+    - name: Check Docs
+      run: cargo doc --examples --all-features --no-deps
+    - name: Clippy
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+    - name: Check Formatting
+      run: cargo fmt --all -- --check
+
+  build-windows:
+    runs-on: windows-latest
+    env:
+      CARGO_BUILD_TARGET: x86_64-pc-windows-gnu 
+      RUSTFLAGS: -Dwarnings -Zsanitize=address -Zbuild-std 
+      RUSTDOCFLAGS: -Dwarnings
+      RUST_BACKTRACE: 1
+    steps:
+    - uses: actions/checkout@v4
     - name: Install rust nightly
       uses: dtolnay/rust-toolchain@nightly
       with:
