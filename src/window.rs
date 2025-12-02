@@ -32,6 +32,10 @@ pub struct WindowWaker(pub(crate) Arc<dyn platform::PlatformWaker>);
 pub struct Window<'a>(pub(crate) &'a dyn platform::PlatformWindow);
 
 impl<'a> Window<'a> {
+    pub fn waker(&self) -> WindowWaker {
+        self.0.waker()
+    }
+
     pub fn close(&self) {
         self.0.close();
     }

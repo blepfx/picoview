@@ -26,7 +26,7 @@ use x11::xlib::{
     XChangeProperty, XChangeWindowAttributes, XClientMessageEvent, XConfigureWindow, XCreateWindow,
     XDestroyWindow, XEvent, XFlush, XFree, XMapWindow, XSendEvent, XSetWMName, XSetWMNormalHints,
     XSetWMProtocols, XSetWindowAttributes, XSizeHints, XStringListToTextProperty, XSync,
-    XTextProperty, XUnmapWindow, XWarpPointer, XWindowChanges,
+    XTextProperty, XTranslateCoordinates, XUnmapWindow, XWarpPointer, XWindowChanges,
 };
 
 unsafe impl Send for WindowImpl {}
@@ -310,23 +310,38 @@ impl WindowImpl {
                 }
                 ConfigureNotify => {
                     let event = event.configure;
-                    let is_synthetic = event.type_ & 0x80 == 0;
 
-                    let origin = Point {
-                        x: event.x as f32,
-                        y: event.y as f32,
-                    };
+                    {
+                        let mut x = 0;
+                        let mut y = 0;
+
+                        let status = XTranslateCoordinates(
+                            self.connection.display(),
+                            self.connection.default_root(),
+                            self.window_id,
+                            0,
+                            0,
+                            &mut x,
+                            &mut y,
+                            &mut 0,
+                        );
+
+                        let origin = Point {
+                            x: -x as f32,
+                            y: -y as f32,
+                        };
+
+                        if status != 0
+                            && self.last_window_position.replace(Some(origin)) != Some(origin)
+                        {
+                            self.send_event(Event::WindowMove { origin });
+                        }
+                    }
 
                     let size = Size {
                         width: event.width as u32,
                         height: event.height as u32,
                     };
-
-                    if !is_synthetic
-                        && self.last_window_position.replace(Some(origin)) != Some(origin)
-                    {
-                        self.send_event(Event::WindowMove { origin });
-                    }
 
                     if self.last_window_size.replace(Some(size)) != Some(size) {
                         self.send_event(Event::WindowResize { size });

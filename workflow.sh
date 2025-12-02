@@ -1,5 +1,5 @@
-export RUSTFLAGS="-D warnings"
-export RUSTDOCFLAGS="-D warnings"
+export RUSTFLAGS="-Dwarnings -Zsanitizer=address"
+export RUSTDOCFLAGS="-Dwarnings"
 
 cargo build --workspace --all-targets
 cargo build --workspace --all-targets --all-features
