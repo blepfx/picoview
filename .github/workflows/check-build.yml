@@ -8,7 +8,7 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: -Dwarnings -Zsanitize=address -Zbuild-std 
+      RUSTFLAGS: -Dwarnings -Zsanitizer=address -Zbuild-std 
       RUSTDOCFLAGS: -Dwarnings
       RUST_BACKTRACE: 1
       DISPLAY: :99
@@ -42,7 +42,7 @@ jobs:
     runs-on: windows-latest
     env:
       CARGO_BUILD_TARGET: x86_64-pc-windows-gnu 
-      RUSTFLAGS: -Dwarnings -Zsanitize=address -Zbuild-std 
+      RUSTFLAGS: -Dwarnings -Zsanitizer=address -Zbuild-std 
       RUSTDOCFLAGS: -Dwarnings
       RUST_BACKTRACE: 1
     steps:
