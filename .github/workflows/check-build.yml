@@ -25,7 +25,7 @@ jobs:
       uses: dtolnay/rust-toolchain@nightly
       with:
         toolchain: nightly
-        components: rustfmt, clippy
+        components: rustfmt, clippy, rust-src
     - name: Build
       run: cargo build -Zbuild-std --workspace --all-targets --all-features
     - name: Run Tests
@@ -41,7 +41,6 @@ jobs:
   build-windows:
     runs-on: windows-latest
     env:
-      CARGO_BUILD_TARGET: x86_64-pc-windows-gnu 
       RUSTFLAGS: -Dwarnings # TODO: asan for windows
       RUSTDOCFLAGS: -Dwarnings
       RUST_BACKTRACE: 1
