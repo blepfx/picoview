@@ -257,7 +257,7 @@ impl WindowImpl {
                     None => {
                         next_frame = (next_frame + self.refresh_interval).max(curr_frame);
                         self.handle_frame();
-                        continue;
+                        Duration::ZERO
                     }
                 };
 
@@ -266,7 +266,9 @@ impl WindowImpl {
                     .check_error()
                     .map_err(Error::PlatformError)?;
 
-                if let Some(event) = self.connection.poll_event_timeout(Some(wait_time))? {
+                let num_events = self.connection.wait_for_events(wait_time)?;
+                for _ in 0..num_events {
+                    let event = self.connection.next_event()?;
                     self.handle_event(event);
                 }
             }

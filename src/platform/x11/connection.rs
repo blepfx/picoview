@@ -231,44 +231,46 @@ impl Connection {
             .or_insert_with(|| unsafe { XInternAtom(self.display, atom.as_ptr(), 0) })
     }
 
-    pub fn poll_event_timeout(&self, timeout: Option<Duration>) -> Result<Option<XEvent>, Error> {
+    pub fn next_event(&self) -> Result<XEvent, Error> {
         unsafe {
-            let timeout = match timeout {
-                Some(timeout) => timeout,
-                None => {
-                    let mut event = zeroed();
-                    XNextEvent(self.display, &mut event);
-                    return Ok(Some(event));
-                }
-            };
-
-            let result = libc::ppoll(
-                &mut libc::pollfd {
-                    fd: XConnectionNumber(self.display),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-                1 as _,
-                &libc::timespec {
-                    tv_sec: timeout.as_secs() as _,
-                    tv_nsec: timeout.subsec_nanos() as _,
-                },
-                null(),
-            );
-
-            if result == -1 {
+            let mut event = XEvent { type_: 0 };
+            if XNextEvent(self.display, &mut event) != 0 {
                 return Err(Error::PlatformError(
-                    std::io::Error::last_os_error().to_string(),
+                    self.check_error()
+                        .err()
+                        .unwrap_or_else(|| "unknown error".to_owned()),
                 ));
             }
 
-            if XPending(self.display) == 0 {
-                Ok(None)
-            } else {
-                let mut event = zeroed();
-                XNextEvent(self.display, &mut event);
-                Ok(Some(event))
+            Ok(event)
+        }
+    }
+
+    pub fn wait_for_events(&self, timeout: Duration) -> Result<u32, Error> {
+        unsafe {
+            if !timeout.is_zero() {
+                let result = libc::ppoll(
+                    &mut libc::pollfd {
+                        fd: XConnectionNumber(self.display),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                    1 as _,
+                    &libc::timespec {
+                        tv_sec: timeout.as_secs() as _,
+                        tv_nsec: timeout.subsec_nanos() as _,
+                    },
+                    null(),
+                );
+
+                if result == -1 {
+                    return Err(Error::PlatformError(
+                        std::io::Error::last_os_error().to_string(),
+                    ));
+                }
             }
+
+            Ok(XPending(self.display) as u32)
         }
     }
 }
