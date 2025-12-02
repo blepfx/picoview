@@ -24,7 +24,7 @@ jobs:
     - name: Start Xvfb
       if: contains(matrix.os, 'ubuntu')
       run: |
-        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+        sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
         export DISPLAY=:99
     - name: Install rust nightly
       uses: dtolnay/rust-toolchain@nightly
