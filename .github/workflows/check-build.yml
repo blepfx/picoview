@@ -12,8 +12,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
     runs-on: ${{ matrix.os }}
     env:
-      RUSTFLAGS: -D warnings
-      RUSTDOCFLAGS: -D warnings
+      RUSTFLAGS: -Dwarnings -Zsanitizer=address
+      RUSTDOCFLAGS: -Dwarnings
     steps:
     - uses: actions/checkout@v4
     - name: Install X11 and GL dependencies
@@ -25,7 +25,6 @@ jobs:
       if: contains(matrix.os, 'ubuntu')
       run: |
         sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
-        export DISPLAY=:99
     - name: Install rust nightly
       uses: dtolnay/rust-toolchain@nightly
       with:
@@ -34,7 +33,9 @@ jobs:
     - name: Build
       run: cargo build --workspace --all-targets --all-features
     - name: Run Tests
-      run: cargo test --workspace --all-targets --all-features
+      run: |
+        export DISPLAY=:99
+        cargo test --workspace --all-targets --all-features
     - name: Check Docs
       run: cargo doc --examples --all-features --no-deps
     - name: Clippy
