@@ -166,15 +166,10 @@ impl Connection {
                             let rate = (*mode).dotClock as f64
                                 / ((*mode).hTotal as f64 * (*mode).vTotal as f64);
 
-                            println!(
-                                "dotclock = {}, htotal = {}, vtotal = {}, rate = {}",
-                                (*mode).dotClock as f64,
-                                (*mode).hTotal as f64,
-                                (*mode).vTotal as f64,
-                                rate
-                            );
-
-                            max_rate = max_rate.map(|prev| prev.max(rate)).or(Some(rate));
+                            //xvfb reports it as NaN
+                            if rate.is_finite() {
+                                max_rate = max_rate.map(|prev| prev.max(rate)).or(Some(rate));
+                            }
                         }
                     }
                 }
