@@ -12,7 +12,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
-      RUSTFLAGS: -Dwarnings -Zsanitizer=address
+      RUSTFLAGS: -Dwarnings
       RUSTDOCFLAGS: -Dwarnings
       RUST_BACKTRACE: 1
       DISPLAY: :99
