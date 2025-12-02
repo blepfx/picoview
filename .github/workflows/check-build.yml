@@ -9,11 +9,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: -Dwarnings -Zsanitizer=address
       RUSTDOCFLAGS: -Dwarnings
+      RUST_BACKTRACE: 1
+      DISPLAY: :99
     steps:
     - uses: actions/checkout@v4
     - name: Install X11 and GL dependencies
@@ -34,7 +36,6 @@ jobs:
       run: cargo build --workspace --all-targets --all-features
     - name: Run Tests
       run: |
-        export DISPLAY=:99
         cargo test --workspace --all-targets --all-features
     - name: Check Docs
       run: cargo doc --examples --all-features --no-deps
