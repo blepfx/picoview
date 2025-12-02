@@ -16,11 +16,16 @@ jobs:
       RUSTDOCFLAGS: -D warnings
     steps:
     - uses: actions/checkout@v4
-    - name: Install XCB and GL dependencies
+    - name: Install X11 and GL dependencies
       if: contains(matrix.os, 'ubuntu')
       run: |
         sudo apt-get update
-        sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev
+        sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev xvfb x11-utils
+    - name: Start Xvfb
+      if: contains(matrix.os, 'ubuntu')
+      run: |
+        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+        export DISPLAY=:99
     - name: Install rust nightly
       uses: dtolnay/rust-toolchain@nightly
       with:

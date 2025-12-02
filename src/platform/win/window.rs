@@ -98,7 +98,7 @@ unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
     pub unsafe fn is_our_window(hwnd: HWND) -> bool {
-        unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as usize as isize }
+        unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as *const () as isize }
     }
 
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
