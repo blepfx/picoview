@@ -250,28 +250,28 @@ impl Connection {
         }
     }
 
-    pub fn wait_for_events(&self, timeout: Duration) -> Result<u32, Error> {
+    pub fn wait_for_events(&self, timeout: Option<Duration>) -> Result<u32, Error> {
         unsafe {
-            if !timeout.is_zero() {
-                let result = libc::ppoll(
-                    &mut libc::pollfd {
-                        fd: XConnectionNumber(self.display),
-                        events: libc::POLLIN,
-                        revents: 0,
-                    },
-                    1 as _,
-                    &libc::timespec {
-                        tv_sec: timeout.as_secs() as _,
-                        tv_nsec: timeout.subsec_nanos() as _,
-                    },
-                    null(),
-                );
+            let timespec = timeout.map(|timeout| libc::timespec {
+                tv_sec: timeout.as_secs() as _,
+                tv_nsec: timeout.subsec_nanos() as _,
+            });
 
-                if result == -1 {
-                    return Err(Error::PlatformError(
-                        std::io::Error::last_os_error().to_string(),
-                    ));
-                }
+            let result = libc::ppoll(
+                &mut libc::pollfd {
+                    fd: XConnectionNumber(self.display),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                1 as _,
+                timespec.as_ref().map(|x| x as *const _).unwrap_or(null()),
+                null(),
+            );
+
+            if result == -1 {
+                return Err(Error::PlatformError(
+                    std::io::Error::last_os_error().to_string(),
+                ));
             }
 
             Ok(XPending(self.display) as u32)

@@ -4,12 +4,15 @@ use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
 use std::fmt::Debug;
 use std::os::raw::{c_int, c_ulong};
-use std::ptr::null;
+use std::ptr::{null, null_mut};
 use x11::glx::*;
 use x11::xlib::{Bool, Display, XFree};
 
 const GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20B2;
 const CONTEXT_ES2_PROFILE_BIT_EXT: i32 = 0x00000004;
+
+type GlXSwapIntervalEXT =
+    unsafe extern "C" fn(dpy: *mut Display, drawable: GLXDrawable, interval: i32);
 type GlXCreateContextAttribsARB = unsafe extern "C" fn(
     dpy: *mut Display,
     fbc: GLXFBConfig,
@@ -64,6 +67,7 @@ impl GlContext {
             let ext_framebuffer_srgb = extensions.contains("GLX_ARB_framebuffer_sRGB")
                 || extensions.contains("GLX_EXT_framebuffer_sRGB");
             let ext_context = extensions.contains("GLX_ARB_create_context");
+            let ext_swap_control = extensions.contains("GLX_ARB_create_context");
 
             let (fb_config, fb_config_list, fb_visual) = {
                 let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
@@ -195,6 +199,21 @@ impl GlContext {
             if context.is_null() {
                 return Err(Error::OpenGlError("GLX context creation error".into()));
             }
+
+            if ext_swap_control {
+                let glXSwapIntervalEXT =
+                    glXGetProcAddress(c"glXSwapIntervalEXT".as_ptr() as *const _)
+                        .map(|addr| std::mem::transmute::<_, GlXSwapIntervalEXT>(addr));
+
+                if let Some(glXSwapIntervalEXT) = glXSwapIntervalEXT
+                    && glXMakeCurrent(connection.display(), window, context) != 0
+                {
+                    glXSwapIntervalEXT(connection.display(), window, 0);
+                    glXMakeCurrent(connection.display(), 0, null_mut());
+                }
+            }
+
+            connection.check_error().map_err(Error::OpenGlError)?;
 
             Ok(GlContext { window, context })
         }

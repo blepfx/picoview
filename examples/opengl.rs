@@ -1,10 +1,15 @@
 use picoview::{Event, GlConfig, GlFormat, GlVersion, Point, WindowBuilder};
-use std::mem::transmute;
+use std::{mem::transmute, time::Instant};
 
 fn main() {
     WindowBuilder::new(|window| {
+        let mut last_frame = Instant::now();
+
         Box::new(move |event| match event {
             Event::WindowFrame { gl: Some(gl) } => unsafe {
+                println!("{:?}", last_frame.elapsed());
+                last_frame = Instant::now();
+
                 let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
                     transmute(gl.get_proc_address(c"glClearColor"));
                 let clear: unsafe extern "system" fn(i32) =
