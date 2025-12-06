@@ -28,7 +28,7 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-    Graphics::Gdi::ClientToScreen,
+    Graphics::Gdi::{ClientToScreen, GetUpdateRect, ValidateRgn},
     System::{
         Com::CoInitialize,
         DataExchange::{
@@ -39,21 +39,23 @@ use windows_sys::Win32::{
     },
     UI::{
         Controls::WM_MOUSELEAVE,
-        Input::KeyboardAndMouse::{SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
+        Input::KeyboardAndMouse::{
+            SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+        },
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
             CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_STYLE,
             GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDesktopWindow, GetWindowLongPtrW,
             GetWindowLongW, HCURSOR, HTCLIENT, IDC_ARROW, LoadCursorW, MINMAXINFO, PostMessageW,
             PostQuitMessage, RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetCursorPos,
-            SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor, USER_DEFAULT_SCREEN_DPI,
-            UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-            WM_GETMINMAXINFO, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-            WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_RBUTTONDOWN,
-            WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_USER,
-            WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_POPUP,
-            WS_SIZEBOX, WS_VISIBLE, XBUTTON1, XBUTTON2,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW, SetCursor,
+            SetCursorPos, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor,
+            USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DISPLAYCHANGE,
+            WM_DPICHANGED, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
+            WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SHOWWINDOW,
+            WM_SIZE, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD,
+            WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_VISIBLE, XBUTTON1, XBUTTON2,
         },
     },
 };
@@ -219,9 +221,8 @@ impl WindowImpl {
                 state_mouse_capture: Cell::new(0),
                 state_current_cursor: Cell::new(shared.load_cursor(MouseCursor::Default)),
                 state_current_modifiers: Cell::new(Modifiers::empty()),
-                state_focused: Cell::new(false),
+                state_focused: Cell::new(true),
 
-                vsync_callback: VSyncCallback::new(hwnd),
                 window_class,
                 window_hwnd: hwnd,
 
@@ -247,6 +248,10 @@ impl WindowImpl {
                 event_handler: RefCell::new(None),
                 event_queue: RefCell::new(VecDeque::new()),
                 gl_context,
+
+                vsync_callback: VSyncCallback::new(hwnd, |hwnd| {
+                    SendMessageW(hwnd, WM_USER_VSYNC, 0, 0);
+                }),
             });
 
             // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so because:
@@ -516,7 +521,6 @@ unsafe extern "system" fn wnd_proc(
                 let x = ((lparam >> 0) & 0xFFFF) as i16 as f32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
 
-                window.vsync_callback.notify_moved();
                 window.send_event_defer(Event::WindowMove {
                     origin: Point { x, y },
                 });
@@ -574,7 +578,8 @@ unsafe extern "system" fn wnd_proc(
                     .replace(window.state_mouse_capture.get() + 1)
                     == 0
                 {
-                    SetCapture(window.window_hwnd);
+                    SetFocus(hwnd);
+                    SetCapture(hwnd);
                 }
 
                 0
@@ -700,6 +705,21 @@ unsafe extern "system" fn wnd_proc(
             WM_KILLFOCUS => {
                 if window.state_focused.replace(false) {
                     window.send_event_defer(Event::WindowFocus { focus: false });
+                }
+
+                0
+            }
+
+            WM_PAINT => {
+                let mut rect = RECT { ..zeroed() };
+                if GetUpdateRect(hwnd, &mut rect, 0) != 0 {
+                    window.send_event_defer(Event::WindowDamage {
+                        x: rect.left.try_into().unwrap_or(0),
+                        y: rect.top.try_into().unwrap_or(0),
+                        w: (rect.right - rect.left).try_into().unwrap_or(0),
+                        h: (rect.bottom - rect.top).try_into().unwrap_or(0),
+                    });
+                    ValidateRgn(hwnd, null_mut());
                 }
 
                 0

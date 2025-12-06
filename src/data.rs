@@ -250,6 +250,7 @@ pub enum Event<'a> {
     WindowMove { origin: Point },
     WindowResize { size: Size },
     WindowFrame { gl: Option<&'a dyn GlContext> },
+    WindowDamage { x: u32, y: u32, w: u32, h: u32 },
 
     MouseLeave,
     MouseMove { relative: Point, absolute: Point },

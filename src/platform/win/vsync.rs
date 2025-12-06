@@ -1,4 +1,3 @@
-use crate::platform::win::window::WM_USER_VSYNC;
 use std::{
     sync::{
         Arc,
@@ -16,67 +15,58 @@ use windows_sys::Win32::{
             MONITOR_DEFAULTTOPRIMARY, MONITORINFOEXW, MonitorFromWindow,
         },
     },
-    UI::WindowsAndMessaging::SendMessageW,
 };
 
-pub struct VSyncCallback(Arc<Inner>);
+pub struct VSyncCallback {
+    inner: Arc<Inner>,
+}
 
 impl VSyncCallback {
-    pub unsafe fn new(hwnd: HWND) -> Self {
+    pub unsafe fn new<F: FnMut(HWND) + Send + 'static>(hwnd: HWND, callback: F) -> Self {
         let inner = Arc::new(Inner {
+            hwnd: hwnd as usize,
             active: AtomicBool::new(true),
-            notify_moved: AtomicBool::new(false),
             notify_display_change: AtomicBool::new(true),
         });
 
         std::thread::spawn({
-            let hwnd = hwnd as usize;
             let inner = inner.clone();
-            move || unsafe { run_vsync_thread(hwnd as HWND, inner) }
+            move || unsafe { run_vsync_thread(inner, callback) }
         });
 
-        Self(inner)
-    }
-
-    pub fn notify_moved(&self) {
-        self.0.notify_moved.store(true, Ordering::Relaxed);
+        Self { inner }
     }
 
     pub fn notify_display_change(&self) {
-        self.0.notify_display_change.store(true, Ordering::Relaxed);
+        self.inner
+            .notify_display_change
+            .store(true, Ordering::Relaxed);
     }
 }
 
 impl Drop for VSyncCallback {
     fn drop(&mut self) {
-        self.0.active.store(false, Ordering::Relaxed);
+        self.inner.active.store(false, Ordering::Relaxed);
     }
 }
 
 struct Inner {
+    hwnd: usize,
     active: AtomicBool,
-    notify_moved: AtomicBool,
     notify_display_change: AtomicBool,
 }
 
-// TODO: add dxgi waitforvblank, fallback to dwm
-unsafe fn run_vsync_thread(hwnd: HWND, sync: Arc<Inner>) {
+unsafe fn run_vsync_thread<F: FnMut(HWND)>(sync: Arc<Inner>, mut callback: F) {
     unsafe {
-        let mut current_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+        let hwnd = sync.hwnd as HWND;
         let mut fallback_next_frame = Instant::now();
         let mut fallback_interval = Duration::from_millis(15);
 
         while sync.active.load(Ordering::Relaxed) {
-            let mut monitor_changed = sync.notify_display_change.swap(false, Ordering::Relaxed);
-            if sync.notify_moved.swap(false, Ordering::Relaxed) {
-                let new_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-                monitor_changed |= current_monitor != new_monitor;
-            }
-
-            if monitor_changed {
-                current_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+            if sync.notify_display_change.swap(false, Ordering::Relaxed) {
                 fallback_interval = Duration::from_secs_f32(
-                    1.0 / get_refresh_rate(current_monitor).unwrap_or(60) as f32,
+                    1.0 / get_refresh_rate(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY))
+                        .unwrap_or(60) as f32,
                 );
             };
 
@@ -84,7 +74,7 @@ unsafe fn run_vsync_thread(hwnd: HWND, sync: Arc<Inner>) {
                 wait_fallback(&mut fallback_next_frame, fallback_interval);
             }
 
-            SendMessageW(hwnd, WM_USER_VSYNC, 0, 0);
+            callback(hwnd);
         }
     }
 }
@@ -121,6 +111,10 @@ unsafe fn get_refresh_rate(monitor: HMONITOR) -> Option<u32> {
 
         let mut devmode = DEVMODEW::default();
         if EnumDisplaySettingsW(info.szDevice.as_ptr(), ENUM_CURRENT_SETTINGS, &mut devmode) == 0 {
+            return None;
+        }
+
+        if devmode.dmDisplayFrequency == 0 {
             return None;
         }
 

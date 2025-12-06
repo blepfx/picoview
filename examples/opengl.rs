@@ -1,16 +1,16 @@
 use picoview::{Event, GlConfig, GlFormat, GlVersion, Point, WindowBuilder};
-use std::{
-    mem::transmute,
-    time::{Duration, Instant},
-};
+use std::{mem::transmute, time::Instant};
 
 fn main() {
     WindowBuilder::new(|window| {
         let mut last_frame = Instant::now();
+        let mut time = 0.0;
 
         Box::new(move |event| match event {
             Event::WindowFrame { gl: Some(gl) } => unsafe {
-                println!("{:?}", last_frame.elapsed());
+                time += last_frame.elapsed().as_secs_f32();
+
+                //   println!("{:?}", last_frame.elapsed());
                 last_frame = Instant::now();
 
                 let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
@@ -20,13 +20,16 @@ fn main() {
 
                 gl.make_current(true);
 
-                (clear_color)(1.0, 1.0, 0.0, 0.01);
+                (clear_color)(
+                    time.cos().abs(),
+                    time.sin().abs(),
+                    (time * 2.5).sin().abs(),
+                    0.01,
+                );
                 (clear)(0x00004000);
 
                 gl.swap_buffers();
                 gl.make_current(false);
-
-                window.sleep(Instant::now() + Duration::from_millis(50));
             },
 
             Event::MouseMove { relative, .. } => {
@@ -36,7 +39,6 @@ fn main() {
             }
 
             Event::WindowResize { size } => {
-                window.sleep(Instant::now());
                 println!("{:?}", size);
             }
 

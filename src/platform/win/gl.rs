@@ -59,6 +59,7 @@ const WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20A9;
 type WglCreateContextAttribsARB = unsafe extern "system" fn(HDC, HGLRC, *const i32) -> HGLRC;
 type WglChoosePixelFormatARB =
     unsafe extern "system" fn(HDC, *const i32, *const f32, u32, *mut i32, *mut u32) -> i32;
+type WglSwapIntervalEXT = unsafe extern "system" fn(i32) -> i32;
 type WglGetExtensionsStringEXT = unsafe extern "system" fn() -> *const c_char;
 type WglGetExtensionsStringARB = unsafe extern "system" fn(HDC) -> *const c_char;
 
@@ -95,6 +96,14 @@ impl GlContext {
                         "Failed to create a context with given requirements".to_owned(),
                     )
                 })?;
+
+            if ext.ext_swap_control
+                && let Some(swap_interval) = ext.swap_interval
+            {
+                wglMakeCurrent(hdc, hglrc);
+                (swap_interval)(0);
+                wglMakeCurrent(hdc, null_mut());
+            }
 
             Ok(Self {
                 hwnd,
@@ -150,7 +159,14 @@ impl Drop for GlContext {
 struct WglExtensions {
     create_context_attribs: Option<WglCreateContextAttribsARB>,
     choose_pixel_format: Option<WglChoosePixelFormatARB>,
-    extensions: HashSet<String>,
+    swap_interval: Option<WglSwapIntervalEXT>,
+
+    ext_context_arb: bool,
+    ext_context_es_profile: bool,
+    ext_multisample: bool,
+    ext_pixel_format_arb: bool,
+    ext_framebuffer_srgb: bool,
+    ext_swap_control: bool,
 }
 
 impl WglExtensions {
@@ -228,28 +244,39 @@ impl WglExtensions {
                 };
             }
 
+            let extensions: HashSet<String> = {
+                let get_extensions_string_ext =
+                    load_fn!(WglGetExtensionsStringEXT, "wglGetExtensionsStringEXT");
+                let get_extensions_string_arb =
+                    load_fn!(WglGetExtensionsStringARB, "wglGetExtensionsStringARB");
+
+                let extension_str = get_extensions_string_ext
+                    .map(|f| f())
+                    .or_else(|| get_extensions_string_arb.map(|f| f(hdc)))
+                    .map(|x| CStr::from_ptr(x))
+                    .unwrap_or_default()
+                    .to_string_lossy();
+
+                extension_str.split(' ').map(ToString::to_string).collect()
+            };
+
             let context = Self {
                 create_context_attribs: load_fn!(
                     WglCreateContextAttribsARB,
                     "wglCreateContextAttribsARB"
                 ),
                 choose_pixel_format: load_fn!(WglChoosePixelFormatARB, "wglChoosePixelFormatARB"),
+                swap_interval: load_fn!(WglSwapIntervalEXT, "wglSwapIntervalEXT"),
 
-                extensions: {
-                    let get_extensions_string_ext =
-                        load_fn!(WglGetExtensionsStringEXT, "wglGetExtensionsStringEXT");
-                    let get_extensions_string_arb =
-                        load_fn!(WglGetExtensionsStringARB, "wglGetExtensionsStringARB");
+                ext_context_arb: extensions.contains("WGL_ARB_create_context"),
+                ext_context_es_profile: extensions.contains("WGL_EXT_create_context_es_profile")
+                    || extensions.contains("WGL_EXT_create_context_es2_profile"),
 
-                    let extension_str = get_extensions_string_ext
-                        .map(|f| f())
-                        .or_else(|| get_extensions_string_arb.map(|f| f(hdc)))
-                        .map(|x| CStr::from_ptr(x))
-                        .unwrap_or_default()
-                        .to_string_lossy();
-
-                    extension_str.split(' ').map(ToString::to_string).collect()
-                },
+                ext_multisample: extensions.contains("WGL_ARB_multisample"),
+                ext_pixel_format_arb: extensions.contains("WGL_ARB_pixel_format"),
+                ext_framebuffer_srgb: extensions.contains("WGL_ARB_framebuffer_sRGB")
+                    || extensions.contains("WGL_EXT_framebuffer_sRGB"),
+                ext_swap_control: extensions.contains("WGL_EXT_swap_control"),
             };
 
             wglMakeCurrent(hdc, null_mut());
@@ -288,14 +315,8 @@ _ => continue, */
 
 fn create_context_arb(hdc: HDC, config: &crate::GlConfig, ext: &WglExtensions) -> Option<HGLRC> {
     unsafe {
-        let ext_context_arb = ext.extensions.contains("WGL_ARB_create_context");
-        let ext_context_es_profile = ext.extensions.contains("WGL_EXT_create_context_es_profile")
-            || ext
-                .extensions
-                .contains("WGL_EXT_create_context_es2_profile");
-
         let create_context_attribs = ext.create_context_attribs?;
-        if !ext_context_arb {
+        if !ext.ext_context_arb {
             return None;
         }
 
@@ -328,7 +349,7 @@ fn create_context_arb(hdc: HDC, config: &crate::GlConfig, ext: &WglExtensions) -
                     ]);
                 }
                 crate::GlVersion::ES(major, minor) => {
-                    if !ext_context_es_profile {
+                    if !ext.ext_context_es_profile {
                         return None;
                     }
 
@@ -393,14 +414,8 @@ fn create_pixel_format_arb(
     ext: &WglExtensions,
 ) -> Option<(i32, PIXELFORMATDESCRIPTOR)> {
     unsafe {
-        let ext_multisample = ext.extensions.contains("WGL_ARB_multisample");
-        let ext_pixel_format = ext.extensions.contains("WGL_ARB_pixel_format");
-        let ext_framebuffer_srgb = ext.extensions.contains("WGL_ARB_framebuffer_sRGB")
-            || ext.extensions.contains("WGL_EXT_framebuffer_sRGB");
-
         let choose_pixel_format = ext.choose_pixel_format?;
-
-        if !ext_pixel_format {
+        if !ext.ext_pixel_format_arb {
             return None;
         }
 
@@ -421,7 +436,7 @@ fn create_pixel_format_arb(
                 WGL_STENCIL_BITS_ARB, stencil as _,
             ];
 
-            if ext_multisample {
+            if ext.ext_multisample {
                 pixel_format_attribs.extend_from_slice(&[
                     WGL_SAMPLE_BUFFERS_ARB,
                     (config.msaa_count != 0) as i32,
@@ -430,7 +445,7 @@ fn create_pixel_format_arb(
                 ]);
             }
 
-            if ext_framebuffer_srgb {
+            if ext.ext_framebuffer_srgb {
                 pixel_format_attribs
                     .extend_from_slice(&[WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, config.srgb as i32]);
             }
