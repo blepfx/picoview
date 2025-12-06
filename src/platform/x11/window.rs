@@ -33,6 +33,7 @@ unsafe impl Send for WindowImpl {}
 
 pub struct WindowImpl {
     window_id: c_ulong,
+    window_parent: c_ulong,
 
     connection: Connection,
     waker: Arc<WindowWakerImpl>,
@@ -63,7 +64,7 @@ impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
         unsafe {
             let connection = Connection::create()?;
-            let parent_window_id = match mode {
+            let window_parent = match mode {
                 OpenMode::Blocking => connection.default_root(),
                 OpenMode::Embedded(rwh_06::RawWindowHandle::Xcb(window)) => {
                     window.window.get() as u64
@@ -74,7 +75,7 @@ impl WindowImpl {
 
             let window_id = XCreateWindow(
                 connection.display(),
-                parent_window_id,
+                window_parent,
                 0,
                 0,
                 options.size.width as _,
@@ -198,6 +199,8 @@ impl WindowImpl {
 
             let window = Box::new(Self {
                 window_id,
+                window_parent,
+
                 connection,
                 waker: Arc::new(WindowWakerImpl {
                     window_id,
@@ -270,6 +273,10 @@ impl WindowImpl {
                 for _ in 0..num_events {
                     let event = self.connection.next_event()?;
                     self.handle_event(event);
+                }
+
+                if num_events != 0 {
+                    XFlush(self.connection.display());
                 }
             }
 
@@ -401,10 +408,21 @@ impl WindowImpl {
                     );
 
                     if let Some(key) = util::keycode_to_key(event.keycode) {
+                        let mut capture = false;
                         self.send_event(Event::KeyDown {
                             key,
-                            capture: &mut false, //TODO: key capture?
+                            capture: &mut capture,
                         });
+
+                        if !capture {
+                            XSendEvent(
+                                self.connection.display(),
+                                self.window_parent,
+                                1,
+                                KeyPressMask,
+                                &mut XEvent { key: event },
+                            );
+                        }
                     }
                 }
                 KeyRelease => {
@@ -414,10 +432,21 @@ impl WindowImpl {
                     );
 
                     if let Some(key) = util::keycode_to_key(event.keycode) {
+                        let mut capture = false;
                         self.send_event(Event::KeyUp {
                             key,
-                            capture: &mut false, //TODO: key capture?
+                            capture: &mut capture,
                         });
+
+                        if !capture {
+                            XSendEvent(
+                                self.connection.display(),
+                                self.window_parent,
+                                1,
+                                KeyReleaseMask,
+                                &mut XEvent { key: event },
+                            );
+                        }
                     }
                 }
                 MotionNotify => {
