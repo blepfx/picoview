@@ -1,5 +1,8 @@
 use picoview::{Event, GlConfig, GlFormat, GlVersion, Point, WindowBuilder};
-use std::{mem::transmute, time::Instant};
+use std::{
+    mem::transmute,
+    time::{Duration, Instant},
+};
 
 fn main() {
     WindowBuilder::new(|window| {
@@ -22,6 +25,8 @@ fn main() {
 
                 gl.swap_buffers();
                 gl.make_current(false);
+
+                window.sleep(Instant::now() + Duration::from_millis(50));
             },
 
             Event::MouseMove { relative, .. } => {
@@ -31,6 +36,7 @@ fn main() {
             }
 
             Event::WindowResize { size } => {
+                window.sleep(Instant::now());
                 println!("{:?}", size);
             }
 

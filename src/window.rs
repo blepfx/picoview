@@ -1,5 +1,5 @@
 use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, WakeupError, platform, rwh_06};
-use std::{fmt::Debug, ops::Range, sync::Arc};
+use std::{fmt::Debug, ops::Range, sync::Arc, time::Instant};
 
 // the reason this is a box is because making this with traits is extremely annoying,
 // especially when closures are involved
@@ -38,6 +38,10 @@ impl<'a> Window<'a> {
 
     pub fn close(&self) {
         self.0.close();
+    }
+
+    pub fn sleep(&self, until: Instant) {
+        self.0.sleep(until);
     }
 
     pub fn set_title(&self, title: &str) {

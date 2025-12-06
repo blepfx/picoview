@@ -41,6 +41,8 @@ pub struct WindowImpl {
     is_closed: Cell<bool>,
     is_destroyed: Cell<bool>,
     is_resizeable: bool,
+
+    refresh_sleep: Cell<Instant>,
     refresh_interval: Duration,
 
     last_modifiers: Cell<Modifiers>,
@@ -210,6 +212,8 @@ impl WindowImpl {
                 is_closed: Cell::new(false),
                 is_destroyed: Cell::new(false),
                 is_resizeable: options.resizable.is_some(),
+
+                refresh_sleep: Cell::new(Instant::now()),
                 refresh_interval,
 
                 last_modifiers: Cell::new(Modifiers::empty()),
@@ -255,7 +259,10 @@ impl WindowImpl {
             let mut next_frame = Instant::now();
             while !self.is_closed.get() {
                 let curr_frame = Instant::now();
-                let wait_time = match next_frame.checked_duration_since(curr_frame) {
+                let wait_time = match next_frame
+                    .max(self.refresh_sleep.get())
+                    .checked_duration_since(curr_frame)
+                {
                     Some(wait_time) => wait_time,
                     None => {
                         next_frame = (next_frame + self.refresh_interval).max(curr_frame);
@@ -550,6 +557,10 @@ impl PlatformWindow for WindowImpl {
 
     fn waker(&self) -> WindowWaker {
         WindowWaker(self.waker.clone())
+    }
+
+    fn sleep(&self, until: Instant) {
+        self.refresh_sleep.set(until);
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {

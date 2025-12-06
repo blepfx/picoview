@@ -15,6 +15,7 @@ pub mod mac;
 pub use mac::*;
 
 use crate::{MouseCursor, Point, Size, WakeupError, WindowWaker, rwh_06};
+use std::time::Instant;
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
@@ -28,6 +29,7 @@ pub trait PlatformWindow /* : !Send + !Sync */ {
 
     fn close(&self);
     fn waker(&self) -> WindowWaker;
+    fn sleep(&self, until: Instant);
 
     fn set_title(&self, title: &str);
     fn set_cursor_icon(&self, icon: MouseCursor);
