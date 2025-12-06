@@ -19,14 +19,15 @@ use std::time::{Duration, Instant};
 use x11::xlib::{
     Button1Mask, Button2Mask, Button3Mask, Button4Mask, Button5Mask, ButtonPress, ButtonPressMask,
     ButtonRelease, ButtonReleaseMask, CWCursor, CWEventMask, CWHeight, CWWidth, CWX, CWY,
-    ClientMessage, ClientMessageData, ConfigureNotify, CopyFromParent, DestroyNotify,
-    FocusChangeMask, FocusIn, FocusOut, InputOutput, KeyPress, KeyPressMask, KeyRelease,
-    KeyReleaseMask, LeaveNotify, LeaveWindowMask, MotionNotify, NoEventMask, NotifyNormal,
-    PMaxSize, PMinSize, PSize, PointerMotionMask, PropModeReplace, StructureNotifyMask,
-    XChangeProperty, XChangeWindowAttributes, XClientMessageEvent, XConfigureWindow, XCreateWindow,
-    XDestroyWindow, XEvent, XFlush, XFree, XMapWindow, XSendEvent, XSetWMName, XSetWMNormalHints,
-    XSetWMProtocols, XSetWindowAttributes, XSizeHints, XStringListToTextProperty, XSync,
-    XTextProperty, XTranslateCoordinates, XUnmapWindow, XWarpPointer, XWindowChanges,
+    ClientMessage, ClientMessageData, ConfigureNotify, CopyFromParent, DestroyNotify, Expose,
+    ExposureMask, FocusChangeMask, FocusIn, FocusOut, InputOutput, KeyPress, KeyPressMask,
+    KeyRelease, KeyReleaseMask, LeaveNotify, LeaveWindowMask, MotionNotify, NoEventMask,
+    NotifyNormal, PMaxSize, PMinSize, PSize, PointerMotionMask, PropModeReplace,
+    StructureNotifyMask, XChangeProperty, XChangeWindowAttributes, XClientMessageEvent,
+    XConfigureWindow, XCreateWindow, XDestroyWindow, XEvent, XFlush, XFree, XMapWindow, XSendEvent,
+    XSetWMName, XSetWMNormalHints, XSetWMProtocols, XSetWindowAttributes, XSizeHints,
+    XStringListToTextProperty, XSync, XTextProperty, XTranslateCoordinates, XUnmapWindow,
+    XWarpPointer, XWindowChanges,
 };
 
 unsafe impl Send for WindowImpl {}
@@ -37,13 +38,11 @@ pub struct WindowImpl {
 
     connection: Connection,
     waker: Arc<WindowWakerImpl>,
+    refresh_interval: Duration,
 
     is_closed: Cell<bool>,
     is_destroyed: Cell<bool>,
     is_resizeable: bool,
-
-    refresh_sleep: Cell<Instant>,
-    refresh_interval: Duration,
 
     last_modifiers: Cell<Modifiers>,
     last_cursor: Cell<MouseCursor>,
@@ -95,7 +94,8 @@ impl WindowImpl {
                         | KeyReleaseMask
                         | LeaveWindowMask
                         | PointerMotionMask
-                        | FocusChangeMask,
+                        | FocusChangeMask
+                        | ExposureMask,
                     ..zeroed()
                 },
             );
@@ -212,8 +212,6 @@ impl WindowImpl {
                 is_closed: Cell::new(false),
                 is_destroyed: Cell::new(false),
                 is_resizeable: options.resizable.is_some(),
-
-                refresh_sleep: Cell::new(Instant::now()),
                 refresh_interval,
 
                 last_modifiers: Cell::new(Modifiers::empty()),
@@ -259,10 +257,7 @@ impl WindowImpl {
             let mut next_frame = Instant::now();
             while !self.is_closed.get() {
                 let curr_frame = Instant::now();
-                let wait_time = match next_frame
-                    .max(self.refresh_sleep.get())
-                    .checked_duration_since(curr_frame)
-                {
+                let wait_time = match next_frame.checked_duration_since(curr_frame) {
                     Some(wait_time) => wait_time,
                     None => {
                         next_frame = (next_frame + self.refresh_interval).max(curr_frame);
@@ -510,6 +505,16 @@ impl WindowImpl {
                     self.is_closed.set(true);
                     self.is_destroyed.set(true);
                 }
+                Expose => {
+                    let event = event.expose;
+
+                    self.send_event(Event::WindowDamage {
+                        x: event.x.try_into().unwrap_or(0),
+                        y: event.y.try_into().unwrap_or(0),
+                        w: event.width.try_into().unwrap_or(0),
+                        h: event.height.try_into().unwrap_or(0),
+                    });
+                }
                 _ => {}
             }
         }
@@ -557,10 +562,6 @@ impl PlatformWindow for WindowImpl {
 
     fn waker(&self) -> WindowWaker {
         WindowWaker(self.waker.clone())
-    }
-
-    fn sleep(&self, until: Instant) {
-        self.refresh_sleep.set(until);
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {

@@ -38,14 +38,6 @@ fn main() {
                 }
             }
 
-            Event::WindowResize { size } => {
-                println!("{:?}", size);
-            }
-
-            Event::WindowMove { origin } => {
-                println!("{:?}", origin);
-            }
-
             _ => {}
         })
     })

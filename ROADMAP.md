@@ -21,7 +21,7 @@
 |  - `WindowMove`                                       | :ok:     | :x:      | :ok:     | Low      |
 |  - `WindowResize`                                     | :ok:     | :x:      | :ok:     | High     |
 |  - `WindowFrame`                                      | :ok:     | :ok:     | :ok:     | High     |
-|  - `WindowDamage`                                     | :ok:     | :x:      | :x:      | Medium   |
+|  - `WindowDamage`                                     | :ok:     | :x:      | :ok:     | Medium   |
 |  - `DragHover`                                        | :x:      | :x:      | :x:      | Low      |
 |  - `DragAccept`                                       | :x:      | :x:      | :x:      | Low      |
 |  - `DragCancel`                                       | :x:      | :x:      | :x:      | Low      |
