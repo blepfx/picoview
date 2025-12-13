@@ -18,6 +18,12 @@ fn test_startup_embed() {
                     .with_size((256, 256))
                     .open_embedded(window)
                     .unwrap();
+
+                    WindowBuilder::new(|_| Box::new(move |_| {}))
+                        .with_position((256, 0))
+                        .with_size((256, 256))
+                        .open_embedded(window)
+                        .unwrap();
                 }
 
                 if frames > 10 {
