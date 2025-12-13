@@ -8,7 +8,7 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: -Dwarnings -Zsanitizer=address
+      RUSTFLAGS: -Dwarnings
       RUSTDOCFLAGS: -Dwarnings
       RUST_BACKTRACE: 1
       DISPLAY: :99
@@ -27,10 +27,11 @@ jobs:
         toolchain: nightly
         components: rustfmt, clippy, rust-src
     - name: Build
-      run: cargo build -Zbuild-std --workspace --all-targets --all-features
-    - name: Run Tests
-      run: |
-        cargo test -Zbuild-std --workspace --all-targets --all-features
+      run: cargo build --workspace --all-targets --all-features
+    - name: Run Tests (ASAN)
+      run: RUSTFLAGS="-Zsanitizer=address" cargo test -Zbuild-std --workspace --all-targets --all-features
+    - name: Run Tests (TSAN)
+      run: RUSTFLAGS="-Zsanitizer=thread" cargo test -Zbuild-std --workspace --all-targets --all-features
     - name: Check Docs
       run: cargo doc --examples --all-features --no-deps
     - name: Clippy

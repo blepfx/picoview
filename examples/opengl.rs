@@ -21,10 +21,10 @@ fn main() {
                 gl.make_current(true);
 
                 (clear_color)(
-                    time.cos().abs(),
-                    time.sin().abs(),
-                    (time * 2.5).sin().abs(),
-                    0.01,
+                    (time + 0.0).sin().abs(),
+                    (time + 2.0).sin().abs(),
+                    (time + 4.0).sin().abs(),
+                    1.0,
                 );
                 (clear)(0x00004000);
 
