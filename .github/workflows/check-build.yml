@@ -28,6 +28,12 @@ jobs:
         components: rustfmt, clippy, rust-src
     - name: Build
       run: cargo build --workspace --all-targets --all-features
+    - name: Check Docs
+      run: cargo doc --examples --all-features --no-deps
+    - name: Clippy
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+    - name: Check Formatting
+      run: cargo fmt --all -- --check
     - name: Run Tests (ASAN)
       run: |
         cargo clean
@@ -36,12 +42,6 @@ jobs:
       run: |
         cargo clean
         RUSTFLAGS="-Zsanitizer=thread" cargo test -Zbuild-std --workspace --all-targets --all-features
-    - name: Check Docs
-      run: cargo doc --examples --all-features --no-deps
-    - name: Clippy
-      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-    - name: Check Formatting
-      run: cargo fmt --all -- --check
 
   build-windows:
     runs-on: windows-latest
