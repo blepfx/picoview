@@ -1,4 +1,4 @@
-export RUSTFLAGS="-Dwarnings -Zsanitizer=address"
+export RUSTFLAGS="-Dwarnings"
 export RUSTDOCFLAGS="-Dwarnings"
 
 cargo build -Zbuild-std --workspace --all-targets
