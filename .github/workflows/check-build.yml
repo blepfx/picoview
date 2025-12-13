@@ -29,9 +29,13 @@ jobs:
     - name: Build
       run: cargo build --workspace --all-targets --all-features
     - name: Run Tests (ASAN)
-      run: RUSTFLAGS="-Zsanitizer=address" cargo test -Zbuild-std --workspace --all-targets --all-features
+      run: |
+        cargo clean
+        RUSTFLAGS="-Zsanitizer=address" cargo test -Zbuild-std --workspace --all-targets --all-features
     - name: Run Tests (TSAN)
-      run: RUSTFLAGS="-Zsanitizer=thread" cargo test -Zbuild-std --workspace --all-targets --all-features
+      run: |
+        cargo clean
+        RUSTFLAGS="-Zsanitizer=thread" cargo test -Zbuild-std --workspace --all-targets --all-features
     - name: Check Docs
       run: cargo doc --examples --all-features --no-deps
     - name: Clippy
