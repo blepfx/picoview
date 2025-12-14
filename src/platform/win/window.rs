@@ -2,8 +2,8 @@ use super::{
     gl::GlContext,
     shared::Win32Shared,
     util::{
-        check_error, from_widestring, generate_guid, get_modifiers_async, hinstance,
-        run_event_loop, scan_code_to_key, to_widestring,
+        check_error, from_widestring, generate_guid, get_modifiers, hinstance, run_event_loop,
+        scan_code_to_key, to_widestring,
     },
 };
 use crate::{
@@ -747,7 +747,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_USER_VSYNC => {
-                let modifiers = get_modifiers_async();
+                let modifiers = get_modifiers();
 
                 if window.state_current_modifiers.replace(modifiers) != modifiers {
                     window.send_event_defer(Event::KeyModifiers { modifiers });

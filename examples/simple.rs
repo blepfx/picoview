@@ -1,4 +1,4 @@
-use picoview::{Event, MouseCursor, Point, Size, WindowBuilder};
+use picoview::{Event, Key, MouseCursor, Point, Size, WindowBuilder};
 use std::time::{Duration, Instant};
 
 fn main() {
@@ -26,9 +26,16 @@ fn main() {
                         height: 300,
                     });
 
-                    let waker = WindowBuilder::new(|_| {
-                        Box::new(|event| {
-                            if !matches!(event, Event::WindowFrame { .. }) {
+                    let waker = WindowBuilder::new(|window| {
+                        Box::new(move |event| {
+                            if let Event::KeyDown { key, capture } = event {
+                                if key == Key::Enter {
+                                    *capture = true;
+                                } else if key == Key::Escape {
+                                    *capture = true;
+                                    window.close();
+                                }
+                            } else if !matches!(event, Event::WindowFrame { .. }) {
                                 println!("child {:?}", event);
                             }
                         })

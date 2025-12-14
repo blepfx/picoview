@@ -16,9 +16,9 @@ use windows_sys::{
         Foundation::{HWND, LPARAM, LRESULT, WPARAM},
         System::Threading::GetCurrentThreadId,
         UI::WindowsAndMessaging::{
-            CallNextHookEx, HC_ACTION, HCURSOR, HHOOK, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP,
-            IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-            IDC_WAIT, LoadCursorW, MSG, PM_REMOVE, SendMessageW, SetWindowsHookExW,
+            CallNextHookEx, GetParent, HC_ACTION, HCURSOR, HHOOK, IDC_ARROW, IDC_CROSS, IDC_HAND,
+            IDC_HELP, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
+            IDC_SIZEWE, IDC_WAIT, LoadCursorW, MSG, PM_REMOVE, SendMessageW, SetWindowsHookExW,
             USER_DEFAULT_SCREEN_DPI, UnhookWindowsHookEx, WH_GETMESSAGE, WM_KEYDOWN, WM_KEYUP,
             WM_USER,
         },
@@ -115,27 +115,34 @@ unsafe extern "system" fn keyboard_hook_proc(
         if n_code == HC_ACTION as i32 && wparam == PM_REMOVE as usize {
             let message = lparam as *mut MSG;
 
-            if matches!((*message).message, WM_KEYDOWN | WM_KEYUP)
-                && WindowImpl::is_our_window((*message).hwnd)
-            {
-                let capture = SendMessageW(
-                    (*message).hwnd,
-                    if (*message).message == WM_KEYDOWN {
-                        WM_USER_KEY_DOWN
+            if matches!((*message).message, WM_KEYDOWN | WM_KEYUP) {
+                while WindowImpl::is_our_window((*message).hwnd) {
+                    let capture = SendMessageW(
+                        (*message).hwnd,
+                        if (*message).message == WM_KEYDOWN {
+                            WM_USER_KEY_DOWN
+                        } else {
+                            WM_USER_KEY_UP
+                        },
+                        (*message).wParam,
+                        (*message).lParam,
+                    ) != 0;
+
+                    if capture {
+                        *message = MSG {
+                            message: WM_USER,
+                            ..zeroed()
+                        };
+
+                        return 0;
                     } else {
-                        WM_USER_KEY_UP
-                    },
-                    (*message).wParam,
-                    (*message).lParam,
-                ) != 0;
-
-                if capture {
-                    *message = MSG {
-                        message: WM_USER,
-                        ..zeroed()
-                    };
-
-                    return 0;
+                        let parent = GetParent((*message).hwnd);
+                        if parent.is_null() {
+                            break;
+                        } else {
+                            (*message).hwnd = parent;
+                        }
+                    }
                 }
             }
         }

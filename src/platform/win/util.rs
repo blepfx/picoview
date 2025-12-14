@@ -18,8 +18,8 @@ use windows_sys::{
         },
         UI::{
             Input::KeyboardAndMouse::{
-                GetAsyncKeyState, GetKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN,
-                VK_MENU, VK_NUMLOCK, VK_RWIN, VK_SCROLL, VK_SHIFT,
+                GetKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU, VK_NUMLOCK,
+                VK_RWIN, VK_SCROLL, VK_SHIFT,
             },
             WindowsAndMessaging::{
                 AdjustWindowRectEx, DispatchMessageW, GetMessageW, MSG, TranslateMessage,
@@ -254,7 +254,7 @@ pub fn scan_code_to_key(scan_code: u32) -> Option<Key> {
     })
 }
 
-pub unsafe fn get_modifiers_async() -> Modifiers {
+pub unsafe fn get_modifiers() -> Modifiers {
     const KEY_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
         (VK_SHIFT, Modifiers::SHIFT),
         (VK_CONTROL, Modifiers::CTRL),
@@ -273,7 +273,7 @@ pub unsafe fn get_modifiers_async() -> Modifiers {
 
     unsafe {
         for &(key, mods) in KEY_MODIFIERS {
-            if GetAsyncKeyState(key as _) != 0 {
+            if GetKeyState(key as _) & !0x1 != 0 {
                 state.insert(mods);
             }
         }
