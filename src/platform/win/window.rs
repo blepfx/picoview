@@ -282,7 +282,7 @@ impl WindowImpl {
             if let Some(handler) = handler.as_mut() {
                 (handler)(event);
 
-                while let Some(event) = self.inner().event_queue.borrow_mut().pop() {
+                while let Some(event) = self.event_queue.borrow_mut().pop() {
                     (handler)(event);
                 }
             }
