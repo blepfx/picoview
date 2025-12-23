@@ -251,7 +251,7 @@ impl WindowView {
             if let Some(handler) = handler.as_mut() {
                 (handler)(event);
 
-                while let Some(event) = self.inner().event_queue.borrow_mut().pop() {
+                while let Some(event) = self.inner().event_queue.borrow_mut().pop_front() {
                     (handler)(event);
                 }
             }
