@@ -282,12 +282,12 @@ impl WindowImpl {
             if let Some(handler) = handler.as_mut() {
                 (handler)(event);
 
-                for event in self.event_queue.borrow_mut().drain(..) {
+                while let Some(event) = self.inner().event_queue.borrow_mut().pop() {
                     (handler)(event);
                 }
             }
-        } else if cfg!(debug_assertions) {
-            panic!("send_event reentrancy")
+        } else {
+            debug_assert!(false, "send_event reentrancy");
         }
     }
 

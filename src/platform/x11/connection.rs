@@ -316,7 +316,7 @@ unsafe extern "C" fn error_handler(dpy: *mut Display, err: *mut XErrorEvent) -> 
             buf.as_mut_ptr().cast(),
             (buf.len() - 1) as i32,
         );
-        buf[buf.len() - 1] = 0;
+        buf[254] = 0;
         conn.replace(
             CStr::from_ptr(buf.as_mut_ptr().cast())
                 .to_string_lossy()

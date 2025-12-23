@@ -250,12 +250,13 @@ impl WindowView {
         if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
             if let Some(handler) = handler.as_mut() {
                 (handler)(event);
-                for event in self.inner().event_queue.borrow_mut().drain(..) {
+
+                while let Some(event) = self.inner().event_queue.borrow_mut().pop() {
                     (handler)(event);
                 }
             }
-        } else if cfg!(debug_assertions) {
-            panic!("send_event reentrancy")
+        } else {
+            debug_assert!(false, "send_event reentrancy")
         }
     }
 
