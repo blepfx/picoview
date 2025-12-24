@@ -42,7 +42,7 @@ pub struct WindowImpl {
 
     is_closed: Cell<bool>,
     is_destroyed: Cell<bool>,
-    is_resizeable: bool,
+    is_resizable: bool,
 
     last_modifiers: Cell<Modifiers>,
     last_cursor: Cell<MouseCursor>,
@@ -74,10 +74,9 @@ impl WindowImpl {
 
             let window_id = XCreateWindow(
                 connection.display(),
-                if let OpenMode::Embedded(..) = mode {
-                    window_parent
-                } else {
-                    connection.default_root()
+                match mode {
+                    OpenMode::Embedded(..) => window_parent,
+                    _ => connection.default_root(),
                 },
                 0,
                 0,
@@ -113,64 +112,74 @@ impl WindowImpl {
                 1,
             );
 
-            let (min_size, max_size) = match options.resizable.clone() {
-                None => (options.size, options.size),
-                Some(range) => (range.start, range.end),
-            };
+            // resize stuff
+            {
+                let (min_size, max_size) = match options.resizable.clone() {
+                    None => (options.size, options.size),
+                    Some(range) => (range.start, range.end),
+                };
 
-            XSetWMNormalHints(
-                connection.display(),
-                window_id,
-                &mut XSizeHints {
-                    flags: PMinSize | PMaxSize | PSize,
-                    width: options.size.width.try_into().unwrap_or(i32::MAX),
-                    height: options.size.height.try_into().unwrap_or(i32::MAX),
-                    min_width: min_size.width.try_into().unwrap_or(i32::MAX),
-                    min_height: min_size.height.try_into().unwrap_or(i32::MAX),
-                    max_width: max_size.width.try_into().unwrap_or(i32::MAX),
-                    max_height: max_size.height.try_into().unwrap_or(i32::MAX),
-                    ..zeroed()
-                },
-            );
-
-            let title =
-                CString::new(options.title).map_err(|e| Error::PlatformError(e.to_string()))?;
-            let mut text = XTextProperty { ..zeroed() };
-            let status = XStringListToTextProperty(&mut (title.as_ptr() as *mut _), 1, &mut text);
-            if status != 0 {
-                XSetWMName(connection.display(), window_id, &mut text);
-                XFree(text.value as *mut _);
+                XSetWMNormalHints(
+                    connection.display(),
+                    window_id,
+                    &mut XSizeHints {
+                        flags: PMinSize | PMaxSize | PSize,
+                        width: options.size.width.try_into().unwrap_or(i32::MAX),
+                        height: options.size.height.try_into().unwrap_or(i32::MAX),
+                        min_width: min_size.width.try_into().unwrap_or(i32::MAX),
+                        min_height: min_size.height.try_into().unwrap_or(i32::MAX),
+                        max_width: max_size.width.try_into().unwrap_or(i32::MAX),
+                        max_height: max_size.height.try_into().unwrap_or(i32::MAX),
+                        ..zeroed()
+                    },
+                );
             }
 
-            let data: [u32; 1] = [if options.decorations {
-                connection.atom(c"_NET_WM_WINDOW_TYPE_NORMAL") as u32
-            } else {
-                connection.atom(c"_NET_WM_WINDOW_TYPE_DOCK") as u32
-            }];
+            // window title stuff
+            {
+                let title =
+                    CString::new(options.title).map_err(|e| Error::PlatformError(e.to_string()))?;
+                let mut text = XTextProperty { ..zeroed() };
+                let status =
+                    XStringListToTextProperty(&mut (title.as_ptr() as *mut _), 1, &mut text);
+                if status != 0 {
+                    XSetWMName(connection.display(), window_id, &mut text);
+                    XFree(text.value as *mut _);
+                }
+            }
 
-            XChangeProperty(
-                connection.display(),
-                window_id,
-                connection.atom(c"_NET_WM_WINDOW_TYPE"),
-                connection.atom(c"ATOM"),
-                32,
-                PropModeReplace,
-                data.as_ptr() as *mut _,
-                data.len() as _,
-            );
+            // decoration stuff
+            {
+                let data: [u32; 1] = [if options.decorations {
+                    connection.atom(c"_NET_WM_WINDOW_TYPE_NORMAL") as u32
+                } else {
+                    connection.atom(c"_NET_WM_WINDOW_TYPE_DOCK") as u32
+                }];
 
-            let data: [u32; 5] = [0b10, 0, options.decorations as u32, 0, 0];
+                XChangeProperty(
+                    connection.display(),
+                    window_id,
+                    connection.atom(c"_NET_WM_WINDOW_TYPE"),
+                    connection.atom(c"ATOM"),
+                    32,
+                    PropModeReplace,
+                    data.as_ptr() as *mut _,
+                    data.len() as _,
+                );
 
-            XChangeProperty(
-                connection.display(),
-                window_id,
-                connection.atom(c"_MOTIF_WM_HINTS"),
-                connection.atom(c"ATOM"),
-                32,
-                PropModeReplace,
-                data.as_ptr() as *mut _,
-                data.len() as _,
-            );
+                let data: [u32; 5] = [0b10, 0, options.decorations as u32, 0, 0];
+
+                XChangeProperty(
+                    connection.display(),
+                    window_id,
+                    connection.atom(c"_MOTIF_WM_HINTS"),
+                    connection.atom(c"ATOM"),
+                    32,
+                    PropModeReplace,
+                    data.as_ptr() as *mut _,
+                    data.len() as _,
+                );
+            }
 
             if options.visible {
                 XMapWindow(connection.display(), window_id);
@@ -217,7 +226,7 @@ impl WindowImpl {
 
                 is_closed: Cell::new(false),
                 is_destroyed: Cell::new(false),
-                is_resizeable: options.resizable.is_some(),
+                is_resizable: options.resizable.is_some(),
                 refresh_interval,
 
                 last_modifiers: Cell::new(Modifiers::empty()),
@@ -645,7 +654,7 @@ impl PlatformWindow for WindowImpl {
         );
 
         unsafe {
-            if self.is_resizeable {
+            if self.is_resizable {
                 XSetWMNormalHints(
                     self.connection.display(),
                     self.window_id,
