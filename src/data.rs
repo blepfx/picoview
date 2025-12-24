@@ -245,6 +245,7 @@ pub enum Key {
 pub enum Event<'a> {
     Wakeup,
 
+    WindowClose,
     WindowFocus { focus: bool },
     WindowScale { scale: f32 },
     WindowMove { origin: Point },

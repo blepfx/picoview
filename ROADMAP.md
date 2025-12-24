@@ -6,8 +6,8 @@
 | Window creation                                       | :ok:     |          |          |          |
 |  - Top-level decorated windows                        | :ok:     | :ok:     | :ok:     | High     |
 |  - Top-level undecorated windows                      | :ok:     | :x:      | :ok:     | Medium   |
-|  - Embedded windows                                   | :ok:     | :x:      | :ok:     | High     |
-|  - Parented windows                                   | :x:      | :x:      | :x:      | Low      |
+|  - Embedded parented windows                          | :ok:     | :x:      | :ok:     | High     |
+|  - Transient parented windows                         | :x:      | :x:      | :ok:     | Low      |
 | Window events                                         |          |          |          |          |
 |  - `MouseUp`                                          | :ok:     | :ok:     | :ok:     | High     |
 |  - `MouseDown`                                        | :ok:     | :ok:     | :ok:     | High     |
@@ -16,6 +16,7 @@
 |  - `KeyUp`                                            | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyDown`                                          | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyModifiers`                                     | :ok:     | :ok:     | :ok:     | High     |
+|  - `WindowClose`                                      | :x:      | :x:      | :ok:     | Low      |
 |  - `WindowFocus`                                      | :ok:     | :x:      | :ok:     | Low      |
 |  - `WindowScale`                                      | :ok:     | :ok:     | :ok:[^1] | Medium   |
 |  - `WindowMove`                                       | :ok:     | :x:      | :ok:     | Low      |

@@ -25,9 +25,9 @@ use x11::xlib::{
     NotifyNormal, PMaxSize, PMinSize, PSize, PointerMotionMask, PropModeReplace,
     StructureNotifyMask, XChangeProperty, XChangeWindowAttributes, XClientMessageEvent,
     XConfigureWindow, XCreateWindow, XDestroyWindow, XEvent, XFlush, XFree, XMapWindow, XSendEvent,
-    XSetWMName, XSetWMNormalHints, XSetWMProtocols, XSetWindowAttributes, XSizeHints,
-    XStringListToTextProperty, XSync, XTextProperty, XTranslateCoordinates, XUnmapWindow,
-    XWarpPointer, XWindowChanges,
+    XSetTransientForHint, XSetWMName, XSetWMNormalHints, XSetWMProtocols, XSetWindowAttributes,
+    XSizeHints, XStringListToTextProperty, XSync, XTextProperty, XTranslateCoordinates,
+    XUnmapWindow, XWarpPointer, XWindowChanges,
 };
 
 unsafe impl Send for WindowImpl {}
@@ -65,18 +65,20 @@ impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
         unsafe {
             let connection = Connection::create()?;
-            let window_parent = match mode {
-                OpenMode::Blocking => connection.default_root(),
-                OpenMode::Embedded(rwh_06::RawWindowHandle::Xcb(window)) => {
-                    window.window.get() as u64
-                }
-                OpenMode::Embedded(rwh_06::RawWindowHandle::Xlib(window)) => window.window,
-                OpenMode::Embedded(_) => return Err(Error::InvalidParent),
+            let window_parent = match mode.handle() {
+                None => connection.default_root(),
+                Some(rwh_06::RawWindowHandle::Xlib(handle)) => handle.window,
+                Some(rwh_06::RawWindowHandle::Xcb(handle)) => handle.window.get() as u64,
+                _ => return Err(Error::InvalidParent),
             };
 
             let window_id = XCreateWindow(
                 connection.display(),
-                window_parent,
+                if let OpenMode::Embedded(..) = mode {
+                    window_parent
+                } else {
+                    connection.default_root()
+                },
                 0,
                 0,
                 options.size.width as _,
@@ -100,10 +102,9 @@ impl WindowImpl {
                 },
             );
 
-            let (min_size, max_size) = match options.resizable.clone() {
-                None => (options.size, options.size),
-                Some(range) => (range.start, range.end),
-            };
+            if let OpenMode::Transient(..) = mode {
+                XSetTransientForHint(connection.display(), window_id, window_parent);
+            }
 
             XSetWMProtocols(
                 connection.display(),
@@ -111,6 +112,11 @@ impl WindowImpl {
                 &mut connection.atom(c"WM_DELETE_WINDOW"),
                 1,
             );
+
+            let (min_size, max_size) = match options.resizable.clone() {
+                None => (options.size, options.size),
+                Some(range) => (range.start, range.end),
+            };
 
             XSetWMNormalHints(
                 connection.display(),
@@ -230,7 +236,7 @@ impl WindowImpl {
                     window.run_event_loop(options.factory)?;
                     Ok(WindowWaker::default())
                 }
-                OpenMode::Embedded(..) => {
+                OpenMode::Embedded(..) | OpenMode::Transient(..) => {
                     let waker = window.waker();
                     thread::spawn(|| window.run_event_loop(options.factory).ok());
                     Ok(waker)
@@ -308,7 +314,7 @@ impl WindowImpl {
                         && event.message_type == self.connection.atom(c"WM_PROTOCOLS") as _
                         && event.data.get_long(0) == self.connection.atom(c"WM_DELETE_WINDOW") as _
                     {
-                        self.is_closed.set(true);
+                        self.send_event(Event::WindowClose);
                     }
 
                     if event.format == 32

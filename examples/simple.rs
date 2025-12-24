@@ -40,7 +40,7 @@ fn main() {
                             }
                         })
                     })
-                    .open_embedded(window)
+                    .open_transient(window)
                     .expect("failed to open a child window");
 
                     waker.wakeup().unwrap();
@@ -52,6 +52,10 @@ fn main() {
                 }
 
                 last = current;
+            }
+
+            Event::WindowClose => {
+                window.close();
             }
 
             Event::MouseMove { relative, .. } => {

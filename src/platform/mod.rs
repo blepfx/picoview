@@ -20,6 +20,17 @@ use crate::{MouseCursor, Point, Size, WakeupError, WindowWaker, rwh_06};
 pub enum OpenMode {
     Blocking,
     Embedded(rwh_06::RawWindowHandle),
+    Transient(rwh_06::RawWindowHandle),
+}
+
+impl OpenMode {
+    pub fn handle(&self) -> Option<rwh_06::RawWindowHandle> {
+        match self {
+            OpenMode::Blocking => None,
+            OpenMode::Embedded(handle) => Some(*handle),
+            OpenMode::Transient(handle) => Some(*handle),
+        }
+    }
 }
 
 pub trait PlatformWindow /* : !Send + !Sync */ {

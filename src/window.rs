@@ -13,15 +13,11 @@ pub type WindowFactory =
 pub struct WindowBuilder {
     pub visible: bool,
     pub decorations: bool,
-
     pub title: String,
-
     pub size: Size,
     pub resizable: Option<Range<Size>>,
-
     pub position: Option<Point>,
     pub opengl: Option<GlConfig>,
-
     pub factory: WindowFactory,
 }
 
@@ -154,13 +150,28 @@ impl WindowBuilder {
         unsafe { platform::open_window(self, platform::OpenMode::Blocking).map(|_| ()) }
     }
 
-    pub fn open_embedded(self, parent: impl rwh_06::HasWindowHandle) -> Result<WindowWaker, Error> {
+    pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, Error>
+    where
+        W: rwh_06::HasWindowHandle,
+    {
         let handle = parent
             .window_handle()
             .map_err(|_| Error::InvalidParent)?
             .as_raw();
 
         unsafe { platform::open_window(self, platform::OpenMode::Embedded(handle)) }
+    }
+
+    pub fn open_transient<W>(self, parent: W) -> Result<WindowWaker, Error>
+    where
+        W: rwh_06::HasWindowHandle,
+    {
+        let handle = parent
+            .window_handle()
+            .map_err(|_| Error::InvalidParent)?
+            .as_raw();
+
+        unsafe { platform::open_window(self, platform::OpenMode::Transient(handle)) }
     }
 }
 
