@@ -6,80 +6,131 @@ use std::{fmt::Debug, ops::Range, sync::Arc};
 // https://github.com/rust-lang/rust/issues/70263
 //
 // performance overhead of dynamic dispatch is extremely low anyway
+
+/// A function that constructs an event handler for a window.
+/// Must be `Send` and `'static`.
+///
+/// The created event handler is a boxed closure of type `FnMut(Event) + 'a` where `'a` is the lifetime of the window.
 pub type WindowFactory =
     Box<dyn for<'a> FnOnce(Window<'a>) -> Box<dyn FnMut(Event) + 'a> + Send + 'static>;
 
+/// A builder for opening new windows.
 #[non_exhaustive]
 pub struct WindowBuilder {
+    /// Whether the window is initially visible
     pub visible: bool,
+
+    /// Whether the window has decorations (title bar, borders, etc)
     pub decorations: bool,
+
+    /// The window title
     pub title: String,
+
+    /// The initial window size in physical pixels
     pub size: Size,
+
+    /// The minimum and maximum size of the window if resizable
     pub resizable: Option<Range<Size>>,
+
+    /// The initial window position in physical pixels
     pub position: Option<Point>,
+
+    /// Requested OpenGL configuration, if any.
     pub opengl: Option<GlConfig>,
+
+    /// The factory function that creates the event handler for the window
     pub factory: WindowFactory,
 }
 
+/// A thread-safe handle that can be used to wake up an associated event loop.
 #[derive(Clone)]
 pub struct WindowWaker(pub(crate) Arc<dyn platform::PlatformWaker>);
 
+/// A handle to an open window.
+///
+/// It is only valid while the window is open and only accessible from the event loop of that window.
 #[derive(Clone, Copy)]
 pub struct Window<'a>(pub(crate) &'a dyn platform::PlatformWindow);
 
 impl<'a> Window<'a> {
+    /// Get a [`WindowWaker`] that can be used to wake up the current event loop by sending a [`Event::Wakeup`](`crate::Event::Wakeup`) event.
     pub fn waker(&self) -> WindowWaker {
         self.0.waker()
     }
 
+    /// Close the window and exit its event loop.
     pub fn close(&self) {
         self.0.close();
     }
 
+    /// Set the window title.
     pub fn set_title(&self, title: &str) {
         self.0.set_title(title);
     }
 
+    /// Set the cursor icon that is shown when hovering over the window.
     pub fn set_cursor_icon(&self, icon: MouseCursor) {
         self.0.set_cursor_icon(icon);
     }
 
+    /// Warp the mouse cursor to the given position within the window.
+    ///
+    /// Position is in physical pixels, with (0, 0) being the top-left corner of the client area.
     pub fn set_cursor_position(&self, pos: impl Into<Point>) {
         self.0.set_cursor_position(pos.into());
     }
 
+    /// Set the window size (size of client area) in physical pixels.
     pub fn set_size(&self, size: impl Into<Size>) {
         self.0.set_size(size.into());
     }
 
+    /// Set the window position (position of client area) in physical pixels relative to the origin (top-left corner) of the coordinate system.
+    ///
+    /// The coordinate system depends on how the window was created:
+    /// - For top-level windows, it is the screen coordinate system, with (0, 0) being the top-left corner of the primary monitor.
+    /// - For embedded windows, it is the coordinate system of the parent window, with (0, 0) being the top-left corner of the parent window's client area.
+    /// - For transient windows, it is the coordinate system of the parent window, with (0, 0) being the top-left corner of the parent window's client area.
+    ///
+    /// If not specified, the window will be centered on the screen or parent window (or positioned at (0, 0) if embedded)
     pub fn set_position(&self, pos: impl Into<Point>) {
         self.0.set_position(pos.into());
     }
 
+    /// Set whether the window is visible.
     pub fn set_visible(&self, visible: bool) {
         self.0.set_visible(visible);
     }
 
+    /// Open the given URL or file path in the system's default application.
     pub fn open_url(&self, url: &str) -> bool {
         self.0.open_url(url)
     }
 
+    /// Get the current text contents of the system clipboard, if any.
     pub fn get_clipboard_text(&self) -> Option<String> {
         self.0.get_clipboard_text()
     }
 
+    /// Set the current text contents of the system clipboard.
+    ///
+    /// Returns `true` on success, `false` otherwise.
     pub fn set_clipboard_text(&self, text: &str) -> bool {
         self.0.set_clipboard_text(text)
     }
 }
 
 impl WindowWaker {
+    /// Wake up the associated window, emitting a [`Event::Wakeup`](`crate::Event::Wakeup`) event.
+    ///
+    /// Returns `Err(Disconnected)` if the window has already been closed.
     pub fn wakeup(&self) -> Result<(), WakeupError> {
         self.0.wakeup()
     }
 }
 
 impl WindowBuilder {
+    /// Create a new `WindowBuilder` with the given event handler factory and default parameters
     pub fn new(
         factory: impl for<'a> FnOnce(Window<'a>) -> Box<dyn FnMut(Event) + 'a> + Send + 'static,
     ) -> Self {
@@ -100,6 +151,9 @@ impl WindowBuilder {
         }
     }
 
+    /// Set whether the window has decorations (title bar, borders, etc)
+    ///
+    /// `true` by default
     pub fn with_decorations(self, decorations: bool) -> Self {
         Self {
             decorations,
@@ -107,10 +161,14 @@ impl WindowBuilder {
         }
     }
 
+    /// Set whether the window is visible upon creation
+    ///
+    /// `true` by default
     pub fn with_visible(self, visible: bool) -> Self {
         Self { visible, ..self }
     }
 
+    /// Set the initial window title
     pub fn with_title(self, title: impl ToString) -> Self {
         Self {
             title: title.to_string(),
@@ -118,6 +176,7 @@ impl WindowBuilder {
         }
     }
 
+    /// Set the initial window size _in physical pixels_
     pub fn with_size(self, size: impl Into<Size>) -> Self {
         Self {
             size: size.into(),
@@ -125,13 +184,11 @@ impl WindowBuilder {
         }
     }
 
-    pub fn with_resizable(self, min: impl Into<Size>, max: impl Into<Size>) -> Self {
-        Self {
-            resizable: Some(min.into()..max.into()),
-            ..self
-        }
-    }
-
+    /// Set the initial window position relative to the origin.
+    ///
+    /// If not specified, the window will be centered on the screen or parent window (or positioned at 0, 0 if embedded)
+    ///
+    /// See [`Window::set_position`] for details on coordinate system.
     pub fn with_position(self, position: impl Into<Point>) -> Self {
         Self {
             position: Some(position.into()),
@@ -139,6 +196,17 @@ impl WindowBuilder {
         }
     }
 
+    /// Set the minimum and maximum resizable size of the window
+    ///
+    /// If not set, the window will not be resizable by the user and can only be resized via [`Window::set_size`].
+    pub fn with_resizable(self, min: impl Into<Size>, max: impl Into<Size>) -> Self {
+        Self {
+            resizable: Some(min.into()..max.into()),
+            ..self
+        }
+    }
+
+    /// Request an OpenGL context with the given configuration
     pub fn with_opengl(self, opengl: GlConfig) -> Self {
         Self {
             opengl: Some(opengl),
@@ -146,22 +214,17 @@ impl WindowBuilder {
         }
     }
 
+    /// Open a top-level window. Blocks until the window is closed.
+    ///
+    /// Returns `Err` if the window could not be created or if an error occurred during the lifetime of the window.
     pub fn open_blocking(self) -> Result<(), Error> {
         unsafe { platform::open_window(self, platform::OpenMode::Blocking).map(|_| ()) }
     }
 
-    pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, Error>
-    where
-        W: rwh_06::HasWindowHandle,
-    {
-        let handle = parent
-            .window_handle()
-            .map_err(|_| Error::InvalidParent)?
-            .as_raw();
-
-        unsafe { platform::open_window(self, platform::OpenMode::Embedded(handle)) }
-    }
-
+    /// Open a transient window attached to the given parent window.
+    ///
+    /// A transient window is a non-clipped window that can be moved independently of its parent window (like a popup or a dialog).
+    /// It is always on top of its parent window and is hidden when the parent window is minimized or closed.
     pub fn open_transient<W>(self, parent: W) -> Result<WindowWaker, Error>
     where
         W: rwh_06::HasWindowHandle,
@@ -172,6 +235,23 @@ impl WindowBuilder {
             .as_raw();
 
         unsafe { platform::open_window(self, platform::OpenMode::Transient(handle)) }
+    }
+
+    /// Open an embedded window within the given parent window.
+    ///
+    /// The embedded window is clipped to the bounds of the parent window and moves with it.
+    ///
+    /// It is used for embedding a window inside another application's window (for example, plugins).
+    pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, Error>
+    where
+        W: rwh_06::HasWindowHandle,
+    {
+        let handle = parent
+            .window_handle()
+            .map_err(|_| Error::InvalidParent)?
+            .as_raw();
+
+        unsafe { platform::open_window(self, platform::OpenMode::Embedded(handle)) }
     }
 }
 
@@ -216,6 +296,7 @@ impl Debug for WindowWaker {
 }
 
 impl Default for WindowWaker {
+    /// Create a dummy `WindowWaker` that does not belong to any window.
     fn default() -> Self {
         Self(Arc::new(()))
     }

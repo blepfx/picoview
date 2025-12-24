@@ -3,7 +3,7 @@
 #![deny(clippy::panic, clippy::unwrap_used, clippy::indexing_slicing)]
 #![warn(clippy::todo, clippy::unimplemented)]
 #![warn(missing_debug_implementations)]
-// #![warn(missing_docs)]
+#![warn(missing_docs)]
 
 mod data;
 mod opengl;
