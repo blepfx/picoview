@@ -54,7 +54,9 @@ fn main() {
                 last = current;
             }
 
+            // you have to handle WindowClose explicitly to close the window
             Event::WindowClose => {
+                println!("{:?}", event);
                 window.close();
             }
 

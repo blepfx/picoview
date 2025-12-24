@@ -50,12 +50,13 @@ use windows_sys::Win32::{
             PostQuitMessage, RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE,
             SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW, SetCursor,
             SetCursorPos, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor,
-            USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA, WM_DESTROY, WM_DISPLAYCHANGE,
-            WM_DPICHANGED, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-            WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
-            WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SHOWWINDOW,
-            WM_SIZE, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD,
-            WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_VISIBLE, XBUTTON1, XBUTTON2,
+            USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA, WM_CLOSE, WM_DESTROY,
+            WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+            WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
+            WS_CHILD, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_VISIBLE,
+            XBUTTON1, XBUTTON2,
         },
     },
 };
@@ -80,9 +81,9 @@ pub struct WindowImpl {
     window_class: u16,
     vsync_callback: VSyncCallback,
 
-    owns_event_loop: bool,
-    min_window_size: POINT,
-    max_window_size: POINT,
+    is_blocking: bool,
+    is_resizable: bool,
+    min_max_window_size: Cell<(POINT, POINT)>,
 
     state_focused: Cell<bool>,
     state_current_modifiers: Cell<Modifiers>,
@@ -105,19 +106,14 @@ impl WindowImpl {
 
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
         unsafe {
-            let parent = match mode {
-                OpenMode::Embedded(rwh_06::RawWindowHandle::Win32(window)) => {
-                    window.hwnd.get() as HWND
-                }
-                OpenMode::Embedded(_) => {
-                    return Err(Error::InvalidParent);
-                }
-                OpenMode::Blocking => null_mut(),
+            let shared = Win32Shared::get()?;
+            let parent = match mode.handle() {
+                None => null_mut(),
+                Some(rwh_06::RawWindowHandle::Win32(window)) => window.hwnd.get() as HWND,
+                Some(_) => return Err(Error::InvalidParent),
             };
 
-            let shared = Win32Shared::get()?;
-
-            if parent.is_null() {
+            if let OpenMode::Blocking = mode {
                 let com_init = CoInitialize(null());
                 check_error(com_init == 0, "com sta init")?;
             }
@@ -145,7 +141,7 @@ impl WindowImpl {
                 let mut dwstyle = 0;
 
                 match mode {
-                    OpenMode::Blocking => {
+                    OpenMode::Blocking | OpenMode::Transient(..) => {
                         if options.decorations {
                             dwstyle |= WS_OVERLAPPEDWINDOW;
                         } else {
@@ -153,6 +149,7 @@ impl WindowImpl {
                         }
 
                         if options.resizable.is_none() {
+                            dwstyle &= !WS_MAXIMIZEBOX;
                             dwstyle &= !WS_SIZEBOX;
                         }
                     }
@@ -226,23 +223,18 @@ impl WindowImpl {
                 window_class,
                 window_hwnd: hwnd,
 
-                owns_event_loop: matches!(mode, OpenMode::Blocking),
-                max_window_size: window_size_from_client_size(
+                is_blocking: matches!(mode, OpenMode::Blocking),
+                is_resizable: options.resizable.is_some(),
+                min_max_window_size: Cell::new(
                     options
                         .resizable
-                        .as_ref()
-                        .map(|x| x.end)
-                        .unwrap_or(Size::MAX),
-                    dwstyle,
-                ),
-
-                min_window_size: window_size_from_client_size(
-                    options
-                        .resizable
-                        .as_ref()
-                        .map(|x| x.start)
-                        .unwrap_or(Size::MIN),
-                    dwstyle,
+                        .map(|r| {
+                            (
+                                window_size_from_client_size(r.start, dwstyle),
+                                window_size_from_client_size(r.end, dwstyle),
+                            )
+                        })
+                        .unwrap_or((size, size)),
                 ),
 
                 event_handler: RefCell::new(None),
@@ -269,7 +261,7 @@ impl WindowImpl {
             let waker = window.waker();
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(window) as _);
 
-            if matches!(mode, OpenMode::Blocking) {
+            if let OpenMode::Blocking = mode {
                 run_event_loop(null_mut());
             }
 
@@ -369,6 +361,10 @@ impl PlatformWindow for WindowImpl {
         unsafe {
             let dwstyle = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
             let size = window_size_from_client_size(size, dwstyle);
+
+            if !self.is_resizable {
+                self.min_max_window_size.set((size, size));
+            }
 
             SetWindowPos(
                 self.window_hwnd,
@@ -507,7 +503,7 @@ unsafe extern "system" fn wnd_proc(
         }
 
         if msg == WM_DESTROY {
-            if (*window_ptr).owns_event_loop {
+            if (*window_ptr).is_blocking {
                 PostQuitMessage(0);
             }
 
@@ -525,6 +521,11 @@ unsafe extern "system" fn wnd_proc(
                     origin: Point { x, y },
                 });
 
+                0
+            }
+
+            WM_CLOSE => {
+                window.send_event(Event::WindowClose);
                 0
             }
 
@@ -687,10 +688,10 @@ unsafe extern "system" fn wnd_proc(
 
             WM_GETMINMAXINFO => {
                 let info = lparam as *mut MINMAXINFO;
-                (*info).ptMinTrackSize = window.min_window_size;
-                (*info).ptMaxTrackSize = window.max_window_size;
-                (*info).ptMaxSize = window.max_window_size;
-
+                let (min_size, max_size) = window.min_max_window_size.get();
+                (*info).ptMinTrackSize = min_size;
+                (*info).ptMaxTrackSize = max_size;
+                (*info).ptMaxSize = max_size;
                 0
             }
 
