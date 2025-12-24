@@ -257,10 +257,14 @@ impl WindowImpl {
     #[allow(clippy::boxed_local)]
     fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), Error> {
         unsafe {
-            // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so because:
-            //  - because our window instance is boxed, it has a stable address for the whole lifetime of the window
-            //  - we manually dispose of our handler before WindowImpl gets dropped (see drop impl)
-            //  - we promise to not move WindowImpl (and by extension the handler) to a different thread (as that would violate the handler's !Send requirement)
+            // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so
+            // because:
+            //  - because our window instance is boxed, it has a stable address for the
+            //    whole lifetime of the window
+            //  - we manually dispose of our handler before WindowImpl gets dropped (see
+            //    drop impl)
+            //  - we promise to not move WindowImpl (and by extension the handler) to a
+            //    different thread (as that would violate the handler's !Send requirement)
             self.handler
                 .replace(Some((factory)(Window(&*(&*self as *const Self)))));
 
@@ -549,7 +553,8 @@ impl WindowImpl {
 
     fn destroy(mut self) -> Result<(), Error> {
         unsafe {
-            // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends on WindowImpl
+            // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends
+            // on WindowImpl
             self.handler.take();
 
             if let Some(gl) = self.gl_context.take() {

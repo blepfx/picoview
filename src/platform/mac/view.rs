@@ -233,10 +233,15 @@ impl WindowView {
             is_closed: Cell::new(false),
         }));
 
-        // SAFETY: we erase the lifetime of our OsWindowView; it should be safe to do so because:
-        //  - because our window instance has a stable address for the whole lifetime of the window (due to being stored as Retained)
-        //  - we manually dispose of our handler before WindowImpl gets dropped (see drop impl)
-        //  - we promise to not move the handler to a different thread as appkit api is expected to be single threaded (as that would violate the handler's !Send requirement)
+        // SAFETY: we erase the lifetime of our OsWindowView; it should be safe to do so
+        // because:
+        //  - because our window instance has a stable address for the whole lifetime of
+        //    the window (due to being stored as Retained)
+        //  - we manually dispose of our handler before WindowImpl gets dropped (see
+        //    drop impl)
+        //  - we promise to not move the handler to a different thread as appkit api is
+        //    expected to be single threaded (as that would violate the handler's !Send
+        //    requirement)
         unsafe {
             view.inner()
                 .event_handler
@@ -844,7 +849,8 @@ impl PlatformWaker for WindowViewWaker {
 
 impl Drop for WindowView {
     fn drop(&mut self) {
-        // we need to drop this before OsWindowView gets dropped, see the safety comment at the handler initialization place
+        // we need to drop this before OsWindowView gets dropped, see the safety comment
+        // at the handler initialization place
         self.inner().event_handler.take();
     }
 }

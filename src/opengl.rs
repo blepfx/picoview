@@ -40,7 +40,8 @@ pub enum GlFormat {
 }
 
 impl GlFormat {
-    /// Get the number of bits for red, green, blue, alpha, depth, and stencil channels respectively
+    /// Get the number of bits for red, green, blue, alpha, depth, and stencil
+    /// channels respectively
     pub fn as_rgbads(self) -> (u8, u8, u8, u8, u8, u8) {
         match self {
             GlFormat::RGB8 => (8, 8, 8, 0, 0, 0),
@@ -68,15 +69,18 @@ pub struct GlConfig {
     /// Whether to enable debug mode extension
     pub debug: bool,
 
-    /// Whether to perform sRGB gamma correction when writing to the output framebuffer
+    /// Whether to perform sRGB gamma correction when writing to the output
+    /// framebuffer
     pub srgb: bool,
 
-    /// Number of samples for multisample anti-aliasing, set to 0 to disable MSAA
+    /// Number of samples for multisample anti-aliasing, set to 0 to disable
+    /// MSAA
     pub msaa_count: u32,
 
     /// Do not fail if the requested configuration is not available
     ///
-    /// `Event::WindowFrame` may then provide `gl: None` if no suitable context could be created
+    /// `Event::WindowFrame` may then provide `gl: None` if no suitable context
+    /// could be created
     pub optional: bool,
 }
 
@@ -105,6 +109,7 @@ pub trait GlContext: Debug {
     /// Make the OpenGL context active or inactive on the current thread
     /// Returns true on success
     ///
-    /// All OpenGL calls must be made only when the context is active for the current thread
+    /// All OpenGL calls must be made only when the context is active for the
+    /// current thread
     fn make_current(&self, current: bool) -> bool;
 }
