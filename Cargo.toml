@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bitflags = "2.6.0"
-raw-window-handle = "0.6.2"
+bitflags = "2.10"
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os="linux")'.dependencies]
 libc = "0.2"
@@ -62,3 +62,9 @@ windows-sys = { version = "0.61.2", features = [
 
 [profile.bench]
 debug = true
+
+[workspace]
+members = [
+    ".",
+    "examples/clack-gain",
+]

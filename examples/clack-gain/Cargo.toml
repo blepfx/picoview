@@ -1,0 +1,24 @@
+[package]
+name = "picoview-clack-gain"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+picoview = { path = "../.." }
+
+clack-plugin = { git = "https://github.com/prokopyl/clack", rev = "5c28e2b7332e133688ca18ee6c374f55edaa77a4" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "5c28e2b7332e133688ca18ee6c374f55edaa77a4", features = [
+    "audio-ports",
+    "clack-plugin",
+    "gui",
+    "note-ports",
+    "params",
+    "raw-window-handle_06",
+    "state",
+] }
+
