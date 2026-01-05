@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::os::raw::{c_int, c_ulong};
 use std::ptr::{null, null_mut};
 use x11::glx::*;
-use x11::xlib::{Bool, Display, XFree};
+use x11::xlib::{Bool, Display, XFree, XSync};
 
 const GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20B2;
 const CONTEXT_ES2_PROFILE_BIT_EXT: i32 = 0x00000004;
@@ -213,6 +213,7 @@ impl GlContext {
                 }
             }
 
+            XSync(connection.display(), 0);
             connection.check_error().map_err(Error::OpenGlError)?;
 
             Ok(GlContext { window, context })
