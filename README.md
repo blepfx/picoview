@@ -14,8 +14,7 @@ Smol low-level windowing abstraction with a focus on audio plugin development
     - `picoview` should behave the same on all supported platforms (Windows, macOS, Linux).
     - This includes abstracting away OS-dependent pixel scaling and only dealing with physical pixels. `picoview` provides a `WindowScale` event, which is treated as a hint more than anything else.
 - Audio plugin focused
-    - `picoview` should be suitable for audio plugin development. This means it should be possible to hook
-    into an existing event loop provided by a plugin host.
+    - `picoview` should be suitable for audio plugin development. This means it should be possible to hook into an existing event loop provided by a plugin host.
 
 See [ROADMAP.md](ROADMAP.md) for more info.
 
