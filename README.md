@@ -2,14 +2,20 @@
 Smol low-level windowing abstraction with a focus on audio plugin development 
 
 > [!WARNING]
-> This project is currently in development and the API is not final! Please do not rely on `picoview` in production.
+> This project is currently in development and the API is not final! Please do not rely on `picoview` in production. MacOS backend is still broken!
 
 ## Goals
 
 - Small API surface
-- Minimal amount of dependencies 
+    - `picoview` should be easy to use and provide only the essentials for window creation, event handling and OS abstraction.
+- Low compile times
+    - `picoview` should compile fast and not bloat your compile times. Uses minimum amount of dependencies.
 - Complete OS abstraction
+    - `picoview` should behave the same on all supported platforms (Windows, macOS, Linux).
     - This includes abstracting away OS-dependent pixel scaling and only dealing with physical pixels. `picoview` provides a `WindowScale` event, which is treated as a hint more than anything else.
+- Audio plugin focused
+    - `picoview` should be suitable for audio plugin development. This means it should be possible to hook
+    into an existing event loop provided by a plugin host.
 
 See [ROADMAP.md](ROADMAP.md) for more info.
 

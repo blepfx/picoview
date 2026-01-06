@@ -17,6 +17,7 @@ pub type WindowFactory =
 
 /// A builder for opening new windows.
 #[non_exhaustive]
+#[must_use = "`WindowBuilder` does nothing until you call one of the open methods"]
 pub struct WindowBuilder {
     /// Whether the window is initially visible
     pub visible: bool,
