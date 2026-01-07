@@ -8,6 +8,7 @@ use std::os::raw::{c_int, c_ulong};
 use std::ptr::{null, null_mut};
 use x11::glx::*;
 use x11::xlib::{Bool, Display, XFree, XSync};
+use x11::xrender::XRenderFindVisualFormat;
 
 const GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20B2;
 const CONTEXT_ES2_PROFILE_BIT_EXT: i32 = 0x00000004;
@@ -61,6 +62,7 @@ impl GlContext {
     pub fn find_best_config(
         connection: &Connection,
         config: &GlConfig,
+        transparent: bool,
     ) -> Result<VisualConfig, Error> {
         unsafe {
             let (major, minor, extensions) = Self::get_version_info(connection)?;
@@ -123,17 +125,30 @@ impl GlContext {
                 return Err(Error::OpenGlError("no matching config".into()));
             }
 
-            let fb_config = *fb_config_list;
-            let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
+            let mut preferred_config = 0;
+            for i in 0..n_configs {
+                let config = *fb_config_list.add(i as usize);
+                let visual = glXGetVisualFromFBConfig(connection.display(), config);
+                let format = XRenderFindVisualFormat(connection.display(), (*visual).visual);
+
+                if transparent && (*format).direct.alphaMask > 0 {
+                    preferred_config = i;
+                }
+
+                XFree(visual as *mut _);
+            }
+
+            let config = *fb_config_list.add(preferred_config as usize);
+            let visual = glXGetVisualFromFBConfig(connection.display(), config);
+
             let config = VisualConfig {
-                fb_config,
-                depth: (*fb_visual).depth,
-                visual: (*fb_visual).visual,
+                fb_config: config,
+                depth: (*visual).depth,
+                visual: (*visual).visual,
             };
 
+            XFree(visual as *mut _);
             XFree(fb_config_list as *mut _);
-            XFree(fb_visual as *mut _);
-
             Ok(config)
         }
     }
@@ -146,7 +161,7 @@ impl GlContext {
         fb_config: GLXFBConfig,
     ) -> Result<GlContext, Error> {
         if fb_config.is_null() {
-            return Err(Error::OpenGlError("FBConfig is null".into()));
+            return Err(Error::OpenGlError("no matching config".into()));
         }
 
         unsafe {

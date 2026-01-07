@@ -24,7 +24,7 @@ fn main() {
                     (time + 0.0).sin().abs(),
                     (time + 2.0).sin().abs(),
                     (time + 4.0).sin().abs(),
-                    1.0,
+                    (time + 6.0).sin().abs(),
                 );
                 (clear)(0x00004000);
 
@@ -55,6 +55,7 @@ fn main() {
     })
     .with_size((200, 200))
     .with_resizable((0, 0), (1000, 1000))
+    .with_transparency(true)
     .open_blocking()
     .expect("failed to open a window");
 }

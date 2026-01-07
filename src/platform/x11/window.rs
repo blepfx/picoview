@@ -74,8 +74,15 @@ impl WindowImpl {
             let visual_info = options
                 .opengl
                 .as_ref()
-                .and_then(|config| GlContext::find_best_config(&connection, config).ok())
-                .or_else(|| VisualConfig::try_new_true_color(&connection, 24))
+                .and_then(|config| {
+                    GlContext::find_best_config(&connection, config, options.transparent).ok()
+                })
+                .or_else(|| {
+                    VisualConfig::try_new_true_color(
+                        &connection,
+                        if options.transparent { 32 } else { 24 },
+                    )
+                })
                 .unwrap_or(VisualConfig::copy_from_parent());
 
             let colormap = XCreateColormap(

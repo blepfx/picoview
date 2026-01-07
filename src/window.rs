@@ -25,6 +25,9 @@ pub struct WindowBuilder {
     /// Whether the window has decorations (title bar, borders, etc)
     pub decorations: bool,
 
+    /// Whether the window client area is transparent (premultiplied alpha)
+    pub transparent: bool,
+
     /// The window title
     pub title: String,
 
@@ -152,6 +155,7 @@ impl WindowBuilder {
         Self {
             visible: true,
             decorations: true,
+            transparent: false,
             title: String::new(),
 
             resizable: None,
@@ -172,6 +176,16 @@ impl WindowBuilder {
     pub fn with_decorations(self, decorations: bool) -> Self {
         Self {
             decorations,
+            ..self
+        }
+    }
+
+    /// Set whether the window client area is transparent (premultiplied alpha)
+    ///
+    /// `false` by default
+    pub fn with_transparency(self, transparent: bool) -> Self {
+        Self {
+            transparent,
             ..self
         }
     }

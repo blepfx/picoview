@@ -26,11 +26,16 @@ fn main() {
                 let mut buffer = surface.buffer_mut().unwrap();
                 for y in 0..buffer.height().get() {
                     for x in 0..buffer.width().get() {
+                        let alpha = x % 256;
                         let red = x % 256;
                         let green = y % 256;
                         let blue = (x * y) % 256;
                         let index = y * buffer.width().get() + x;
-                        buffer[index as usize] = blue | (green << 8) | (red << 16);
+
+                        buffer[index as usize] = (blue * alpha / 256)
+                            | ((green * alpha / 256) << 8)
+                            | ((red * alpha / 256) << 16)
+                            | (alpha << 24);
                     }
                 }
 
@@ -59,6 +64,7 @@ fn main() {
     .with_title("Softbuffer Example")
     .with_size((600, 600))
     .with_resizable((0, 0), (1000, 1000))
+    .with_transparency(true)
     .open_blocking()
     .unwrap();
 }
