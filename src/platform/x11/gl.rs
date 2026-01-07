@@ -1,4 +1,5 @@
 use super::connection::Connection;
+use crate::platform::x11::util::VisualConfig;
 use crate::{Error, GlConfig, GlVersion};
 use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
@@ -34,106 +35,126 @@ pub struct GlContextScope<'a> {
 }
 
 impl GlContext {
+    pub unsafe fn get_version_info(
+        connection: &Connection,
+    ) -> Result<(u8, u8, HashSet<&'static str>), Error> {
+        unsafe {
+            let (mut major, mut minor) = (0, 0);
+            if glXQueryVersion(connection.display(), &mut major, &mut minor) == 0 {
+                return Err(Error::OpenGlError("glXQueryVersion failed".into()));
+            }
+
+            let extensions = glXGetClientString(connection.display(), GLX_EXTENSIONS);
+            let extensions = if extensions.is_null() {
+                HashSet::new()
+            } else if let Ok(extensions) = CStr::from_ptr(extensions).to_str() {
+                extensions.split(' ').collect::<HashSet<_>>()
+            } else {
+                HashSet::new()
+            };
+
+            connection.check_error().map_err(Error::OpenGlError)?;
+            Ok((major as u8, minor as u8, extensions))
+        }
+    }
+
+    pub fn find_best_config(
+        connection: &Connection,
+        config: &GlConfig,
+    ) -> Result<VisualConfig, Error> {
+        unsafe {
+            let (major, minor, extensions) = Self::get_version_info(connection)?;
+            let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
+
+            let ext_multisample =
+                (major, minor) >= (1, 4) || extensions.contains("GLX_ARB_multisample");
+            let ext_framebuffer_srgb = extensions.contains("GLX_ARB_framebuffer_sRGB")
+                || extensions.contains("GLX_EXT_framebuffer_sRGB");
+
+            let mut fb_attribs = vec![
+                GLX_X_RENDERABLE,
+                1,
+                GLX_X_VISUAL_TYPE,
+                GLX_TRUE_COLOR,
+                GLX_DRAWABLE_TYPE,
+                GLX_WINDOW_BIT,
+                GLX_RENDER_TYPE,
+                GLX_RGBA_BIT,
+                GLX_RED_SIZE,
+                red as _,
+                GLX_GREEN_SIZE,
+                green as _,
+                GLX_BLUE_SIZE,
+                blue as _,
+                GLX_ALPHA_SIZE,
+                alpha as _,
+                GLX_DEPTH_SIZE,
+                depth as _,
+                GLX_STENCIL_SIZE,
+                stencil as _,
+                GLX_DOUBLEBUFFER,
+                config.double_buffer as i32,
+            ];
+
+            if config.srgb && ext_framebuffer_srgb {
+                fb_attribs.extend_from_slice(&[GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB, 1]);
+            }
+
+            if config.msaa_count > 0 && ext_multisample {
+                fb_attribs.extend_from_slice(&[
+                    GLX_SAMPLE_BUFFERS,
+                    1,
+                    GLX_SAMPLES,
+                    config.msaa_count as i32,
+                ]);
+            }
+
+            fb_attribs.push(0);
+
+            let mut n_configs = 0;
+            let fb_config_list = glXChooseFBConfig(
+                connection.display(),
+                connection.screen(),
+                fb_attribs.as_ptr(),
+                &mut n_configs,
+            );
+
+            if n_configs <= 0 || fb_config_list.is_null() {
+                return Err(Error::OpenGlError("no matching config".into()));
+            }
+
+            let fb_config = *fb_config_list;
+            let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
+            let config = VisualConfig {
+                fb_config,
+                depth: (*fb_visual).depth,
+                visual: (*fb_visual).visual,
+            };
+
+            XFree(fb_config_list as *mut _);
+            XFree(fb_visual as *mut _);
+
+            Ok(config)
+        }
+    }
+
     #[allow(non_snake_case)]
     pub unsafe fn new(
         connection: &Connection,
         window: c_ulong,
         config: GlConfig,
+        fb_config: GLXFBConfig,
     ) -> Result<GlContext, Error> {
+        if fb_config.is_null() {
+            return Err(Error::OpenGlError("FBConfig is null".into()));
+        }
+
         unsafe {
-            let (version, extensions) = {
-                let (mut major, mut minor) = (0, 0);
-                if glXQueryVersion(connection.display(), &mut major, &mut minor) == 0 {
-                    return Err(Error::OpenGlError("glXQueryVersion failed".into()));
-                }
-
-                let extensions = glXGetClientString(connection.display(), GLX_EXTENSIONS);
-                let extensions = if extensions.is_null() {
-                    HashSet::new()
-                } else if let Ok(extensions) = CStr::from_ptr(extensions).to_str() {
-                    extensions.split(' ').collect::<HashSet<_>>()
-                } else {
-                    HashSet::new()
-                };
-
-                connection.check_error().map_err(Error::OpenGlError)?;
-
-                ((major as u8, minor as u8), extensions)
-            };
-
+            let (_, _, extensions) = Self::get_version_info(connection)?;
             let ext_es_support = extensions.contains("GLX_EXT_create_context_es2_profile")
                 || extensions.contains("GLX_EXT_create_context_es_profile");
-            let ext_multisample = version >= (1, 4) || extensions.contains("GLX_ARB_multisample");
-            let ext_framebuffer_srgb = extensions.contains("GLX_ARB_framebuffer_sRGB")
-                || extensions.contains("GLX_EXT_framebuffer_sRGB");
             let ext_context = extensions.contains("GLX_ARB_create_context");
             let ext_swap_control = extensions.contains("GLX_ARB_create_context");
-
-            let (fb_config, fb_config_list, fb_visual) = {
-                let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
-
-                let mut fb_attribs = vec![
-                    GLX_X_RENDERABLE,
-                    1,
-                    GLX_X_VISUAL_TYPE,
-                    GLX_TRUE_COLOR,
-                    GLX_DRAWABLE_TYPE,
-                    GLX_WINDOW_BIT,
-                    GLX_RENDER_TYPE,
-                    GLX_RGBA_BIT,
-                    GLX_RED_SIZE,
-                    red as _,
-                    GLX_GREEN_SIZE,
-                    green as _,
-                    GLX_BLUE_SIZE,
-                    blue as _,
-                    GLX_ALPHA_SIZE,
-                    alpha as _,
-                    GLX_DEPTH_SIZE,
-                    depth as _,
-                    GLX_STENCIL_SIZE,
-                    stencil as _,
-                    GLX_DOUBLEBUFFER,
-                    config.double_buffer as i32,
-                ];
-
-                if ext_framebuffer_srgb && config.srgb {
-                    fb_attribs.extend_from_slice(&[GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB, 1]);
-                }
-
-                if ext_multisample && config.msaa_count > 0 {
-                    fb_attribs.extend_from_slice(&[
-                        GLX_SAMPLE_BUFFERS,
-                        1,
-                        GLX_SAMPLES,
-                        config.msaa_count as i32,
-                    ]);
-                }
-
-                fb_attribs.push(0);
-
-                let mut n_configs = 0;
-                let fb_config_list = glXChooseFBConfig(
-                    connection.display(),
-                    connection.screen(),
-                    fb_attribs.as_ptr(),
-                    &mut n_configs,
-                );
-
-                if n_configs <= 0 || fb_config_list.is_null() {
-                    return Err(Error::OpenGlError("no matching config".into()));
-                }
-
-                let fb_config = *fb_config_list;
-                let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
-                if fb_visual.is_null() {
-                    return Err(Error::OpenGlError("no matching visual".into()));
-                }
-
-                connection.check_error().map_err(Error::OpenGlError)?;
-
-                (fb_config, fb_config_list, fb_visual)
-            };
 
             let glXCreateContextAttribsARB = ext_context
                 .then(|| {
@@ -188,13 +209,18 @@ impl GlContext {
                     ctx_attribs.as_ptr(),
                 )
             } else {
-                glXCreateContext(connection.display(), fb_visual, std::ptr::null_mut(), 1)
+                let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
+                if fb_visual.is_null() {
+                    return Err(Error::OpenGlError(
+                        "glXGetVisualFromFBConfig returned null".into(),
+                    ));
+                }
+
+                let context =
+                    glXCreateContext(connection.display(), fb_visual, std::ptr::null_mut(), 1);
+                XFree(fb_visual as *mut _);
+                context
             };
-
-            XFree(fb_visual as *mut _);
-            XFree(fb_config_list as *mut _);
-
-            connection.check_error().map_err(Error::OpenGlError)?;
 
             if context.is_null() {
                 return Err(Error::OpenGlError("GLX context creation error".into()));

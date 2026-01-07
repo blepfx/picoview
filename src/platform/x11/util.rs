@@ -1,11 +1,19 @@
 use crate::{Key, Modifiers, MouseCursor, platform::x11::connection::Connection};
-use libc::c_uint;
+use libc::{c_int, c_uint};
 use std::{
     ffi::CStr,
+    mem::zeroed,
     os::unix::process::CommandExt,
     process::{Command, Stdio},
+    ptr::null_mut,
 };
-use x11::xlib::{ControlMask, LockMask, Mod1Mask, Mod2Mask, Mod4Mask, ShiftMask};
+use x11::{
+    glx::GLXFBConfig,
+    xlib::{
+        ControlMask, CopyFromParent, LockMask, Mod1Mask, Mod2Mask, Mod4Mask, ShiftMask, TrueColor,
+        Visual, XMatchVisualInfo, XVisualInfo,
+    },
+};
 
 pub fn open_url(path: &str) -> bool {
     if spawn_detached(Command::new("xdg-open").arg(path)).is_ok() {
@@ -237,5 +245,43 @@ pub fn get_cursor(conn: &Connection, cursor: MouseCursor) -> u64 {
         MouseCursor::NeswResize => load(conn, &[c"fd_double_arrow", c"size_fdiag"]),
         MouseCursor::ColResize => load(conn, &[c"split_h", c"h_double_arrow"]),
         MouseCursor::RowResize => load(conn, &[c"split_v", c"v_double_arrow"]),
+    }
+}
+
+pub struct VisualConfig {
+    pub fb_config: GLXFBConfig,
+    pub depth: c_int,
+    pub visual: *mut Visual,
+}
+
+impl VisualConfig {
+    pub fn copy_from_parent() -> Self {
+        Self {
+            depth: CopyFromParent,
+            visual: null_mut(),
+            fb_config: null_mut(),
+        }
+    }
+
+    pub fn try_new_true_color(conn: &Connection, depth: u8) -> Option<Self> {
+        let visual = unsafe {
+            let mut visual = XVisualInfo { ..zeroed() };
+            match XMatchVisualInfo(
+                conn.display(),
+                conn.screen(),
+                depth as _,
+                TrueColor,
+                &mut visual,
+            ) {
+                0 => return None,
+                _ => visual,
+            }
+        };
+
+        Some(Self {
+            depth: depth as _,
+            visual: visual.visual,
+            fb_config: null_mut(),
+        })
     }
 }

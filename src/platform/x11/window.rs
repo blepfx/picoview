@@ -2,7 +2,7 @@ use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
 use crate::platform::x11::connection::ATOM_PICOVIEW_WAKEUP;
-use crate::platform::x11::util::get_cursor;
+use crate::platform::x11::util::{VisualConfig, get_cursor};
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
@@ -12,22 +12,21 @@ use libc::c_ulong;
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::mem::zeroed;
-use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use x11::xlib::{
-    Button1Mask, Button2Mask, Button3Mask, Button4Mask, Button5Mask, ButtonPress, ButtonPressMask,
-    ButtonRelease, ButtonReleaseMask, CWCursor, CWEventMask, CWHeight, CWWidth, CWX, CWY,
-    ClientMessage, ClientMessageData, ConfigureNotify, CopyFromParent, DestroyNotify, Expose,
-    ExposureMask, FocusChangeMask, FocusIn, FocusOut, InputOutput, KeyPress, KeyPressMask,
-    KeyRelease, KeyReleaseMask, LeaveNotify, LeaveWindowMask, MotionNotify, NoEventMask,
-    NotifyNormal, PMaxSize, PMinSize, PSize, PointerMotionMask, PropModeReplace,
+    AllocNone, Button1Mask, Button2Mask, Button3Mask, Button4Mask, Button5Mask, ButtonPress,
+    ButtonPressMask, ButtonRelease, ButtonReleaseMask, CWBorderPixel, CWColormap, CWCursor,
+    CWEventMask, CWHeight, CWWidth, CWX, CWY, ClientMessage, ClientMessageData, ConfigureNotify,
+    DestroyNotify, Expose, ExposureMask, FocusChangeMask, FocusIn, FocusOut, InputOutput, KeyPress,
+    KeyPressMask, KeyRelease, KeyReleaseMask, LeaveNotify, LeaveWindowMask, MotionNotify,
+    NoEventMask, NotifyNormal, PMaxSize, PMinSize, PSize, PointerMotionMask, PropModeReplace,
     StructureNotifyMask, XChangeProperty, XChangeWindowAttributes, XClientMessageEvent,
-    XConfigureWindow, XCreateWindow, XDestroyWindow, XEvent, XFlush, XFree, XMapWindow, XSendEvent,
-    XSetTransientForHint, XSetWMName, XSetWMNormalHints, XSetWMProtocols, XSetWindowAttributes,
-    XSizeHints, XStringListToTextProperty, XSync, XTextProperty, XTranslateCoordinates,
-    XUnmapWindow, XWarpPointer, XWindowChanges,
+    XConfigureWindow, XCreateColormap, XCreateWindow, XDestroyWindow, XEvent, XFlush, XFree,
+    XMapWindow, XSendEvent, XSetTransientForHint, XSetWMName, XSetWMNormalHints, XSetWMProtocols,
+    XSetWindowAttributes, XSizeHints, XStringListToTextProperty, XSync, XTextProperty,
+    XTranslateCoordinates, XUnmapWindow, XWarpPointer, XWindowChanges,
 };
 
 unsafe impl Send for WindowImpl {}
@@ -72,6 +71,21 @@ impl WindowImpl {
                 _ => return Err(Error::InvalidParent),
             };
 
+            let visual_info = options
+                .opengl
+                .as_ref()
+                .and_then(|config| GlContext::find_best_config(&connection, config).ok())
+                .or_else(|| VisualConfig::try_new_true_color(&connection, 32))
+                .or_else(|| VisualConfig::try_new_true_color(&connection, 24))
+                .unwrap_or(VisualConfig::copy_from_parent());
+
+            let colormap = XCreateColormap(
+                connection.display(),
+                connection.default_root(),
+                visual_info.visual,
+                AllocNone,
+            );
+
             let window_id = XCreateWindow(
                 connection.display(),
                 match mode {
@@ -83,11 +97,13 @@ impl WindowImpl {
                 options.size.width as _,
                 options.size.height as _,
                 0,
-                CopyFromParent,
+                visual_info.depth,
                 InputOutput as u32,
-                null_mut(),
-                CWEventMask,
+                visual_info.visual,
+                CWEventMask | CWColormap | CWBorderPixel,
                 &mut XSetWindowAttributes {
+                    border_pixel: 0,
+                    colormap,
                     event_mask: ButtonPressMask
                         | ButtonReleaseMask
                         | StructureNotifyMask
@@ -199,7 +215,7 @@ impl WindowImpl {
             }
 
             let gl_context = if let Some(config) = options.opengl {
-                match GlContext::new(&connection, window_id as _, config) {
+                match GlContext::new(&connection, window_id as _, config, visual_info.fb_config) {
                     Ok(gl) => Some(gl),
                     Err(_) if config.optional => None,
                     Err(e) => return Err(e),
