@@ -75,7 +75,6 @@ impl WindowImpl {
                 .opengl
                 .as_ref()
                 .and_then(|config| GlContext::find_best_config(&connection, config).ok())
-                .or_else(|| VisualConfig::try_new_true_color(&connection, 32))
                 .or_else(|| VisualConfig::try_new_true_color(&connection, 24))
                 .unwrap_or(VisualConfig::copy_from_parent());
 
