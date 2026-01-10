@@ -113,9 +113,7 @@ impl DisplayLink {
 impl Drop for DisplayLink {
     #[allow(deprecated)]
     fn drop(&mut self) {
-        unsafe {
-            self.link.stop();
-            self.source.invalidate();
-        }
+        self.link.stop();
+        self.source.invalidate();
     }
 }

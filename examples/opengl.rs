@@ -10,7 +10,7 @@ fn main() {
             Event::WindowFrame { gl: Some(gl) } => unsafe {
                 time += last_frame.elapsed().as_secs_f32();
 
-                //   println!("{:?}", last_frame.elapsed());
+                println!("{:?}", last_frame.elapsed());
                 last_frame = Instant::now();
 
                 let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =

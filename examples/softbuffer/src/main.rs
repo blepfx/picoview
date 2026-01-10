@@ -6,7 +6,7 @@ fn main() {
     WindowBuilder::new(|window| {
         let context = Context::new(window).unwrap();
         let mut surface = Surface::new(&context, window).unwrap();
-        let mut damage = false;
+        let mut damage = true;
 
         surface
             .resize(NonZero::new(600).unwrap(), NonZero::new(600).unwrap())
@@ -52,6 +52,8 @@ fn main() {
                         NonZero::new(size.height).unwrap(),
                     )
                     .unwrap();
+
+                damage = true;
             }
 
             Event::WindowClose => {

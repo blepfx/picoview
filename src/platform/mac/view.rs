@@ -1,5 +1,6 @@
 use super::display::*;
 use super::util::{flags_to_modifiers, get_cursor, keycode_to_key, random_id};
+use crate::platform::mac::gl::GlContext;
 use crate::platform::mac::util::{get_clipboard_text, set_clipboard_text, spawn_detached};
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
@@ -20,8 +21,8 @@ use objc2::{
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
     NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindow, NSWindowDidBecomeKeyNotification,
-    NSWindowDidResignKeyNotification, NSWindowStyleMask,
+    NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
+    NSWindowDidBecomeKeyNotification, NSWindowDidResignKeyNotification, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_core_graphics::CGWarpMouseCursorPosition;
@@ -32,6 +33,7 @@ use objc2_foundation::{
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::{CString, c_void};
+use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -48,7 +50,7 @@ unsafe impl Send for WindowViewWaker {}
 unsafe impl Sync for WindowViewWaker {}
 
 struct WindowViewInner {
-    _display_link: DisplayLink,
+    display_link: ManuallyDrop<DisplayLink>,
     application: RefCell<Option<Retained<NSApplication>>>,
     waker: Arc<WindowViewWaker>,
 
@@ -69,16 +71,16 @@ unsafe impl Message for WindowView {}
 
 impl WindowView {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
+        let main_thread = MainThreadMarker::new()
+            .ok_or_else(|| Error::PlatformError("not in main thread".into()))?;
+
         match mode {
             OpenMode::Blocking => autoreleasepool(|_| unsafe {
-                let main_thread = MainThreadMarker::new()
-                    .ok_or_else(|| Error::PlatformError("not in main thread".into()))?;
-
                 let app = NSApp(main_thread);
                 app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
                 let window = Self::create_window(&options, main_thread)?;
-                let view = Self::create_view(options, Some(app.clone()))?;
+                let view = Self::create_view(options, Some(app.clone()), main_thread)?;
 
                 window.setContentView(Some(&view.view));
                 //window.setDelegate(Some(&view));
@@ -86,6 +88,10 @@ impl WindowView {
                 app.run();
                 Ok(WindowWaker::default())
             }),
+
+            OpenMode::Transient(_) => {
+                todo!()
+            }
 
             OpenMode::Embedded(parent) => autoreleasepool(|_| unsafe {
                 let parent_view = match parent {
@@ -95,7 +101,7 @@ impl WindowView {
                     _ => return Err(Error::InvalidParent),
                 };
 
-                let view = Self::create_view(options, None)?;
+                let view = Self::create_view(options, None, main_thread)?;
                 (*parent_view).addSubview(&view.view);
                 Ok(view.waker())
             }),
@@ -160,6 +166,7 @@ impl WindowView {
     unsafe fn create_view(
         options: WindowBuilder,
         blocking: Option<Retained<NSApplication>>,
+        main_thread: MainThreadMarker,
     ) -> Result<Retained<Self>, Error> {
         let class = Self::register_class()?;
 
@@ -189,37 +196,58 @@ impl WindowView {
                 None,
             );
 
+            let dragged_types = NSArray::arrayWithObject(NSPasteboardTypeFileURL);
+            view.view.addTrackingArea(&tracking_area);
+            view.view.registerForDraggedTypes(&dragged_types);
+            view.view.setPostsFrameChangedNotifications(true);
+
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
                 &view.view,
-                sel!(picoview_handleNotification:),
+                sel!(windowDidBecomeKeyNotification:),
                 Some(NSWindowDidBecomeKeyNotification),
                 None,
             );
 
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
                 &view.view,
-                sel!(picoview_handleNotification:),
+                sel!(windowDidResignKeyNotification:),
                 Some(NSWindowDidResignKeyNotification),
                 None,
             );
 
-            let dragged_types = NSArray::arrayWithObject(NSPasteboardTypeFileURL);
-            view.view.addTrackingArea(&tracking_area);
-            view.view.registerForDraggedTypes(&dragged_types);
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                &view.view,
+                sel!(viewFrameDidChangeNotification:),
+                Some(NSViewFrameDidChangeNotification),
+                None,
+            );
+
             view
+        };
+
+        let opengl = if let Some(config) = options.opengl {
+            match GlContext::new(&view.view, config, main_thread) {
+                Ok(gl) => Some(gl),
+                Err(_) if config.optional => None,
+                Err(e) => return Err(e),
+            }
+        } else {
+            None
         };
 
         let display = {
             let view = Weak::from_retained(&view);
             DisplayLink::new(Box::new(move || {
                 if let Some(view) = view.load() {
-                    view.send_event(Event::WindowFrame { gl: None });
+                    view.send_event(Event::WindowFrame {
+                        gl: opengl.as_ref().map(|x| x as &dyn crate::GlContext),
+                    });
                 }
             }))?
         };
 
         view.set_inner(Box::new(WindowViewInner {
-            _display_link: display,
+            display_link: ManuallyDrop::new(display),
             application: RefCell::new(blocking),
 
             waker: Arc::new(WindowViewWaker {
@@ -304,29 +332,19 @@ impl WindowView {
 
     unsafe extern "C" fn dealloc(&self, _cmd: Sel) {
         unsafe {
-            println!("dealloc begin");
-
-            let ivar = self
-                .view
-                .class()
+            let class = self.view.class();
+            let context = *class
                 .instance_variable(c"_context")
-                .unwrap_unchecked();
-
-            let context =
-                *ivar.load::<*mut c_void>(&self.view) as *mut Box<RefCell<WindowViewInner>>;
+                .unwrap_unchecked()
+                .load::<*mut c_void>(&self.view)
+                as *mut Box<RefCell<WindowViewInner>>;
 
             if !context.is_null() {
-                println!("drop begin");
                 drop(Box::from_raw(context));
-                println!("drop end");
             }
 
-            NSNotificationCenter::defaultCenter().removeObserver(&self.view);
             let _: () = msg_send![super(self, NSView::class()), dealloc];
-            let class: &'static AnyClass = msg_send![self, class];
             objc_disposeClassPair(class as *const _ as *mut _);
-
-            println!("dealloc end");
         }
     }
 
@@ -471,6 +489,15 @@ impl WindowView {
         }
     }
 
+    unsafe extern "C" fn draw_rect(&self, _cmd: Sel, rect: NSRect) {
+        self.send_event_defer(Event::WindowDamage {
+            x: rect.origin.x as u32,
+            y: rect.origin.y as u32,
+            w: rect.size.width as u32,
+            h: rect.size.height as u32,
+        });
+    }
+
     // custom
     unsafe extern "C" fn draw_frame(&self, _cmd: Sel) {
         self.send_event(Event::WindowFrame { gl: None });
@@ -480,24 +507,34 @@ impl WindowView {
         self.send_event(Event::Wakeup);
     }
 
-    unsafe extern "C" fn handle_notification(&self, _cmd: Sel, notif: &NSNotification) {
-        unsafe {
-            let Some(object) = notif.object() else { return };
-            let Some(window) = self.view.window() else {
-                return;
-            };
-            let Some(first_responder) = window.firstResponder() else {
-                return;
-            };
+    unsafe extern "C" fn window_did_become_key_notification(
+        &self,
+        _cmd: Sel,
+        _notif: &NSNotification,
+    ) {
+        self.send_event_defer(Event::WindowFocus { focus: true });
+    }
 
-            if std::ptr::addr_eq(&*object, &*window)
-                && std::ptr::addr_eq(&*first_responder, &*self.view)
-            {
-                self.send_event_defer(Event::WindowFocus {
-                    focus: window.isKeyWindow(),
-                });
-            }
-        }
+    unsafe extern "C" fn window_did_resign_key_notification(
+        &self,
+        _cmd: Sel,
+        _notif: &NSNotification,
+    ) {
+        self.send_event_defer(Event::WindowFocus { focus: false });
+    }
+
+    unsafe extern "C" fn view_frame_did_change_notification(
+        &self,
+        _cmd: Sel,
+        _notif: &NSNotification,
+    ) {
+        let frame = self.view.frame();
+        self.send_event_defer(Event::WindowResize {
+            size: Size {
+                width: frame.size.width as u32,
+                height: frame.size.height as u32,
+            },
+        });
     }
 
     // NSDraggingDestination
@@ -641,6 +678,10 @@ impl WindowView {
                 sel!(scrollWheel:),
                 Self::scroll_wheel as unsafe extern "C" fn(_, _, _) -> _,
             );
+            builder.add_method(
+                sel!(drawRect:),
+                Self::draw_rect as unsafe extern "C" fn(_, _, _) -> _,
+            );
 
             // custom
             builder.add_method(
@@ -651,9 +692,19 @@ impl WindowView {
                 sel!(picoview_wakeup),
                 Self::wakeup as unsafe extern "C" fn(_, _) -> _,
             );
+
+            // NSNotification handlers
             builder.add_method(
-                sel!(picoview_handleNotification:),
-                Self::handle_notification as unsafe extern "C" fn(_, _, _) -> _,
+                sel!(windowDidBecomeKeyNotification:),
+                Self::window_did_become_key_notification as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(windowDidResignKeyNotification:),
+                Self::window_did_resign_key_notification as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(viewFrameDidChangeNotification:),
+                Self::view_frame_did_change_notification as unsafe extern "C" fn(_, _, _) -> _,
             );
 
             // NSDraggingDestination
@@ -693,9 +744,7 @@ impl PlatformWindow for WindowView {
             return;
         }
 
-        unsafe {
-            self.view.removeFromSuperview();
-        }
+        self.view.removeFromSuperview();
 
         if let Some(app) = self.inner().application.take() {
             if let Some(window) = self.view.window() {
@@ -718,21 +767,19 @@ impl PlatformWindow for WindowView {
     }
 
     fn set_cursor_icon(&self, cursor: MouseCursor) {
-        unsafe {
-            let old_cursor = self.inner().current_cursor.replace(cursor);
-            if old_cursor != cursor {
-                match get_cursor(cursor) {
-                    Some(cursor) => {
-                        if old_cursor == MouseCursor::Hidden {
-                            NSCursor::unhide();
-                        }
-
-                        cursor.set();
+        let old_cursor = self.inner().current_cursor.replace(cursor);
+        if old_cursor != cursor {
+            match get_cursor(cursor) {
+                Some(cursor) => {
+                    if old_cursor == MouseCursor::Hidden {
+                        NSCursor::unhide();
                     }
 
-                    None => NSCursor::hide(),
-                };
-            }
+                    cursor.set();
+                }
+
+                None => NSCursor::hide(),
+            };
         }
     }
 
@@ -757,36 +804,32 @@ impl PlatformWindow for WindowView {
     }
 
     fn set_size(&self, size: Size) {
-        unsafe {
-            let is_blocking = self.inner().application.borrow().is_some();
-            if is_blocking && let Some(window) = self.view.window() {
-                window.setContentSize(CGSize {
-                    width: size.width as _,
-                    height: size.height as _,
-                });
-            }
-
-            self.view.setFrameSize(NSSize {
+        let is_blocking = self.inner().application.borrow().is_some();
+        if is_blocking && let Some(window) = self.view.window() {
+            window.setContentSize(CGSize {
                 width: size.width as _,
                 height: size.height as _,
             });
         }
+
+        self.view.setFrameSize(NSSize {
+            width: size.width as _,
+            height: size.height as _,
+        });
     }
 
     fn set_position(&self, point: Point) {
-        unsafe {
-            let is_blocking = self.inner().application.borrow().is_some();
-            if is_blocking && let Some(window) = self.view.window() {
-                window.setFrameOrigin(CGPoint {
-                    x: point.x as _,
-                    y: point.y as _,
-                });
-            } else {
-                self.view.setFrameOrigin(NSPoint {
-                    x: point.x as _,
-                    y: point.y as _,
-                });
-            }
+        let is_blocking = self.inner().application.borrow().is_some();
+        if is_blocking && let Some(window) = self.view.window() {
+            window.setFrameOrigin(CGPoint {
+                x: point.x as _,
+                y: point.y as _,
+            });
+        } else {
+            self.view.setFrameOrigin(NSPoint {
+                x: point.x as _,
+                y: point.y as _,
+            });
         }
     }
 
@@ -852,5 +895,10 @@ impl Drop for WindowView {
         // we need to drop this before OsWindowView gets dropped, see the safety comment
         // at the handler initialization place
         self.inner().event_handler.take();
+
+        // Remove notification observers we registered earlier
+        unsafe {
+            NSNotificationCenter::defaultCenter().removeObserver(&self.view);
+        }
     }
 }

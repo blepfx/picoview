@@ -345,14 +345,15 @@ dependencies = [
 
 [[package]]
 name = "objc2-app-kit"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6f29f568bec459b0ddff777cec4fe3fd8666d82d5a40ebd0ff7e66134f89bcc"
+checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-open-gl",
 ]
 
 [[package]]
@@ -381,9 +382,9 @@ dependencies = [
 
 [[package]]
 name = "objc2-core-video"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1989c3e76c7e978cab0ba9e6f4961cd00ed14ca21121444cc26877403bfb6303"
+checksum = "d425caf1df73233f29fd8a5c3e5edbc30d2d4307870f802d18f00d83dc5141a6"
 dependencies = [
  "bitflags",
  "objc2",
@@ -418,6 +419,15 @@ dependencies = [
  "bitflags",
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-open-gl"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ecc7fd7519a189d9ba9ed9de51af81e41d096aea1d08cca59fd9d8c65d8f585"
+dependencies = [
+ "objc2",
 ]
 
 [[package]]

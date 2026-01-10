@@ -31,53 +31,47 @@ fn try_get_cursor(selector: Sel) -> Retained<NSCursor> {
 }
 
 pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
-    unsafe {
-        Some(match cursor {
-            MouseCursor::Hidden => return None,
-            MouseCursor::Default => NSCursor::arrowCursor(),
-            MouseCursor::Help => try_get_cursor(sel!(_helpCursor)),
-            MouseCursor::Working => try_get_cursor(sel!(_waitCursor)),
-            MouseCursor::PtrWorking => try_get_cursor(sel!(_busyButClickableCursor)),
-            MouseCursor::Cell => NSCursor::crosshairCursor(),
-            MouseCursor::Crosshair => NSCursor::crosshairCursor(),
-            MouseCursor::Text => NSCursor::IBeamCursor(),
-            MouseCursor::VerticalText => NSCursor::IBeamCursorForVerticalLayout(),
-            MouseCursor::Alias => NSCursor::dragLinkCursor(),
-            MouseCursor::Copy => NSCursor::dragCopyCursor(),
-            MouseCursor::Move => NSCursor::openHandCursor(),
-            MouseCursor::NotAllowed => NSCursor::operationNotAllowedCursor(),
-            MouseCursor::PtrNotAllowed => NSCursor::operationNotAllowedCursor(),
-            MouseCursor::Hand => NSCursor::openHandCursor(),
-            MouseCursor::HandGrabbing => NSCursor::closedHandCursor(),
-            MouseCursor::EResize => {
-                NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::Right)
-            }
-            MouseCursor::NResize => NSCursor::rowResizeCursorInDirections(NSVerticalDirections::Up),
-            MouseCursor::NeResize => try_get_cursor(sel!(_windowResizeNorthEastCursor)),
-            MouseCursor::NwResize => try_get_cursor(sel!(_windowResizeNorthWestCursor)),
-            MouseCursor::SResize => {
-                NSCursor::rowResizeCursorInDirections(NSVerticalDirections::Down)
-            }
-            MouseCursor::SeResize => try_get_cursor(sel!(_windowResizeSouthEastCursor)),
-            MouseCursor::SwResize => try_get_cursor(sel!(_windowResizeSouthWestCursor)),
-            MouseCursor::WResize => {
-                NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::Left)
-            }
-            MouseCursor::EwResize => {
-                NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::All)
-            }
-            MouseCursor::NsResize => {
-                NSCursor::rowResizeCursorInDirections(NSVerticalDirections::All)
-            }
-            MouseCursor::NeswResize => try_get_cursor(sel!(_windowResizeNorthEastSouthWestCursor)),
-            MouseCursor::NwseResize => try_get_cursor(sel!(_windowResizeNorthWestSouthEastCursor)),
-            MouseCursor::ColResize => NSCursor::columnResizeCursor(),
-            MouseCursor::RowResize => NSCursor::rowResizeCursor(),
-            MouseCursor::AllScroll => NSCursor::openHandCursor(),
-            MouseCursor::ZoomIn => NSCursor::zoomInCursor(),
-            MouseCursor::ZoomOut => NSCursor::zoomOutCursor(),
-        })
-    }
+    Some(match cursor {
+        MouseCursor::Hidden => return None,
+        MouseCursor::Default => NSCursor::arrowCursor(),
+        MouseCursor::Help => try_get_cursor(sel!(_helpCursor)),
+        MouseCursor::Working => try_get_cursor(sel!(_waitCursor)),
+        MouseCursor::PtrWorking => try_get_cursor(sel!(_busyButClickableCursor)),
+        MouseCursor::Cell => NSCursor::crosshairCursor(),
+        MouseCursor::Crosshair => NSCursor::crosshairCursor(),
+        MouseCursor::Text => NSCursor::IBeamCursor(),
+        MouseCursor::VerticalText => NSCursor::IBeamCursorForVerticalLayout(),
+        MouseCursor::Alias => NSCursor::dragLinkCursor(),
+        MouseCursor::Copy => NSCursor::dragCopyCursor(),
+        MouseCursor::Move => NSCursor::openHandCursor(),
+        MouseCursor::NotAllowed => NSCursor::operationNotAllowedCursor(),
+        MouseCursor::PtrNotAllowed => NSCursor::operationNotAllowedCursor(),
+        MouseCursor::Hand => NSCursor::openHandCursor(),
+        MouseCursor::HandGrabbing => NSCursor::closedHandCursor(),
+        MouseCursor::EResize => {
+            NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::Right)
+        }
+        MouseCursor::NResize => NSCursor::rowResizeCursorInDirections(NSVerticalDirections::Up),
+        MouseCursor::NeResize => try_get_cursor(sel!(_windowResizeNorthEastCursor)),
+        MouseCursor::NwResize => try_get_cursor(sel!(_windowResizeNorthWestCursor)),
+        MouseCursor::SResize => NSCursor::rowResizeCursorInDirections(NSVerticalDirections::Down),
+        MouseCursor::SeResize => try_get_cursor(sel!(_windowResizeSouthEastCursor)),
+        MouseCursor::SwResize => try_get_cursor(sel!(_windowResizeSouthWestCursor)),
+        MouseCursor::WResize => {
+            NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::Left)
+        }
+        MouseCursor::EwResize => {
+            NSCursor::columnResizeCursorInDirections(NSHorizontalDirections::All)
+        }
+        MouseCursor::NsResize => NSCursor::rowResizeCursorInDirections(NSVerticalDirections::All),
+        MouseCursor::NeswResize => try_get_cursor(sel!(_windowResizeNorthEastSouthWestCursor)),
+        MouseCursor::NwseResize => try_get_cursor(sel!(_windowResizeNorthWestSouthEastCursor)),
+        MouseCursor::ColResize => NSCursor::columnResizeCursor(),
+        MouseCursor::RowResize => NSCursor::rowResizeCursor(),
+        MouseCursor::AllScroll => NSCursor::openHandCursor(),
+        MouseCursor::ZoomIn => NSCursor::zoomInCursor(),
+        MouseCursor::ZoomOut => NSCursor::zoomOutCursor(),
+    })
 }
 
 pub fn random_id() -> u32 {
