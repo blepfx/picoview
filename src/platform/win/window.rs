@@ -28,7 +28,10 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-    Graphics::Gdi::{ClientToScreen, GetUpdateRect, ValidateRgn},
+    Graphics::{
+        Dwm::{DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow},
+        Gdi::{ClientToScreen, CreateRectRgn, DeleteObject, GetUpdateRect, ValidateRgn},
+    },
     System::{
         Com::CoInitialize,
         DataExchange::{
@@ -198,6 +201,19 @@ impl WindowImpl {
                 null(),
             );
             check_error(!hwnd.is_null(), "main window create")?;
+
+            if options.transparent {
+                let region = CreateRectRgn(0, 0, -1, -1);
+                let bb = DWM_BLURBEHIND {
+                    dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+                    fEnable: true.into(),
+                    hRgnBlur: region,
+                    fTransitionOnMaximized: false.into(),
+                };
+
+                DwmEnableBlurBehindWindow(hwnd, &bb);
+                DeleteObject(region);
+            }
 
             let gl_context = match options.opengl {
                 Some(config) => match GlContext::new(hwnd, config) {

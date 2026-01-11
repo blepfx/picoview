@@ -2,7 +2,7 @@
 name = "picoview"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.92.0"
+rust-version = "1.91.0"
 license = "MIT OR Apache-2.0"
 description = "a smol cross-platform windowing abstraction for audio plugins"
 keywords = ["windowing"]
