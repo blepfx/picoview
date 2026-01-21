@@ -300,19 +300,22 @@ pub enum Event<'a> {
         scale: f32,
     },
 
+    /// The window was resized.
+    WindowResize {
+        /// The new physical size of the window's client area.
+        size: Size,
+    },
+
     /// The window was moved.
     WindowMove {
-        /// The new position of the window.
+        /// The new position of the window relative to the origin.
         ///
         /// See [`Window::set_position`](`crate::Window::set_position`) for
         /// details on coordinate system.
-        origin: Point,
-    },
+        relative: Point,
 
-    /// The window was resized.
-    WindowResize {
-        /// The new size of the window.
-        size: Size,
+        /// The new position of the window relative to the entire screen.
+        absolute: Point,
     },
 
     /// Frame event. You should redraw the window in response to this event.

@@ -1,4 +1,4 @@
-use picoview::{Event, GlConfig, GlFormat, GlVersion, Point, WindowBuilder};
+use picoview::{Event, GlConfig, GlFormat, GlVersion, GraphicsApi, Point, WindowBuilder};
 use std::{mem::transmute, time::Instant};
 
 fn main() {
@@ -45,14 +45,14 @@ fn main() {
             _ => {}
         })
     })
-    .with_opengl(GlConfig {
+    .with_graphics([GraphicsApi::OpenGl(GlConfig {
         version: GlVersion::Core(3, 1),
         format: GlFormat::RGBA8_D24,
-        optional: false,
         msaa_count: 0,
         debug: cfg!(debug_assertions),
         ..Default::default()
-    })
+    })])
+    .with_opengl()
     .with_size((200, 200))
     .with_resizable((0, 0), (1000, 1000))
     .with_transparency(true)

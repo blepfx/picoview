@@ -11,8 +11,8 @@ crate-type = ["cdylib"]
 [dependencies]
 picoview = { path = "../.." }
 
-clack-plugin = { git = "https://github.com/prokopyl/clack", rev = "5c28e2b7332e133688ca18ee6c374f55edaa77a4" }
-clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "5c28e2b7332e133688ca18ee6c374f55edaa77a4", features = [
+clack-plugin = { git = "https://github.com/Quant1um/clack", rev = "6fd151fa28be30eefbcfb156b2a8e978797d0db2" }
+clack-extensions = { git = "https://github.com/Quant1um/clack", rev = "6fd151fa28be30eefbcfb156b2a8e978797d0db2", features = [
     "audio-ports",
     "clack-plugin",
     "gui",

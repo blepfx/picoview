@@ -1,4 +1,4 @@
-use crate::{Error, Event, GlConfig, MouseCursor, Point, Size, WakeupError, platform, rwh_06};
+use crate::{Error, Event, GraphicsApi, MouseCursor, Point, Size, WakeupError, platform, rwh_06};
 use std::{fmt::Debug, ops::Range, sync::Arc};
 
 // the reason this is a box is because making this with traits is extremely
@@ -40,8 +40,10 @@ pub struct WindowBuilder {
     /// The initial window position in physical pixels
     pub position: Option<Point>,
 
-    /// Requested OpenGL configuration, if any.
-    pub opengl: Option<GlConfig>,
+    /// Requested graphics configurations, in order of preference
+    ///
+    /// If every requested graphics API fails to initialize, an error occurs.
+    pub graphics: Vec<GraphicsApi>,
 
     /// The factory function that creates the event handler for the window
     pub factory: WindowFactory,
@@ -99,10 +101,7 @@ impl<'a> Window<'a> {
     /// The coordinate system depends on how the window was created:
     /// - For top-level windows, it is the screen coordinate system, with (0, 0)
     ///   being the top-left corner of the primary monitor.
-    /// - For embedded windows, it is the coordinate system of the parent
-    ///   window, with (0, 0) being the top-left corner of the parent window's
-    ///   client area.
-    /// - For transient windows, it is the coordinate system of the parent
+    /// - For parented windows, it is the coordinate system of the parent
     ///   window, with (0, 0) being the top-left corner of the parent window's
     ///   client area.
     ///
@@ -165,7 +164,7 @@ impl WindowBuilder {
             },
 
             position: None,
-            opengl: None,
+            graphics: vec![GraphicsApi::None],
             factory: Box::new(factory),
         }
     }
@@ -237,10 +236,10 @@ impl WindowBuilder {
         }
     }
 
-    /// Request an OpenGL context with the given configuration
-    pub fn with_opengl(self, opengl: GlConfig) -> Self {
+    /// Request an list of graphics APIs for the window, in order of preference.
+    pub fn with_graphics(self, apis: impl IntoIterator<Item = GraphicsApi>) -> Self {
         Self {
-            opengl: Some(opengl),
+            graphics: apis.into_iter().collect(),
             ..self
         }
     }
@@ -330,7 +329,7 @@ impl Debug for WindowBuilder {
             .field("size", &self.size)
             .field("resizable", &self.resizable)
             .field("position", &self.position)
-            .field("opengl", &self.opengl)
+            .field("graphics", &self.graphics)
             .finish_non_exhaustive()
     }
 }

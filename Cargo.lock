@@ -59,7 +59,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 [[package]]
 name = "clack-common"
 version = "0.1.0"
-source = "git+https://github.com/prokopyl/clack?rev=5c28e2b7332e133688ca18ee6c374f55edaa77a4#5c28e2b7332e133688ca18ee6c374f55edaa77a4"
+source = "git+https://github.com/Quant1um/clack?rev=6fd151fa28be30eefbcfb156b2a8e978797d0db2#6fd151fa28be30eefbcfb156b2a8e978797d0db2"
 dependencies = [
  "bitflags",
  "clap-sys",
@@ -68,7 +68,7 @@ dependencies = [
 [[package]]
 name = "clack-extensions"
 version = "0.1.0"
-source = "git+https://github.com/prokopyl/clack?rev=5c28e2b7332e133688ca18ee6c374f55edaa77a4#5c28e2b7332e133688ca18ee6c374f55edaa77a4"
+source = "git+https://github.com/Quant1um/clack?rev=6fd151fa28be30eefbcfb156b2a8e978797d0db2#6fd151fa28be30eefbcfb156b2a8e978797d0db2"
 dependencies = [
  "bitflags",
  "clack-common",
@@ -80,7 +80,7 @@ dependencies = [
 [[package]]
 name = "clack-plugin"
 version = "0.1.0"
-source = "git+https://github.com/prokopyl/clack?rev=5c28e2b7332e133688ca18ee6c374f55edaa77a4#5c28e2b7332e133688ca18ee6c374f55edaa77a4"
+source = "git+https://github.com/Quant1um/clack?rev=6fd151fa28be30eefbcfb156b2a8e978797d0db2#6fd151fa28be30eefbcfb156b2a8e978797d0db2"
 dependencies = [
  "clack-common",
  "clap-sys",

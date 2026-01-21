@@ -3,6 +3,16 @@ use std::{
     fmt::Debug,
 };
 
+/// A requested graphics API for a window
+#[derive(Debug, Clone, Copy)]
+pub enum GraphicsApi {
+    /// OpenGL graphics API with the specified configuration
+    OpenGl(GlConfig),
+
+    /// No graphics API, useful for software rendering
+    None,
+}
+
 /// A requested OpenGL version
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlVersion {
@@ -60,11 +70,15 @@ pub struct GlConfig {
     /// OpenGL version to request
     pub version: GlVersion,
 
-    /// OpenGL format to request
+    /// Output framebuffer format
     pub format: GlFormat,
 
     /// Whether to use double buffering
     pub double_buffer: bool,
+
+    /// Whether to force hardware acceleration (fails if hardware acceleration
+    /// is not available)
+    pub force_hardware: bool,
 
     /// Whether to enable debug mode extension
     pub debug: bool,
@@ -76,12 +90,6 @@ pub struct GlConfig {
     /// Number of samples for multisample anti-aliasing, set to 0 to disable
     /// MSAA
     pub msaa_count: u32,
-
-    /// Do not fail if the requested configuration is not available
-    ///
-    /// `Event::WindowFrame` may then provide `gl: None` if no suitable context
-    /// could be created
-    pub optional: bool,
 }
 
 impl Default for GlConfig {
@@ -89,9 +97,9 @@ impl Default for GlConfig {
         Self {
             version: GlVersion::Compat(1, 1),
             double_buffer: true,
+            force_hardware: false,
             debug: false,
             srgb: false,
-            optional: false,
             format: GlFormat::RGBA8_D24_S8,
             msaa_count: 0,
         }

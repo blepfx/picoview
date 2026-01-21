@@ -1,7 +1,7 @@
-use crate::{Key, Modifiers, MouseCursor, platform::x11::connection::Connection};
+use crate::{Key, Modifiers, MouseCursor, Point, platform::x11::connection::Connection};
 use libc::{c_int, c_uint};
 use std::{
-    ffi::CStr,
+    ffi::{CStr, c_ulong},
     mem::zeroed,
     os::unix::process::CommandExt,
     process::{Command, Stdio},
@@ -11,7 +11,7 @@ use x11::{
     glx::GLXFBConfig,
     xlib::{
         ControlMask, CopyFromParent, LockMask, Mod1Mask, Mod2Mask, Mod4Mask, ShiftMask, TrueColor,
-        Visual, XMatchVisualInfo, XVisualInfo,
+        Visual, XMatchVisualInfo, XTranslateCoordinates, XVisualInfo,
     },
 };
 
@@ -245,6 +245,37 @@ pub fn get_cursor(conn: &Connection, cursor: MouseCursor) -> u64 {
         MouseCursor::NeswResize => load(conn, &[c"fd_double_arrow", c"size_fdiag"]),
         MouseCursor::ColResize => load(conn, &[c"split_h", c"h_double_arrow"]),
         MouseCursor::RowResize => load(conn, &[c"split_v", c"v_double_arrow"]),
+    }
+}
+
+pub fn get_position_relative(
+    conn: &Connection,
+    window_parent: c_ulong,
+    window_id: c_ulong,
+) -> Option<Point> {
+    let mut x = 0;
+    let mut y = 0;
+
+    let status = unsafe {
+        XTranslateCoordinates(
+            conn.display(),
+            window_id,
+            window_parent,
+            0,
+            0,
+            &mut x,
+            &mut y,
+            &mut 0,
+        )
+    };
+
+    if status != 0 {
+        Some(Point {
+            x: x as f32,
+            y: y as f32,
+        })
+    } else {
+        None
     }
 }
 

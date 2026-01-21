@@ -2,10 +2,7 @@
 
 use crate::GainPluginShared;
 use clack_plugin::plugin::PluginError;
-use picoview::{
-    Event, GlConfig, WindowBuilder, WindowWaker,
-    rwh_06::{HasRawWindowHandle, WindowHandle},
-};
+use picoview::{Event, GlConfig, WindowBuilder, WindowWaker};
 
 #[derive(Default)]
 pub struct GainPluginGui {
@@ -52,7 +49,7 @@ impl GainPluginGui {
         })
         .with_opengl(GlConfig::default())
         .with_size((400, 200))
-        .open_embedded(unsafe { WindowHandle::borrow_raw(parent.raw_window_handle().unwrap()) })
+        .open_embedded(parent)
         .unwrap();
 
         Ok(())

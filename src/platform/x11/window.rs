@@ -2,7 +2,7 @@ use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
 use crate::platform::x11::connection::ATOM_PICOVIEW_WAKEUP;
-use crate::platform::x11::util::{VisualConfig, get_cursor};
+use crate::platform::x11::util::{VisualConfig, get_cursor, get_position_relative};
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
     Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
@@ -19,21 +19,22 @@ use x11::xlib::{
     AllocNone, Button1Mask, Button2Mask, Button3Mask, Button4Mask, Button5Mask, ButtonPress,
     ButtonPressMask, ButtonRelease, ButtonReleaseMask, CWBorderPixel, CWColormap, CWCursor,
     CWEventMask, CWHeight, CWWidth, CWX, CWY, ClientMessage, ClientMessageData, ConfigureNotify,
-    DestroyNotify, Expose, ExposureMask, FocusChangeMask, FocusIn, FocusOut, InputOutput, KeyPress,
-    KeyPressMask, KeyRelease, KeyReleaseMask, LeaveNotify, LeaveWindowMask, MotionNotify,
-    NoEventMask, NotifyNormal, PMaxSize, PMinSize, PSize, PointerMotionMask, PropModeReplace,
-    StructureNotifyMask, XChangeProperty, XChangeWindowAttributes, XClientMessageEvent,
-    XConfigureWindow, XCreateColormap, XCreateWindow, XDestroyWindow, XEvent, XFlush, XFree,
-    XMapWindow, XSendEvent, XSetTransientForHint, XSetWMName, XSetWMNormalHints, XSetWMProtocols,
-    XSetWindowAttributes, XSizeHints, XStringListToTextProperty, XSync, XTextProperty,
-    XTranslateCoordinates, XUnmapWindow, XWarpPointer, XWindowChanges,
+    CurrentTime, DestroyNotify, Expose, ExposureMask, FocusChangeMask, FocusIn, FocusOut,
+    InputOutput, KeyPress, KeyPressMask, KeyRelease, KeyReleaseMask, LeaveNotify, LeaveWindowMask,
+    MotionNotify, NoEventMask, NotifyNormal, PMaxSize, PMinSize, PSize, PointerMotionMask,
+    PropModeReplace, ReparentNotify, RevertToParent, StructureNotifyMask, XChangeProperty,
+    XChangeWindowAttributes, XClientMessageEvent, XConfigureWindow, XCreateColormap, XCreateWindow,
+    XDestroyWindow, XEvent, XFlush, XFree, XMapWindow, XSendEvent, XSetInputFocus,
+    XSetTransientForHint, XSetWMName, XSetWMNormalHints, XSetWMProtocols, XSetWindowAttributes,
+    XSizeHints, XStringListToTextProperty, XSync, XTextProperty, XUnmapWindow, XWarpPointer,
+    XWindowChanges,
 };
 
 unsafe impl Send for WindowImpl {}
 
 pub struct WindowImpl {
     window_id: c_ulong,
-    window_parent: c_ulong,
+    window_parent: Cell<c_ulong>,
 
     connection: Connection,
     waker: Arc<WindowWakerImpl>,
@@ -49,6 +50,7 @@ pub struct WindowImpl {
     last_window_position: Cell<Option<Point>>,
     last_window_size: Cell<Option<Size>>,
     last_window_visible: Cell<bool>,
+    last_window_focused: Cell<bool>,
 
     #[allow(clippy::type_complexity)]
     handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
@@ -238,7 +240,7 @@ impl WindowImpl {
 
             let window = Box::new(Self {
                 window_id,
-                window_parent,
+                window_parent: Cell::new(window_parent),
 
                 connection,
                 waker: Arc::new(WindowWakerImpl {
@@ -256,6 +258,7 @@ impl WindowImpl {
                 last_window_position: Cell::new(None),
                 last_window_size: Cell::new(None),
                 last_window_visible: Cell::new(options.visible),
+                last_window_focused: Cell::new(false),
                 last_cursor_in_bounds: Cell::new(false),
 
                 handler: RefCell::new(None),
@@ -358,34 +361,30 @@ impl WindowImpl {
                         self.send_event(Event::Wakeup);
                     }
                 }
+                ReparentNotify => {
+                    let event = event.reparent;
+                    self.window_parent.set(event.parent);
+                }
+
                 ConfigureNotify => {
                     let event = event.configure;
 
                     {
-                        let mut x = 0;
-                        let mut y = 0;
-
-                        let status = XTranslateCoordinates(
-                            self.connection.display(),
-                            self.connection.default_root(),
-                            self.window_id,
-                            0,
-                            0,
-                            &mut x,
-                            &mut y,
-                            &mut 0,
-                        );
-
-                        let origin = Point {
-                            x: -x as f32,
-                            y: -y as f32,
+                        if let (Some(relative), Some(absolute)) = (
+                            get_position_relative(
+                                &self.connection,
+                                self.window_parent.get(),
+                                self.window_id,
+                            ),
+                            get_position_relative(
+                                &self.connection,
+                                self.connection.default_root(),
+                                self.window_id,
+                            ),
+                        ) {
+                            self.last_window_position.set(Some(relative));
+                            self.send_event(Event::WindowMove { relative, absolute });
                         };
-
-                        if status != 0
-                            && self.last_window_position.replace(Some(origin)) != Some(origin)
-                        {
-                            self.send_event(Event::WindowMove { origin });
-                        }
                     }
 
                     let size = Size {
@@ -399,6 +398,14 @@ impl WindowImpl {
                 }
                 ButtonPress | ButtonRelease => {
                     let event = event.button;
+                    if event.type_ == ButtonPress {
+                        XSetInputFocus(
+                            self.connection.display(),
+                            self.window_id,
+                            RevertToParent,
+                            CurrentTime,
+                        );
+                    }
 
                     self.handle_event_modifiers(util::keymask_to_mods(event.state));
 
@@ -445,7 +452,7 @@ impl WindowImpl {
                     self.send_event(result);
                 }
                 KeyPress => {
-                    let event = event.key;
+                    let mut event = event.key;
                     self.handle_event_modifiers(
                         util::keymask_to_mods(event.state) | util::keycode_to_mods(event.keycode),
                     );
@@ -458,9 +465,10 @@ impl WindowImpl {
                         });
 
                         if !capture {
+                            event.window = self.window_parent.get();
                             XSendEvent(
                                 self.connection.display(),
-                                self.window_parent,
+                                self.window_parent.get(),
                                 1,
                                 KeyPressMask,
                                 &mut XEvent { key: event },
@@ -469,7 +477,7 @@ impl WindowImpl {
                     }
                 }
                 KeyRelease => {
-                    let event = event.key;
+                    let mut event = event.key;
                     self.handle_event_modifiers(
                         util::keymask_to_mods(event.state) - util::keycode_to_mods(event.keycode),
                     );
@@ -482,9 +490,10 @@ impl WindowImpl {
                         });
 
                         if !capture {
+                            event.window = self.window_parent.get();
                             XSendEvent(
                                 self.connection.display(),
-                                self.window_parent,
+                                self.window_parent.get(),
                                 1,
                                 KeyReleaseMask,
                                 &mut XEvent { key: event },
@@ -534,13 +543,15 @@ impl WindowImpl {
                 }
                 FocusIn | FocusOut => {
                     let event = event.focus_change;
-                    if event.mode != NotifyNormal {
+                    let focus = event.type_ == FocusIn;
+
+                    if event.mode != NotifyNormal || event.window != self.window_id {
                         return;
                     }
 
-                    self.send_event(Event::WindowFocus {
-                        focus: event.type_ == FocusIn,
-                    });
+                    if self.last_window_focused.replace(focus) != focus {
+                        self.send_event(Event::WindowFocus { focus });
+                    }
                 }
                 DestroyNotify => {
                     self.is_closed.set(true);
