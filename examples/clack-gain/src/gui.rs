@@ -16,15 +16,16 @@ impl GainPluginGui {
         parent: clack_extensions::gui::Window<'_>,
     ) -> Result<(), PluginError> {
         WindowBuilder::new(|window| {
+            let gl = window.opengl().expect("failed to get OpenGL context");
+            let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
+                unsafe { std::mem::transmute(gl.get_proc_address(c"glClearColor")) };
+            let clear: unsafe extern "system" fn(i32) =
+                unsafe { std::mem::transmute(gl.get_proc_address(c"glClear")) };
+
             let start = std::time::Instant::now();
             Box::new(move |event| match event {
-                Event::WindowFrame { gl: Some(gl) } => unsafe {
+                Event::WindowFrame => unsafe {
                     let time = start.elapsed().as_secs_f32();
-
-                    let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
-                        std::mem::transmute(gl.get_proc_address(c"glClearColor"));
-                    let clear: unsafe extern "system" fn(i32) =
-                        std::mem::transmute(gl.get_proc_address(c"glClear"));
 
                     gl.make_current(true);
 

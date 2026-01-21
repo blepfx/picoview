@@ -1,4 +1,6 @@
-use crate::{Error, Event, GraphicsApi, MouseCursor, Point, Size, WakeupError, platform, rwh_06};
+use crate::{
+    Error, Event, GlConfig, GlContext, MouseCursor, Point, Size, WakeupError, platform, rwh_06,
+};
 use std::{fmt::Debug, ops::Range, sync::Arc};
 
 // the reason this is a box is because making this with traits is extremely
@@ -40,10 +42,8 @@ pub struct WindowBuilder {
     /// The initial window position in physical pixels
     pub position: Option<Point>,
 
-    /// Requested graphics configurations, in order of preference
-    ///
-    /// If every requested graphics API fails to initialize, an error occurs.
-    pub graphics: Vec<GraphicsApi>,
+    /// The requested OpenGL configuration for the window, if any
+    pub opengl: Option<GlConfig>,
 
     /// The factory function that creates the event handler for the window
     pub factory: WindowFactory,
@@ -70,6 +70,11 @@ impl<'a> Window<'a> {
     /// Close the window and exit its event loop.
     pub fn close(&self) {
         self.0.close();
+    }
+
+    /// Get the OpenGL context associated with the window, if present.
+    pub fn opengl(&self) -> Option<&'a dyn GlContext> {
+        self.0.opengl()
     }
 
     /// Set the window title.
@@ -164,7 +169,7 @@ impl WindowBuilder {
             },
 
             position: None,
-            graphics: vec![GraphicsApi::None],
+            opengl: None,
             factory: Box::new(factory),
         }
     }
@@ -212,6 +217,14 @@ impl WindowBuilder {
         }
     }
 
+    /// Set the OpenGL configuration for the window, if any
+    pub fn with_opengl(self, config: GlConfig) -> Self {
+        Self {
+            opengl: Some(config),
+            ..self
+        }
+    }
+
     /// Set the initial window position relative to the origin.
     ///
     /// If not specified, the window will be centered on the screen or parent
@@ -232,14 +245,6 @@ impl WindowBuilder {
     pub fn with_resizable(self, min: impl Into<Size>, max: impl Into<Size>) -> Self {
         Self {
             resizable: Some(min.into()..max.into()),
-            ..self
-        }
-    }
-
-    /// Request an list of graphics APIs for the window, in order of preference.
-    pub fn with_graphics(self, apis: impl IntoIterator<Item = GraphicsApi>) -> Self {
-        Self {
-            graphics: apis.into_iter().collect(),
             ..self
         }
     }
@@ -329,7 +334,6 @@ impl Debug for WindowBuilder {
             .field("size", &self.size)
             .field("resizable", &self.resizable)
             .field("position", &self.position)
-            .field("graphics", &self.graphics)
             .finish_non_exhaustive()
     }
 }

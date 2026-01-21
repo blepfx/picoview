@@ -3,7 +3,6 @@ use crate::platform::x11::util::VisualConfig;
 use crate::{Error, GlConfig, GlVersion};
 use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
-use std::fmt::Debug;
 use std::os::raw::{c_int, c_ulong};
 use std::ptr::{null, null_mut};
 use x11::glx::*;
@@ -285,13 +284,13 @@ impl<'a> crate::GlContext for GlContextScope<'a> {
         }
     }
 
-    fn swap_buffers(&self) {
+    unsafe fn swap_buffers(&self) {
         unsafe {
             glXSwapBuffers(self.connection.display(), self.context.window);
         }
     }
 
-    fn make_current(&self, current: bool) -> bool {
+    unsafe fn make_current(&self, current: bool) -> bool {
         unsafe {
             let result = {
                 if current {
@@ -307,14 +306,5 @@ impl<'a> crate::GlContext for GlContextScope<'a> {
 
             result != 0
         }
-    }
-}
-
-impl<'a> Debug for GlContextScope<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GlContext")
-            .field("window", &self.context.window)
-            .field("context", &self.context.context)
-            .finish_non_exhaustive()
     }
 }

@@ -14,7 +14,7 @@ pub mod mac;
 #[cfg(target_os = "macos")]
 pub use mac::*;
 
-use crate::{MouseCursor, Point, Size, WakeupError, WindowWaker, rwh_06};
+use crate::{GlContext, MouseCursor, Point, Size, WakeupError, WindowWaker, rwh_06};
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
@@ -39,6 +39,7 @@ pub trait PlatformWindow /* : !Send + !Sync */ {
 
     fn close(&self);
     fn waker(&self) -> WindowWaker;
+    fn opengl(&self) -> Option<&dyn GlContext>;
 
     fn set_title(&self, title: &str);
     fn set_cursor_icon(&self, icon: MouseCursor);

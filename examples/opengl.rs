@@ -1,22 +1,23 @@
-use picoview::{Event, GlConfig, GlFormat, GlVersion, GraphicsApi, Point, WindowBuilder};
+use picoview::{Event, GlConfig, Point, WindowBuilder};
 use std::{mem::transmute, time::Instant};
 
 fn main() {
     WindowBuilder::new(|window| {
+        let gl = window.opengl().expect("failed to get OpenGL context");
+        let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
+            unsafe { transmute(gl.get_proc_address(c"glClearColor")) };
+        let clear: unsafe extern "system" fn(i32) =
+            unsafe { transmute(gl.get_proc_address(c"glClear")) };
+
         let mut last_frame = Instant::now();
         let mut time = 0.0;
 
         Box::new(move |event| match event {
-            Event::WindowFrame { gl: Some(gl) } => unsafe {
+            Event::WindowFrame => unsafe {
                 time += last_frame.elapsed().as_secs_f32();
 
                 println!("{:?}", last_frame.elapsed());
                 last_frame = Instant::now();
-
-                let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
-                    transmute(gl.get_proc_address(c"glClearColor"));
-                let clear: unsafe extern "system" fn(i32) =
-                    transmute(gl.get_proc_address(c"glClear"));
 
                 gl.make_current(true);
 
@@ -45,14 +46,7 @@ fn main() {
             _ => {}
         })
     })
-    .with_graphics([GraphicsApi::OpenGl(GlConfig {
-        version: GlVersion::Core(3, 1),
-        format: GlFormat::RGBA8_D24,
-        msaa_count: 0,
-        debug: cfg!(debug_assertions),
-        ..Default::default()
-    })])
-    .with_opengl()
+    .with_opengl(GlConfig::default())
     .with_size((200, 200))
     .with_resizable((0, 0), (1000, 1000))
     .with_transparency(true)

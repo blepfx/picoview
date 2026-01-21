@@ -1,4 +1,3 @@
-use crate::GlContext;
 use bitflags::bitflags;
 use std::{fmt::Debug, path::PathBuf};
 
@@ -323,10 +322,7 @@ pub enum Event<'a> {
     /// This event is sent at the refresh rate of the display (typically 60 Hz),
     /// on a best-effort basis (might use an unsynchronized timer depending on
     /// the platform).
-    WindowFrame {
-        /// An associated OpenGL context, if configured and present.
-        gl: Option<&'a dyn GlContext>,
-    },
+    WindowFrame,
 
     /// The area of the window that needs to be redrawn.
     ///

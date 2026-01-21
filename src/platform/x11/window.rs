@@ -223,11 +223,7 @@ impl WindowImpl {
             }
 
             let gl_context = if let Some(config) = options.opengl {
-                match GlContext::new(&connection, window_id as _, config, visual_info.fb_config) {
-                    Ok(gl) => Some(gl),
-                    Err(_) if config.optional => None,
-                    Err(e) => return Err(e),
-                }
+                GlContext::new(&connection, window_id as _, config, visual_info.fb_config).ok()
             } else {
                 None
             };
@@ -305,7 +301,7 @@ impl WindowImpl {
                     Some(wait_time) => wait_time,
                     None => {
                         next_frame = (next_frame + self.refresh_interval).max(curr_frame);
-                        self.handle_frame();
+                        self.send_event(Event::WindowFrame);
                         Duration::ZERO
                     }
                 };
@@ -327,18 +323,6 @@ impl WindowImpl {
             }
 
             self.destroy()
-        }
-    }
-
-    fn handle_frame(&self) {
-        match &self.gl_context {
-            Some(context) => {
-                let scope = context.scope(&self.connection);
-                self.send_event(Event::WindowFrame { gl: Some(&scope) });
-            }
-            None => {
-                self.send_event(Event::WindowFrame { gl: None });
-            }
         }
     }
 
@@ -608,6 +592,36 @@ impl WindowImpl {
     }
 }
 
+impl crate::GlContext for WindowImpl {
+    fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
+        self.gl_context
+            .as_ref()
+            .expect("opengl unavailable")
+            .scope(&self.connection)
+            .get_proc_address(name)
+    }
+
+    unsafe fn make_current(&self, current: bool) -> bool {
+        unsafe {
+            self.gl_context
+                .as_ref()
+                .expect("opengl unavailable")
+                .scope(&self.connection)
+                .make_current(current)
+        }
+    }
+
+    unsafe fn swap_buffers(&self) {
+        unsafe {
+            self.gl_context
+                .as_ref()
+                .expect("opengl unavailable")
+                .scope(&self.connection)
+                .swap_buffers()
+        }
+    }
+}
+
 impl PlatformWindow for WindowImpl {
     fn close(&self) {
         self.is_closed.set(true);
@@ -615,6 +629,14 @@ impl PlatformWindow for WindowImpl {
 
     fn waker(&self) -> WindowWaker {
         WindowWaker(self.waker.clone())
+    }
+
+    fn opengl(&self) -> Option<&dyn crate::GlContext> {
+        if self.gl_context.is_some() {
+            Some(self)
+        } else {
+            None
+        }
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {

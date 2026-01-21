@@ -6,12 +6,12 @@
 #![warn(missing_docs)]
 
 mod data;
-mod graphics;
+mod opengl;
 mod platform;
 mod window;
 
 pub use data::*;
-pub use graphics::*;
+pub use opengl::*;
 pub use window::*;
 
 pub use raw_window_handle as rwh_06;

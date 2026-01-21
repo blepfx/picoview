@@ -3,16 +3,6 @@ use std::{
     fmt::Debug,
 };
 
-/// A requested graphics API for a window
-#[derive(Debug, Clone, Copy)]
-pub enum GraphicsApi {
-    /// OpenGL graphics API with the specified configuration
-    OpenGl(GlConfig),
-
-    /// No graphics API, useful for software rendering
-    None,
-}
-
 /// A requested OpenGL version
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlVersion {
@@ -76,8 +66,8 @@ pub struct GlConfig {
     /// Whether to use double buffering
     pub double_buffer: bool,
 
-    /// Whether to force hardware acceleration (fails if hardware acceleration
-    /// is not available)
+    /// Whether to force hardware acceleration (if true, fails if only software
+    /// opengl renderers are available)
     pub force_hardware: bool,
 
     /// Whether to enable debug mode extension
@@ -107,10 +97,7 @@ impl Default for GlConfig {
 }
 
 /// OpenGL context belonging to a window
-pub trait GlContext: Debug {
-    /// Swap the front and back buffers
-    fn swap_buffers(&self);
-
+pub trait GlContext {
     /// Get the address of an OpenGL function
     fn get_proc_address(&self, name: &CStr) -> *const c_void;
 
@@ -119,5 +106,16 @@ pub trait GlContext: Debug {
     ///
     /// All OpenGL calls must be made only when the context is active for the
     /// current thread
-    fn make_current(&self, current: bool) -> bool;
+    ///
+    /// # Safety
+    /// Making contexts current and uncurrent is inherently unsafe as it can
+    /// lead to undefined behavior if misused.
+    unsafe fn make_current(&self, current: bool) -> bool;
+
+    /// Swap the front and back buffers
+    ///
+    /// # Safety
+    /// Swapping buffers is inherently unsafe as it can lead to undefined
+    /// behavior if misused. TODO: explain more
+    unsafe fn swap_buffers(&self);
 }
