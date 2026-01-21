@@ -11,7 +11,7 @@ fn main() {
         window.set_clipboard_text("test");
 
         Box::new(move |event| match event {
-            Event::WindowFrame { .. } => {
+            Event::WindowFrame => {
                 let current = Instant::now();
                 let passed = |d| {
                     (current - start) >= Duration::from_millis(d)

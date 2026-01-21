@@ -1,5 +1,4 @@
 use crate::Error;
-use objc2::rc::Retained;
 use objc2_core_foundation::{
     CFRetained, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, kCFRunLoopCommonModes,
 };
@@ -47,7 +46,7 @@ struct DisplayState {
 }
 
 pub struct DisplayLink {
-    link: Retained<CVDisplayLink>,
+    link: CFRetained<CVDisplayLink>,
     source: CFRetained<CFRunLoopSource>,
 }
 
@@ -78,6 +77,7 @@ impl DisplayLink {
             let mut link = null_mut();
             let result =
                 CVDisplayLink::create_with_active_cg_displays(NonNull::from_mut(&mut link));
+
             if result != 0 || link.is_null() {
                 return Err(Error::PlatformError(format!(
                     "CVDisplayLink::create_with_active_cg_displays: {}",
@@ -85,11 +85,10 @@ impl DisplayLink {
                 )));
             }
 
-            let link = Retained::from_raw(link).unwrap_unchecked();
+            let link = CFRetained::from_raw(NonNull::new_unchecked(link));
 
             let result =
                 link.set_output_callback(Some(callback), &*source as *const _ as *mut c_void);
-
             if result != 0 {
                 return Err(Error::PlatformError(format!(
                     "CVDisplayLink::set_output_callback: {}",

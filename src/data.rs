@@ -53,6 +53,16 @@ pub enum MouseCursor {
     RowResize,
 }
 
+/// The system theme (light or dark mode).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SystemTheme {
+    /// Light mode
+    Light,
+
+    /// Dark mode
+    Dark,
+}
+
 bitflags! {
     /// Key modifier flags that are tracked separately from key events
     #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -297,6 +307,12 @@ pub enum Event<'a> {
     WindowScale {
         /// The new scale factor
         scale: f32,
+    },
+
+    /// The system theme (light or dark mode) changed.
+    WindowTheme {
+        /// The new system theme
+        theme: SystemTheme,
     },
 
     /// The window was resized.

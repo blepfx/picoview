@@ -22,7 +22,7 @@ use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
     NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
-    NSWindowDidBecomeKeyNotification, NSWindowDidResignKeyNotification, NSWindowStyleMask,
+    NSWindowDidResignKeyNotification, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_core_graphics::CGWarpMouseCursorPosition;
@@ -33,7 +33,6 @@ use objc2_foundation::{
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::{CString, c_void};
-use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -50,7 +49,9 @@ unsafe impl Send for WindowViewWaker {}
 unsafe impl Sync for WindowViewWaker {}
 
 struct WindowViewInner {
-    display_link: ManuallyDrop<DisplayLink>,
+    _display_link: DisplayLink,
+    gl_context: Option<GlContext>,
+
     application: RefCell<Option<Retained<NSApplication>>>,
     waker: Arc<WindowViewWaker>,
 
@@ -72,7 +73,7 @@ unsafe impl Message for WindowView {}
 impl WindowView {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
         let main_thread = MainThreadMarker::new()
-            .ok_or_else(|| Error::PlatformError("not in main thread".into()))?;
+            .ok_or_else(|| Error::PlatformError("not on main thread".into()))?;
 
         match mode {
             OpenMode::Blocking => autoreleasepool(|_| unsafe {
@@ -83,7 +84,14 @@ impl WindowView {
                 let view = Self::create_view(options, Some(app.clone()), main_thread)?;
 
                 window.setContentView(Some(&view.view));
-                //window.setDelegate(Some(&view));
+                window.makeFirstResponder(Some(&view.view));
+
+                // Set the window delegate to our view
+                // NSWindowDelegate has no required methods, so this is safe
+                window.setDelegate(Some(std::mem::transmute::<
+                    &WindowView,
+                    &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
+                >(&*view)));
 
                 app.run();
                 Ok(WindowWaker::default())
@@ -203,13 +211,6 @@ impl WindowView {
 
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
                 &view.view,
-                sel!(windowDidBecomeKeyNotification:),
-                Some(NSWindowDidBecomeKeyNotification),
-                None,
-            );
-
-            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
-                &view.view,
                 sel!(windowDidResignKeyNotification:),
                 Some(NSWindowDidResignKeyNotification),
                 None,
@@ -225,30 +226,25 @@ impl WindowView {
             view
         };
 
-        let opengl = if let Some(config) = options.opengl {
-            match GlContext::new(&view.view, config, main_thread) {
-                Ok(gl) => Some(gl),
-                Err(_) if config.optional => None,
-                Err(e) => return Err(e),
-            }
+        let gl_context = if let Some(config) = options.opengl {
+            GlContext::new(&view.view, config, main_thread).ok()
         } else {
             None
         };
 
-        let display = {
+        let display_link = {
             let view = Weak::from_retained(&view);
             DisplayLink::new(Box::new(move || {
                 if let Some(view) = view.load() {
-                    view.send_event(Event::WindowFrame {
-                        gl: opengl.as_ref().map(|x| x as &dyn crate::GlContext),
-                    });
+                    view.send_event(Event::WindowFrame);
                 }
             }))?
         };
 
         view.set_inner(Box::new(WindowViewInner {
-            display_link: ManuallyDrop::new(display),
+            _display_link: display_link,
             application: RefCell::new(blocking),
+            gl_context,
 
             waker: Arc::new(WindowViewWaker {
                 weak: Weak::from_retained(&view),
@@ -289,7 +285,7 @@ impl WindowView {
                 }
             }
         } else {
-            debug_assert!(false, "send_event reentrancy")
+            debug_assert!(false, "event handler reentrancy: {:?}", event);
         }
     }
 
@@ -336,10 +332,18 @@ impl WindowView {
             let context = *class
                 .instance_variable(c"_context")
                 .unwrap_unchecked()
-                .load::<*mut c_void>(&self.view)
-                as *mut Box<RefCell<WindowViewInner>>;
+                .load::<*mut c_void>(&self.view) as *mut WindowViewInner;
 
+            // If we actually initialized before
             if !context.is_null() {
+                // we need to drop this before WindowView gets dropped, see the safety comment
+                // at the handler initialization place
+                self.inner().event_handler.take();
+
+                // Remove notification observers we registered earlier
+                NSNotificationCenter::defaultCenter().removeObserver(&self.view);
+
+                // Dealloc our context box
                 drop(Box::from_raw(context));
             }
 
@@ -362,11 +366,26 @@ impl WindowView {
         // TODO: fun logical -> physical scaling stuff here
     }
 
+    unsafe extern "C" fn window_should_close(&self, _cmd: Sel, _: Option<&AnyObject>) -> Bool {
+        self.send_event_defer(Event::WindowClose);
+        Bool::NO
+    }
+
     unsafe extern "C" fn accepts_first_mouse(&self, _cmd: Sel, _event: *const NSEvent) -> Bool {
         Bool::YES
     }
 
     unsafe extern "C" fn accepts_first_responder(&self, _cmd: Sel) -> Bool {
+        Bool::YES
+    }
+
+    unsafe extern "C" fn become_first_responder(&self, _cmd: Sel) -> Bool {
+        self.send_event_defer(Event::WindowFocus { focus: true });
+        Bool::YES
+    }
+
+    unsafe extern "C" fn resign_first_responder(&self, _cmd: Sel) -> Bool {
+        self.send_event_defer(Event::WindowFocus { focus: false });
         Bool::YES
     }
 
@@ -447,6 +466,10 @@ impl WindowView {
             if let Some(button) = button {
                 self.send_event_defer(Event::MouseDown { button });
             }
+
+            if let Some(window) = self.view.window() {
+                window.makeFirstResponder(Some(&self.view));
+            }
         }
     }
 
@@ -498,21 +521,8 @@ impl WindowView {
         });
     }
 
-    // custom
-    unsafe extern "C" fn draw_frame(&self, _cmd: Sel) {
-        self.send_event(Event::WindowFrame { gl: None });
-    }
-
     unsafe extern "C" fn wakeup(&self, _cmd: Sel) {
-        self.send_event(Event::Wakeup);
-    }
-
-    unsafe extern "C" fn window_did_become_key_notification(
-        &self,
-        _cmd: Sel,
-        _notif: &NSNotification,
-    ) {
-        self.send_event_defer(Event::WindowFocus { focus: true });
+        self.send_event_defer(Event::Wakeup);
     }
 
     unsafe extern "C" fn window_did_resign_key_notification(
@@ -520,7 +530,9 @@ impl WindowView {
         _cmd: Sel,
         _notif: &NSNotification,
     ) {
-        self.send_event_defer(Event::WindowFocus { focus: false });
+        if let Some(window) = self.view.window() {
+            window.makeFirstResponder(None);
+        }
     }
 
     unsafe extern "C" fn view_frame_did_change_notification(
@@ -535,6 +547,10 @@ impl WindowView {
                 height: frame.size.height as u32,
             },
         });
+
+        if let Some(gl) = &self.inner().gl_context {
+            gl.resize(frame.size.width as u32, frame.size.height as u32);
+        }
     }
 
     // NSDraggingDestination
@@ -615,6 +631,14 @@ impl WindowView {
                 Self::accepts_first_responder as unsafe extern "C" fn(_, _) -> _,
             );
             builder.add_method(
+                sel!(becomeFirstResponder),
+                Self::become_first_responder as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
+                sel!(resignFirstResponder),
+                Self::resign_first_responder as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
                 sel!(isFlipped),
                 Self::is_flipped as unsafe extern "C" fn(_, _) -> _,
             );
@@ -685,19 +709,17 @@ impl WindowView {
 
             // custom
             builder.add_method(
-                sel!(picoview_drawFrame),
-                Self::draw_frame as unsafe extern "C" fn(_, _) -> _,
-            );
-            builder.add_method(
                 sel!(picoview_wakeup),
                 Self::wakeup as unsafe extern "C" fn(_, _) -> _,
             );
 
-            // NSNotification handlers
+            // NSWindowDelegate methods
             builder.add_method(
-                sel!(windowDidBecomeKeyNotification:),
-                Self::window_did_become_key_notification as unsafe extern "C" fn(_, _, _) -> _,
+                sel!(windowShouldClose:),
+                Self::window_should_close as unsafe extern "C" fn(_, _, _) -> _,
             );
+
+            // NSNotification handlers
             builder.add_method(
                 sel!(windowDidResignKeyNotification:),
                 Self::window_did_resign_key_notification as unsafe extern "C" fn(_, _, _) -> _,
@@ -739,12 +761,17 @@ impl WindowView {
 }
 
 impl PlatformWindow for WindowView {
+    fn opengl(&self) -> Option<&dyn crate::GlContext> {
+        self.inner()
+            .gl_context
+            .as_ref()
+            .map(|x| x as &dyn crate::GlContext)
+    }
+
     fn close(&self) {
         if self.inner().is_closed.replace(true) {
             return;
         }
-
-        self.view.removeFromSuperview();
 
         if let Some(app) = self.inner().application.take() {
             if let Some(window) = self.view.window() {
@@ -753,6 +780,8 @@ impl PlatformWindow for WindowView {
 
             app.stop(Some(&app));
         }
+
+        self.view.removeFromSuperview();
     }
 
     fn waker(&self) -> WindowWaker {
@@ -886,19 +915,6 @@ impl PlatformWaker for WindowViewWaker {
             Ok(())
         } else {
             Err(WakeupError::Disconnected)
-        }
-    }
-}
-
-impl Drop for WindowView {
-    fn drop(&mut self) {
-        // we need to drop this before OsWindowView gets dropped, see the safety comment
-        // at the handler initialization place
-        self.inner().event_handler.take();
-
-        // Remove notification observers we registered earlier
-        unsafe {
-            NSNotificationCenter::defaultCenter().removeObserver(&self.view);
         }
     }
 }

@@ -6,7 +6,7 @@
 | Window creation                                       | :ok:     |          |          |          |
 |  - Top-level decorated windows                        | :ok:     | :ok:     | :ok:     | High     |
 |  - Top-level undecorated windows                      | :ok:     | :x:      | :ok:     | Medium   |
-|  - Embedded parented windows                          | :ok:     | :x:      | :ok:     | High     |
+|  - Embedded parented windows                          | :ok:     | :ok:     | :ok:     | High     |
 |  - Transient parented windows                         | :ok:     | :x:      | :ok:     | Low      |
 | Window events                                         |          |          |          |          |
 |  - `MouseUp`                                          | :ok:     | :ok:     | :ok:     | High     |
@@ -16,24 +16,25 @@
 |  - `KeyUp`                                            | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyDown`                                          | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyModifiers`                                     | :ok:     | :ok:     | :ok:     | High     |
-|  - `WindowClose`                                      | :ok:     | :x:      | :ok:     | Low      |
-|  - `WindowFocus`                                      | :ok:     | :x:      | :ok:     | Low      |
+|  - `WindowClose`                                      | :ok:     | :ok:     | :ok:     | Low      |
+|  - `WindowFocus`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowScale`                                      | :ok:     | :ok:     | :ok:[^1] | Medium   |
+|  - `WindowTheme`                                      | :x:      | :x:      | :x:      | Low      |
 |  - `WindowMove`                                       | :ok:     | :x:      | :ok:     | Low      |
-|  - `WindowResize`                                     | :ok:     | :x:      | :ok:     | High     |
+|  - `WindowResize`                                     | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowFrame`                                      | :ok:     | :ok:     | :ok:     | High     |
-|  - `WindowDamage`                                     | :ok:     | :x:      | :ok:     | Medium   |
+|  - `WindowDamage`                                     | :ok:     | :ok:     | :ok:     | Medium   |
 |  - `DragHover`                                        | :x:      | :x:      | :x:      | Low      |
 |  - `DragAccept`                                       | :x:      | :x:      | :x:      | Low      |
 |  - `DragCancel`                                       | :x:      | :x:      | :x:      | Low      |
-| Event loop wakeup                                     | :ok:     | :x:      | :ok:     | High     |
+| Event loop wakeup                                     | :ok:     | :ok:     | :ok:     | High     |
 | Vertical blank synchronization                        | :ok:[^2] | :ok:     | :o:[^3]  | High     |
-| OpenGL context creation                               | :ok:     | :x:      | :ok:     | High     |
+| OpenGL context creation                               | :ok:     | :ok:     | :ok:     | High     |
 | Clipboard text get/set                                | :ok:     | :ok:     | :x:      | Medium   |
 | Pixel scaling abstraction                             | :ok:     | :x:      | :ok:     | High     |
 | Set position                                          | :ok:     | :x:      | :ok:     | Medium   |
-| Set size                                              | :ok:     | :x:      | :ok:     | High     |
-| User resizable                                        | :ok:     | :x:      | :ok:     | High     |
+| Set size                                              | :ok:     | :ok:     | :ok:     | High     |
+| User resizable                                        | :ok:     | :ok:     | :ok:     | High     |
 | Set title                                             | :ok:     | :ok:     | :ok:     | Medium   |
 | Set visibility                                        | :ok:     | :ok:     | :ok:     | Medium   |
 | Close window                                          | :ok:     | :x:      | :ok:     | High     |

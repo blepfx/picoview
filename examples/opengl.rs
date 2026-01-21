@@ -15,8 +15,6 @@ fn main() {
         Box::new(move |event| match event {
             Event::WindowFrame => unsafe {
                 time += last_frame.elapsed().as_secs_f32();
-
-                println!("{:?}", last_frame.elapsed());
                 last_frame = Instant::now();
 
                 gl.make_current(true);
@@ -40,10 +38,11 @@ fn main() {
             }
 
             Event::WindowClose => {
+                println!("{:?}", event);
                 window.close();
             }
 
-            _ => {}
+            event => println!("{:?}", event),
         })
     })
     .with_opengl(GlConfig::default())

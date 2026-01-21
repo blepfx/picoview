@@ -5,7 +5,7 @@ use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, rc::Retained};
 use objc2_app_kit::{NSOpenGLContext, NSOpenGLPixelFormat, NSOpenGLView, NSView};
 use objc2_core_foundation::{CFBundle, CFRetained, CFString};
 use objc2_foundation::NSSize;
-use std::{fmt::Debug, ptr::NonNull};
+use std::ptr::NonNull;
 
 pub struct GlContext {
     bundle: CFRetained<CFBundle>,
@@ -50,8 +50,8 @@ impl GlContext {
                 s as _,
             ];
 
-            if config.optional {
-                attrs.push(objc2_app_kit::NSOpenGLPFAAccelerated); // TODO: allow software rendering?
+            if config.force_hardware {
+                attrs.push(objc2_app_kit::NSOpenGLPFAAccelerated);
             }
 
             if config.double_buffer {
@@ -126,7 +126,7 @@ impl GlContext {
 }
 
 impl crate::GlContext for GlContext {
-    fn make_current(&self, current: bool) -> bool {
+    unsafe fn make_current(&self, current: bool) -> bool {
         if current {
             self.context.makeCurrentContext();
         } else {
@@ -136,7 +136,7 @@ impl crate::GlContext for GlContext {
         true
     }
 
-    fn swap_buffers(&self) {
+    unsafe fn swap_buffers(&self) {
         self.context.flushBuffer();
         self.view.setNeedsDisplay(true); // TODO: do we need this?
     }
@@ -151,8 +151,8 @@ impl crate::GlContext for GlContext {
     }
 }
 
-impl Debug for GlContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GlContext").finish_non_exhaustive()
+impl Drop for GlContext {
+    fn drop(&mut self) {
+        self.view.removeFromSuperview();
     }
 }
