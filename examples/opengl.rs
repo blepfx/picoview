@@ -45,6 +45,7 @@ fn main() {
             event => println!("{:?}", event),
         })
     })
+    .with_title("OpenGL Example")
     .with_opengl(GlConfig::default())
     .with_size((200, 200))
     .with_resizable((0, 0), (1000, 1000))

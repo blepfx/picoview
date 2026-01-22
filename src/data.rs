@@ -311,8 +311,8 @@ pub enum Event<'a> {
 
     /// The system theme (light or dark mode) changed.
     WindowTheme {
-        /// The new system theme
-        theme: SystemTheme,
+        /// The new system theme, None if unset/unknown
+        theme: Option<SystemTheme>,
     },
 
     /// The window was resized.

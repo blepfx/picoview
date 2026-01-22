@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, SystemTheme};
 use libc::c_ulong;
 use raw_window_handle::XlibDisplayHandle;
 use std::{
@@ -16,11 +16,11 @@ use std::{
 use x11::{
     xcursor::XcursorLibraryLoadCursor,
     xlib::{
-        Display, XCloseDisplay, XColor, XConnectionNumber, XCreateBitmapFromData,
+        AnyPropertyType, Display, XCloseDisplay, XColor, XConnectionNumber, XCreateBitmapFromData,
         XCreatePixmapCursor, XDefaultScreen, XErrorEvent, XEvent, XFreeCursor, XFreePixmap,
-        XGetErrorText, XInternAtom, XNextEvent, XOpenDisplay, XPending, XResourceManagerString,
-        XRootWindow, XSetErrorHandler, XrmDestroyDatabase, XrmGetResource, XrmGetStringDatabase,
-        XrmValue,
+        XGetErrorText, XGetWindowProperty, XInternAtom, XNextEvent, XOpenDisplay, XPending,
+        XResourceManagerString, XRootWindow, XSetErrorHandler, XrmDestroyDatabase, XrmGetResource,
+        XrmGetStringDatabase, XrmValue,
     },
     xrandr::{
         XRRFreeCrtcInfo, XRRFreeScreenResources, XRRGetCrtcInfo, XRRGetScreenResourcesCurrent,
@@ -180,6 +180,42 @@ impl Connection {
             XRRFreeScreenResources(resources);
 
             max_rate
+        }
+    }
+
+    pub fn gtk_theme_variant(&self, window: u64) -> Option<SystemTheme> {
+        unsafe {
+            let mut atom_return = 0u64;
+            let mut format_return = 0i32;
+            let mut prop_return = null_mut();
+
+            let status = XGetWindowProperty(
+                self.display,
+                window,
+                self.atom(c"_GTK_THEME_VARIANT"),
+                0,
+                16,
+                0,
+                AnyPropertyType as c_ulong,
+                &mut atom_return,
+                &mut format_return,
+                &mut 0,
+                &mut 0,
+                &mut prop_return,
+            );
+
+            if status != 0 || format_return != 8 || atom_return != self.atom(c"UTF8_STRING") {
+                return None;
+            }
+
+            let string = CStr::from_ptr(prop_return as *const i8).to_str().ok()?;
+            if string.eq_ignore_ascii_case("dark") {
+                Some(SystemTheme::Dark)
+            } else if string.eq_ignore_ascii_case("light") {
+                Some(SystemTheme::Light)
+            } else {
+                None
+            }
         }
     }
 

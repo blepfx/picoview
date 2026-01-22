@@ -19,7 +19,7 @@
 |  - `WindowClose`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowFocus`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowScale`                                      | :ok:     | :ok:     | :ok:[^1] | Medium   |
-|  - `WindowTheme`                                      | :x:      | :x:      | :x:      | Low      |
+|  - `WindowTheme`                                      | :x:      | :x:      | :ok:     | Low      |
 |  - `WindowMove`                                       | :ok:     | :x:      | :ok:     | Low      |
 |  - `WindowResize`                                     | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowFrame`                                      | :ok:     | :ok:     | :ok:     | High     |

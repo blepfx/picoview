@@ -22,12 +22,12 @@ use x11::xlib::{
     CurrentTime, DestroyNotify, Expose, ExposureMask, FocusChangeMask, FocusIn, FocusOut,
     InputOutput, KeyPress, KeyPressMask, KeyRelease, KeyReleaseMask, LeaveNotify, LeaveWindowMask,
     MotionNotify, NoEventMask, NotifyNormal, PMaxSize, PMinSize, PSize, PointerMotionMask,
-    PropModeReplace, ReparentNotify, RevertToParent, StructureNotifyMask, XChangeProperty,
-    XChangeWindowAttributes, XClientMessageEvent, XConfigureWindow, XCreateColormap, XCreateWindow,
-    XDestroyWindow, XEvent, XFlush, XFree, XMapWindow, XSendEvent, XSetInputFocus,
-    XSetTransientForHint, XSetWMName, XSetWMNormalHints, XSetWMProtocols, XSetWindowAttributes,
-    XSizeHints, XStringListToTextProperty, XSync, XTextProperty, XUnmapWindow, XWarpPointer,
-    XWindowChanges,
+    PropModeReplace, PropertyChangeMask, PropertyNotify, ReparentNotify, RevertToParent,
+    StructureNotifyMask, XChangeProperty, XChangeWindowAttributes, XClientMessageEvent,
+    XConfigureWindow, XCreateColormap, XCreateWindow, XDestroyWindow, XEvent, XFlush, XFree,
+    XMapWindow, XSendEvent, XSetInputFocus, XSetTransientForHint, XSetWMName, XSetWMNormalHints,
+    XSetWMProtocols, XSetWindowAttributes, XSizeHints, XStringListToTextProperty, XSync,
+    XTextProperty, XUnmapWindow, XWarpPointer, XWindowChanges,
 };
 
 unsafe impl Send for WindowImpl {}
@@ -115,6 +115,7 @@ impl WindowImpl {
                     event_mask: ButtonPressMask
                         | ButtonReleaseMask
                         | StructureNotifyMask
+                        | PropertyChangeMask
                         | KeyPressMask
                         | KeyReleaseMask
                         | LeaveWindowMask
@@ -293,6 +294,10 @@ impl WindowImpl {
                 scale: self.connection.scale_dpi().map_or(1.0, |x| x / 96.0),
             });
 
+            self.send_event(Event::WindowTheme {
+                theme: self.connection.gtk_theme_variant(self.window_id),
+            });
+
             // main loop
             let mut next_frame = Instant::now();
             while !self.is_closed.get() {
@@ -345,6 +350,16 @@ impl WindowImpl {
                         self.send_event(Event::Wakeup);
                     }
                 }
+
+                PropertyNotify => {
+                    let event = event.property;
+                    if event.atom == self.connection.atom(c"_GTK_THEME_VARIANT") {
+                        self.send_event(Event::WindowTheme {
+                            theme: self.connection.gtk_theme_variant(self.window_id),
+                        });
+                    }
+                }
+
                 ReparentNotify => {
                     let event = event.reparent;
                     self.window_parent.set(event.parent);
