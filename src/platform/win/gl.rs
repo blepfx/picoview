@@ -3,7 +3,6 @@ use crate::Error;
 use std::{
     collections::HashSet,
     ffi::{CStr, c_char, c_void},
-    fmt::Debug,
     mem::{size_of, zeroed},
     ptr::{null, null_mut},
     sync::OnceLock,
@@ -51,6 +50,7 @@ const WGL_ALPHA_BITS_ARB: i32 = 0x201B;
 const WGL_DEPTH_BITS_ARB: i32 = 0x2022;
 const WGL_STENCIL_BITS_ARB: i32 = 0x2023;
 const WGL_FULL_ACCELERATION_ARB: i32 = 0x2027;
+const WGL_GENERIC_ACCELERATION_ARB: i32 = 0x2026;
 const WGL_TYPE_RGBA_ARB: i32 = 0x202B;
 const WGL_SAMPLE_BUFFERS_ARB: i32 = 0x2041;
 const WGL_SAMPLES_ARB: i32 = 0x2042;
@@ -115,19 +115,7 @@ impl GlContext {
     }
 }
 
-impl Debug for GlContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GlContext").finish()
-    }
-}
-
 impl crate::GlContext for GlContext {
-    fn swap_buffers(&self) {
-        unsafe {
-            SwapBuffers(self.hdc);
-        }
-    }
-
     fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
         unsafe {
             wglGetProcAddress(symbol.as_ptr() as *const _)
@@ -139,7 +127,11 @@ impl crate::GlContext for GlContext {
         }
     }
 
-    fn make_current(&self, current: bool) -> bool {
+    unsafe fn swap_buffers(&self) {
+        unsafe { SwapBuffers(self.hdc) };
+    }
+
+    unsafe fn make_current(&self, current: bool) -> bool {
         unsafe { wglMakeCurrent(self.hdc, if current { self.hglrc } else { null_mut() }) != 0 }
     }
 }
@@ -421,10 +413,10 @@ fn create_pixel_format_arb(
 
         let pixel_format_attribs = {
             let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
+
             #[rustfmt::skip]
             let mut pixel_format_attribs = vec![
                 WGL_DRAW_TO_WINDOW_ARB, 1,
-                WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB,
                 WGL_SUPPORT_OPENGL_ARB, 1,
                 WGL_DOUBLE_BUFFER_ARB, config.double_buffer as i32,
                 WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
@@ -435,6 +427,14 @@ fn create_pixel_format_arb(
                 WGL_DEPTH_BITS_ARB, depth as _,
                 WGL_STENCIL_BITS_ARB, stencil as _,
             ];
+
+            if config.force_hardware {
+                pixel_format_attribs
+                    .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB]);
+            } else {
+                pixel_format_attribs
+                    .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_GENERIC_ACCELERATION_ARB]);
+            }
 
             if ext.ext_multisample {
                 pixel_format_attribs.extend_from_slice(&[

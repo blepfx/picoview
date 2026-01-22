@@ -216,11 +216,7 @@ impl WindowImpl {
             }
 
             let gl_context = match options.opengl {
-                Some(config) => match GlContext::new(hwnd, config) {
-                    Ok(gl) => Some(gl),
-                    Err(_) if config.optional => None,
-                    Err(e) => return Err(e),
-                },
+                Some(config) => GlContext::new(hwnd, config).ok(),
                 None => None,
             };
 
@@ -336,6 +332,10 @@ impl PlatformWindow for WindowImpl {
 
     fn waker(&self) -> WindowWaker {
         WindowWaker(self.waker.clone())
+    }
+
+    fn opengl(&self) -> Option<&dyn crate::GlContext> {
+        self.gl_context.as_ref().map(|x| x as &dyn crate::GlContext)
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -538,7 +538,8 @@ unsafe extern "system" fn wnd_proc(
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
 
                 window.send_event_defer(Event::WindowMove {
-                    origin: Point { x, y },
+                    absolute: Point { x, y },
+                    relative: Point { x, y },
                 });
 
                 0
@@ -769,17 +770,11 @@ unsafe extern "system" fn wnd_proc(
 
             WM_USER_VSYNC => {
                 let modifiers = get_modifiers();
-
                 if window.state_current_modifiers.replace(modifiers) != modifiers {
                     window.send_event_defer(Event::KeyModifiers { modifiers });
                 }
 
-                window.send_event(Event::WindowFrame {
-                    gl: window
-                        .gl_context
-                        .as_ref()
-                        .map(|x| x as &dyn crate::GlContext),
-                });
+                window.send_event(Event::WindowFrame);
 
                 0
             }
