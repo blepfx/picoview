@@ -64,6 +64,8 @@ fn main() {
             },
 
             Event::MouseMove { relative, .. } => {
+                println!("{:?}", event);
+
                 if relative.x < -10.0 {
                     window.set_cursor_position(Point { x: 100.0, y: 100.0 });
                 }

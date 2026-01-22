@@ -8,9 +8,9 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSCursor, NSEventModifierFlags, NSHorizontalDirections, NSPasteboard, NSPasteboardTypeString,
-    NSVerticalDirections,
+    NSVerticalDirections, NSView,
 };
-use objc2_foundation::{NSArray, NSString};
+use objc2_foundation::{NSArray, NSPoint, NSString};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -280,4 +280,46 @@ pub fn keycode_to_key(key: u16) -> Option<Key> {
         0x7e => Key::ArrowUp,
         _ => return None,
     })
+}
+
+// NSWindow -> picoview (local)
+pub fn point_window_to_local(point: NSPoint, view: &NSView) -> NSPoint {
+    let scale = view.window().map(|w| w.backingScaleFactor()).unwrap_or(1.0);
+    view.convertPoint_fromView(NSPoint::new(point.x * scale, point.y * scale), None)
+}
+
+// NSWindow -> picoview (global)
+pub fn point_window_to_global(point: NSPoint, view: &NSView) -> NSPoint {
+    view.window()
+        .map(|window| {
+            let frame = window.screen().map(|s| s.frame()).unwrap_or_default();
+            let scale = window.backingScaleFactor();
+            let point = NSPoint::new(point.x * scale, point.y * scale);
+            let point = window.convertPointToScreen(point);
+
+            NSPoint::new(
+                point.x - frame.origin.x,
+                frame.size.height - (point.y - frame.origin.y),
+            )
+        })
+        .unwrap_or(point)
+}
+
+// picoview (local) -> NSScreen
+pub fn point_local_to_screen(point: NSPoint, view: &NSView) -> NSPoint {
+    view.window()
+        .map(|window| {
+            let frame = window.screen().map(|s| s.frame()).unwrap_or_default();
+            let scale = window.backingScaleFactor();
+
+            let point = NSPoint::new(point.x / scale, point.y / scale);
+            let point = view.convertPoint_toView(point, None);
+            let point = window.convertPointToScreen(point);
+
+            NSPoint::new(
+                point.x - frame.origin.x,
+                frame.size.height - (point.y - frame.origin.y),
+            )
+        })
+        .unwrap_or(point)
 }

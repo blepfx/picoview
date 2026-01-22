@@ -365,7 +365,7 @@ pub enum Event<'a> {
     /// [`Event::MouseMove`] events.
     MouseLeave,
 
-    /// The mouse cursor moved within the window.
+    /// The mouse cursor position has changed within the window.
     MouseMove {
         /// The position of the cursor relative to the window's client area.
         relative: Point,

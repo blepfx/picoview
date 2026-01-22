@@ -1,7 +1,10 @@
 use super::display::*;
 use super::util::{flags_to_modifiers, get_cursor, keycode_to_key, random_id};
 use crate::platform::mac::gl::GlContext;
-use crate::platform::mac::util::{get_clipboard_text, set_clipboard_text, spawn_detached};
+use crate::platform::mac::util::{
+    get_clipboard_text, point_local_to_screen, point_window_to_global, point_window_to_local,
+    set_clipboard_text, spawn_detached,
+};
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
     Error, Event, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
@@ -20,7 +23,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
-    NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSScreen, NSTrackingArea,
+    NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
     NSWindowDidResignKeyNotification, NSWindowStyleMask,
 };
@@ -37,23 +40,23 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 #[repr(C)]
-pub struct WindowView {
+pub struct WindowImpl {
     view: NSView,
 }
 
-struct WindowViewWaker {
-    weak: Weak<WindowView>,
+struct WindowWakerImpl {
+    weak: Weak<WindowImpl>,
 }
 
-unsafe impl Send for WindowViewWaker {}
-unsafe impl Sync for WindowViewWaker {}
+unsafe impl Send for WindowWakerImpl {}
+unsafe impl Sync for WindowWakerImpl {}
 
-struct WindowViewInner {
+struct WindowImplInner {
     _display_link: DisplayLink,
     gl_context: Option<GlContext>,
 
     application: RefCell<Option<Retained<NSApplication>>>,
-    waker: Arc<WindowViewWaker>,
+    waker: Arc<WindowWakerImpl>,
 
     event_queue: RefCell<VecDeque<Event<'static>>>,
     current_cursor: Cell<MouseCursor>,
@@ -64,38 +67,42 @@ struct WindowViewInner {
     is_closed: Cell<bool>,
 }
 
-unsafe impl RefEncode for WindowView {
+unsafe impl RefEncode for WindowImpl {
     const ENCODING_REF: Encoding = NSView::ENCODING_REF;
 }
 
-unsafe impl Message for WindowView {}
+unsafe impl Message for WindowImpl {}
 
-impl WindowView {
+impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
         let main_thread = MainThreadMarker::new()
             .ok_or_else(|| Error::PlatformError("not on main thread".into()))?;
 
         match mode {
-            OpenMode::Blocking => autoreleasepool(|_| unsafe {
-                let app = NSApp(main_thread);
-                app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+            OpenMode::Blocking => unsafe {
+                let app = autoreleasepool(|_| {
+                    let app = NSApp(main_thread);
+                    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-                let window = Self::create_window(&options, main_thread)?;
-                let view = Self::create_view(options, Some(app.clone()), main_thread)?;
+                    let window = Self::create_window(&options, main_thread)?;
+                    let view = Self::create_view(options, Some(app.clone()), main_thread)?;
 
-                window.setContentView(Some(&view.view));
-                window.makeFirstResponder(Some(&view.view));
+                    window.setContentView(Some(&view.view));
+                    window.makeFirstResponder(Some(&view.view));
 
-                // Set the window delegate to our view
-                // NSWindowDelegate has no required methods, so this is safe
-                window.setDelegate(Some(std::mem::transmute::<
-                    &WindowView,
-                    &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
-                >(&*view)));
+                    // Set the window delegate to our view
+                    // NSWindowDelegate has no required methods, so this is safe
+                    window.setDelegate(Some(std::mem::transmute::<
+                        &WindowImpl,
+                        &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
+                    >(&*view)));
+
+                    Ok(app)
+                })?;
 
                 app.run();
                 Ok(WindowWaker::default())
-            }),
+            },
 
             OpenMode::Transient(_) => {
                 todo!()
@@ -190,8 +197,8 @@ impl WindowView {
         );
 
         let view = unsafe {
-            let view: Allocated<WindowView> = msg_send![class, alloc];
-            let view: Retained<WindowView> = msg_send![view, initWithFrame: rect];
+            let view: Allocated<WindowImpl> = msg_send![class, alloc];
+            let view: Retained<WindowImpl> = msg_send![view, initWithFrame: rect];
 
             let tracking_area = NSTrackingArea::initWithRect_options_owner_userInfo(
                 NSTrackingArea::alloc(),
@@ -241,12 +248,12 @@ impl WindowView {
             }))?
         };
 
-        view.set_inner(Box::new(WindowViewInner {
+        view.set_inner(Box::new(WindowImplInner {
             _display_link: display_link,
             application: RefCell::new(blocking),
             gl_context,
 
-            waker: Arc::new(WindowViewWaker {
+            waker: Arc::new(WindowWakerImpl {
                 weak: Weak::from_retained(&view),
             }),
 
@@ -297,7 +304,27 @@ impl WindowView {
         }
     }
 
-    fn set_inner(&self, context: Box<WindowViewInner>) {
+    fn send_event_mouse_move(&self, position: CGPoint) {
+        let absolute = point_window_to_global(position, &self.view);
+        let relative = point_window_to_local(position, &self.view);
+
+        self.send_event_defer(Event::MouseMove {
+            relative: Point {
+                x: relative.x as f32,
+                y: relative.y as f32,
+            },
+            absolute: Point {
+                x: absolute.x as f32,
+                y: absolute.y as f32,
+            },
+        });
+    }
+
+    fn is_top_level(&self) -> bool {
+        self.inner().application.borrow().is_some()
+    }
+
+    fn set_inner(&self, context: Box<WindowImplInner>) {
         unsafe {
             self.view
                 .class()
@@ -308,19 +335,21 @@ impl WindowView {
         }
     }
 
-    fn inner(&self) -> &WindowViewInner {
+    fn inner(&self) -> &WindowImplInner {
         unsafe {
             let ivar = self
                 .view
                 .class()
                 .instance_variable(c"_context")
                 .unwrap_unchecked();
-            let context = *ivar.load::<*mut c_void>(&self.view) as *mut WindowViewInner;
+            let context = *ivar.load::<*mut c_void>(&self.view) as *mut WindowImplInner;
             assert!(!context.is_null());
             &*context
         }
     }
+}
 
+impl WindowImpl {
     // NSView
     unsafe extern "C" fn init_with_frame(&self, _cmd: Sel, rect: NSRect) -> Option<&Self> {
         unsafe { msg_send![super(self, NSView::class()), initWithFrame: rect] }
@@ -332,7 +361,7 @@ impl WindowView {
             let context = *class
                 .instance_variable(c"_context")
                 .unwrap_unchecked()
-                .load::<*mut c_void>(&self.view) as *mut WindowViewInner;
+                .load::<*mut c_void>(&self.view) as *mut WindowImplInner;
 
             // If we actually initialized before
             if !context.is_null() {
@@ -371,7 +400,7 @@ impl WindowView {
         Bool::NO
     }
 
-    unsafe extern "C" fn accepts_first_mouse(&self, _cmd: Sel, _event: *const NSEvent) -> Bool {
+    unsafe extern "C" fn accepts_first_mouse(&self, _cmd: Sel, _event: &NSEvent) -> Bool {
         Bool::YES
     }
 
@@ -393,7 +422,7 @@ impl WindowView {
         Bool::YES
     }
 
-    unsafe extern "C" fn key_down(&self, _cmd: Sel, event: *const NSEvent) {
+    unsafe extern "C" fn key_down(&self, _cmd: Sel, event: &NSEvent) {
         unsafe {
             let mut capture = false;
             if let Some(key) = keycode_to_key((*event).keyCode()) {
@@ -409,7 +438,7 @@ impl WindowView {
         }
     }
 
-    unsafe extern "C" fn key_up(&self, _cmd: Sel, event: *const NSEvent) {
+    unsafe extern "C" fn key_up(&self, _cmd: Sel, event: &NSEvent) {
         unsafe {
             let mut capture = false;
             if let Some(key) = keycode_to_key((*event).keyCode()) {
@@ -425,91 +454,70 @@ impl WindowView {
         }
     }
 
-    unsafe extern "C" fn flags_changed(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            self.send_event_defer(Event::KeyModifiers {
-                modifiers: flags_to_modifiers((*event).modifierFlags()),
-            });
+    unsafe extern "C" fn flags_changed(&self, _cmd: Sel, event: &NSEvent) {
+        self.send_event_defer(Event::KeyModifiers {
+            modifiers: flags_to_modifiers((*event).modifierFlags()),
+        });
+    }
+
+    unsafe extern "C" fn mouse_moved(&self, _cmd: Sel, event: &NSEvent) {
+        self.send_event_mouse_move(event.locationInWindow());
+    }
+
+    unsafe extern "C" fn mouse_down(&self, _cmd: Sel, event: &NSEvent) {
+        let button = match (*event).buttonNumber() {
+            0 => Some(MouseButton::Left),
+            1 => Some(MouseButton::Right),
+            2 => Some(MouseButton::Middle),
+            3 => Some(MouseButton::Back),
+            4 => Some(MouseButton::Forward),
+            _ => None,
+        };
+
+        self.send_event_mouse_move(event.locationInWindow());
+
+        if let Some(button) = button {
+            self.send_event_defer(Event::MouseDown { button });
+        }
+
+        if let Some(window) = self.view.window() {
+            window.makeFirstResponder(Some(&self.view));
         }
     }
 
-    unsafe extern "C" fn mouse_moved(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            let absolute = NSEvent::mouseLocation(); // TODO: fix flipped y coord
-            let relative = (*event).locationInWindow();
-            let relative = self.view.convertPoint_fromView(relative, None);
+    unsafe extern "C" fn mouse_up(&self, _cmd: Sel, event: &NSEvent) {
+        let button = match (*event).buttonNumber() {
+            0 => Some(MouseButton::Left),
+            1 => Some(MouseButton::Right),
+            2 => Some(MouseButton::Middle),
+            3 => Some(MouseButton::Back),
+            4 => Some(MouseButton::Forward),
+            _ => None,
+        };
 
-            self.send_event_defer(Event::MouseMove {
-                relative: Point {
-                    x: relative.x as f32,
-                    y: relative.y as f32,
-                },
-                absolute: Point {
-                    x: absolute.x as f32,
-                    y: absolute.y as f32,
-                },
-            });
+        self.send_event_mouse_move(event.locationInWindow());
+
+        if let Some(button) = button {
+            self.send_event_defer(Event::MouseUp { button });
         }
     }
 
-    unsafe extern "C" fn mouse_down(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            let button = match (*event).buttonNumber() {
-                0 => Some(MouseButton::Left),
-                1 => Some(MouseButton::Right),
-                2 => Some(MouseButton::Middle),
-                3 => Some(MouseButton::Back),
-                4 => Some(MouseButton::Forward),
-                _ => None,
-            };
-
-            if let Some(button) = button {
-                self.send_event_defer(Event::MouseDown { button });
-            }
-
-            if let Some(window) = self.view.window() {
-                window.makeFirstResponder(Some(&self.view));
-            }
-        }
-    }
-
-    unsafe extern "C" fn mouse_up(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            let button = match (*event).buttonNumber() {
-                0 => Some(MouseButton::Left),
-                1 => Some(MouseButton::Right),
-                2 => Some(MouseButton::Middle),
-                3 => Some(MouseButton::Back),
-                4 => Some(MouseButton::Forward),
-                _ => None,
-            };
-
-            if let Some(button) = button {
-                self.send_event_defer(Event::MouseUp { button });
-            }
-        }
-    }
-
-    unsafe extern "C" fn mouse_exited(&self, _cmd: Sel, _event: *const NSEvent) {
+    unsafe extern "C" fn mouse_exited(&self, _cmd: Sel, event: &NSEvent) {
+        self.send_event_mouse_move(event.locationInWindow());
         self.send_event_defer(Event::MouseLeave);
     }
 
-    unsafe extern "C" fn scroll_wheel(&self, _cmd: Sel, event: *const NSEvent) {
-        unsafe {
-            if event.is_null() {
-                return;
-            }
+    unsafe extern "C" fn scroll_wheel(&self, _cmd: Sel, event: &NSEvent) {
+        let mut x = -event.scrollingDeltaX() as f32;
+        let mut y = event.scrollingDeltaY() as f32;
 
-            let mut x = -(*event).scrollingDeltaX() as f32;
-            let mut y = (*event).scrollingDeltaY() as f32;
-
-            if (*event).hasPreciseScrollingDeltas() {
-                x /= 10.0;
-                y /= 10.0;
-            }
-
-            self.send_event_defer(Event::MouseScroll { x, y });
+        if event.hasPreciseScrollingDeltas() {
+            x /= 10.0;
+            y /= 10.0;
         }
+
+        self.send_event_mouse_move(event.locationInWindow());
+        self.send_event_defer(Event::MouseScroll { x, y });
     }
 
     unsafe extern "C" fn draw_rect(&self, _cmd: Sel, rect: NSRect) {
@@ -760,7 +768,7 @@ impl WindowView {
     }
 }
 
-impl PlatformWindow for WindowView {
+impl PlatformWindow for WindowImpl {
     fn opengl(&self) -> Option<&dyn crate::GlContext> {
         self.inner()
             .gl_context
@@ -789,8 +797,9 @@ impl PlatformWindow for WindowView {
     }
 
     fn set_title(&self, title: &str) {
-        let is_blocking = self.inner().application.borrow().is_some();
-        if is_blocking && let Some(window) = self.view.window() {
+        if self.is_top_level()
+            && let Some(window) = self.view.window()
+        {
             window.setTitle(&NSString::from_str(title));
         }
     }
@@ -813,28 +822,16 @@ impl PlatformWindow for WindowView {
     }
 
     fn set_cursor_position(&self, point: Point) {
-        unsafe {
-            if let Some(window) = self.view.window() {
-                let main_thread = MainThreadMarker::new_unchecked();
-                let window_position = self
-                    .view
-                    .convertPoint_toView(NSPoint::new(point.x as _, point.y as _), None);
-                let screen_position = window.convertPointToScreen(window_position);
-                let screen_height = NSScreen::mainScreen(main_thread)
-                    .map(|screen| screen.frame().size.height)
-                    .unwrap_or_default();
-
-                CGWarpMouseCursorPosition(NSPoint::new(
-                    screen_position.x as _,
-                    (screen_height - screen_position.y) as _,
-                ));
-            }
-        }
+        CGWarpMouseCursorPosition(point_local_to_screen(
+            NSPoint::new(point.x as _, point.y as _),
+            &self.view,
+        ));
     }
 
     fn set_size(&self, size: Size) {
-        let is_blocking = self.inner().application.borrow().is_some();
-        if is_blocking && let Some(window) = self.view.window() {
+        if self.is_top_level()
+            && let Some(window) = self.view.window()
+        {
             window.setContentSize(CGSize {
                 width: size.width as _,
                 height: size.height as _,
@@ -848,8 +845,9 @@ impl PlatformWindow for WindowView {
     }
 
     fn set_position(&self, point: Point) {
-        let is_blocking = self.inner().application.borrow().is_some();
-        if is_blocking && let Some(window) = self.view.window() {
+        if self.is_top_level()
+            && let Some(window) = self.view.window()
+        {
             window.setFrameOrigin(CGPoint {
                 x: point.x as _,
                 y: point.y as _,
@@ -863,8 +861,9 @@ impl PlatformWindow for WindowView {
     }
 
     fn set_visible(&self, visible: bool) {
-        let is_blocking = self.inner().application.borrow().is_some();
-        if is_blocking && let Some(window) = self.view.window() {
+        if self.is_top_level()
+            && let Some(window) = self.view.window()
+        {
             if visible {
                 window.orderFront(None);
             } else {
@@ -900,7 +899,7 @@ impl PlatformWindow for WindowView {
     }
 }
 
-impl PlatformWaker for WindowViewWaker {
+impl PlatformWaker for WindowWakerImpl {
     fn wakeup(&self) -> Result<(), WakeupError> {
         if let Some(view) = self.weak.load() {
             unsafe {
