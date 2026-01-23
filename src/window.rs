@@ -140,7 +140,8 @@ impl<'a> Window<'a> {
 }
 
 impl WindowWaker {
-    /// Wake up the associated window, emitting a
+    /// Wake up the associated window in a fire-and-forget fashion (without
+    /// waiting for the event handler to actually process the event). Emits a
     /// [`Event::Wakeup`](`crate::Event::Wakeup`) event.
     ///
     /// Returns [`WakeupError::Disconnected`] if the window has already been
