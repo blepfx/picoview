@@ -24,6 +24,7 @@ pub enum OpenMode {
 }
 
 impl OpenMode {
+    #[allow(dead_code)]
     pub fn handle(&self) -> Option<rwh_06::RawWindowHandle> {
         match self {
             OpenMode::Blocking => None,

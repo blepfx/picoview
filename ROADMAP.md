@@ -7,7 +7,7 @@
 |  - Top-level decorated windows                        | :ok:     | :ok:     | :ok:     | High     |
 |  - Top-level undecorated windows                      | :ok:     | :x:      | :ok:     | Medium   |
 |  - Embedded parented windows                          | :ok:     | :ok:     | :ok:     | High     |
-|  - Transient parented windows                         | :ok:     | :x:      | :ok:     | Low      |
+|  - Transient parented windows                         | :ok:     | :ok:     | :ok:     | Low      |
 | Window events                                         |          |          |          |          |
 |  - `MouseUp`                                          | :ok:     | :ok:     | :ok:     | High     |
 |  - `MouseDown`                                        | :ok:     | :ok:     | :ok:     | High     |
@@ -37,7 +37,7 @@
 | User resizable                                        | :ok:     | :ok:     | :ok:     | High     |
 | Set title                                             | :ok:     | :ok:     | :ok:     | Medium   |
 | Set visibility                                        | :ok:     | :ok:     | :ok:     | Medium   |
-| Close window                                          | :ok:     | :x:      | :ok:     | High     |
+| Close window                                          | :ok:     | :ok:     | :ok:     | High     |
 | Capture keyboard events[^4]                           | :ok:     | :ok:     | :ok:     | High     |
 | Open browser/explorer                                 | :ok:     | :ok:     | :ok:     | Medium   |
 | Cursor icons                                          | :ok:     | :ok:     | :ok:     | Medium   |
@@ -48,3 +48,16 @@
 [^3]: XPresent seems unreliable; we fallback to doing manual frame events with poll timeout (synced to XRandR provided refresh rates)
 [^4]: Some DAWs consume key events meant for plugins, keyboard capturing is meant to avoid that when needed
 [^5]: Broken on XWayland, seems to be a Wayland limitation?
+
+## Known issues
+- MacOS:
+    - Window/event/size positioning is all over the place due to differences in coordinate systems.
+    - Needed an API to create a `Size` from os-dependent units for proper interoperation with VST3/CLAP APIs
+    - Crashes when closing any window (even transient).
+- Windows:
+    - Some cursor icons are not supported, fallbacks used.
+    - `Event::WindowMove` reports wrong absolute position - better WindowMove api needed.
+- X11:
+    - No clipboard support yet (really hard to implement)
+    - `WindowWaker::wakeup` does not report an error if the window is closed.
+     

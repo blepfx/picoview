@@ -1,5 +1,8 @@
 use picoview::{Event, Key, MouseCursor, Point, Size, WindowBuilder};
-use std::time::{Duration, Instant};
+use std::{
+    mem::replace,
+    time::{Duration, Instant},
+};
 
 fn main() {
     WindowBuilder::new(|window| {
@@ -13,6 +16,8 @@ fn main() {
         Box::new(move |event| match event {
             Event::WindowFrame => {
                 let current = Instant::now();
+                let last = replace(&mut last, current);
+
                 let passed = |d| {
                     (current - start) >= Duration::from_millis(d)
                         && (last - start) < Duration::from_millis(d)
@@ -26,7 +31,10 @@ fn main() {
                         height: 300,
                     });
 
+                    println!("Child window requested");
                     let waker = WindowBuilder::new(|window| {
+                        println!("Child window opened");
+
                         Box::new(move |event| {
                             if let Event::KeyDown { key, capture } = event {
                                 if key == Key::Enter {
@@ -35,12 +43,12 @@ fn main() {
                                     *capture = true;
                                     window.close();
                                 }
-                            } else if !matches!(event, Event::WindowFrame { .. }) {
+                            } else if !matches!(event, Event::WindowFrame) {
                                 println!("child {:?}", event);
                             }
                         })
                     })
-                    .open_embedded(window)
+                    .open_transient(window)
                     .expect("failed to open a child window");
 
                     waker.wakeup().unwrap();
@@ -50,8 +58,6 @@ fn main() {
                     println!("Closing window");
                     window.close();
                 }
-
-                last = current;
             }
 
             // you have to handle WindowClose explicitly to close the window

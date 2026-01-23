@@ -25,7 +25,7 @@ use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
     NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
-    NSWindowDidResignKeyNotification, NSWindowStyleMask,
+    NSWindowDidResignKeyNotification, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_core_graphics::CGWarpMouseCursorPosition;
@@ -65,6 +65,7 @@ struct WindowImplInner {
     event_handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
 
     is_closed: Cell<bool>,
+    is_embedded: bool,
 }
 
 unsafe impl RefEncode for WindowImpl {
@@ -85,7 +86,7 @@ impl WindowImpl {
                     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
                     let window = Self::create_window(&options, main_thread)?;
-                    let view = Self::create_view(options, Some(app.clone()), main_thread)?;
+                    let view = Self::create_view(options, Some(app.clone()), false, main_thread)?;
 
                     window.setContentView(Some(&view.view));
                     window.makeFirstResponder(Some(&view.view));
@@ -104,9 +105,33 @@ impl WindowImpl {
                 Ok(WindowWaker::default())
             },
 
-            OpenMode::Transient(_) => {
-                todo!()
-            }
+            OpenMode::Transient(parent) => autoreleasepool(|_| unsafe {
+                let parent_view = match parent {
+                    rwh_06::RawWindowHandle::AppKit(window) => {
+                        window.ns_view.as_ptr() as *mut NSView
+                    }
+                    _ => return Err(Error::InvalidParent),
+                };
+
+                let window = Self::create_window(&options, main_thread)?;
+                let view = Self::create_view(options, None, false, main_thread)?;
+
+                window.setContentView(Some(&view.view));
+                window.makeFirstResponder(Some(&view.view));
+
+                // Set the window delegate to our view
+                // NSWindowDelegate has no required methods, so this is safe
+                window.setDelegate(Some(std::mem::transmute::<
+                    &WindowImpl,
+                    &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
+                >(&*view)));
+
+                if let Some(window) = (*parent_view).window() {
+                    window.addChildWindow_ordered(&window, NSWindowOrderingMode::Above);
+                }
+
+                Ok(view.waker())
+            }),
 
             OpenMode::Embedded(parent) => autoreleasepool(|_| unsafe {
                 let parent_view = match parent {
@@ -116,7 +141,7 @@ impl WindowImpl {
                     _ => return Err(Error::InvalidParent),
                 };
 
-                let view = Self::create_view(options, None, main_thread)?;
+                let view = Self::create_view(options, None, true, main_thread)?;
                 (*parent_view).addSubview(&view.view);
                 Ok(view.waker())
             }),
@@ -181,6 +206,7 @@ impl WindowImpl {
     unsafe fn create_view(
         options: WindowBuilder,
         blocking: Option<Retained<NSApplication>>,
+        is_embedded: bool,
         main_thread: MainThreadMarker,
     ) -> Result<Retained<Self>, Error> {
         let class = Self::register_class()?;
@@ -262,6 +288,7 @@ impl WindowImpl {
 
             current_cursor: Cell::new(MouseCursor::Default),
             is_closed: Cell::new(false),
+            is_embedded,
         }));
 
         // SAFETY: we erase the lifetime of our OsWindowView; it should be safe to do so
@@ -320,10 +347,6 @@ impl WindowImpl {
         });
     }
 
-    fn is_top_level(&self) -> bool {
-        self.inner().application.borrow().is_some()
-    }
-
     fn set_inner(&self, context: Box<WindowImplInner>) {
         unsafe {
             self.view
@@ -345,6 +368,14 @@ impl WindowImpl {
             let context = *ivar.load::<*mut c_void>(&self.view) as *mut WindowImplInner;
             assert!(!context.is_null());
             &*context
+        }
+    }
+
+    fn own_window(&self) -> Option<Retained<NSWindow>> {
+        if self.inner().is_embedded {
+            None
+        } else {
+            self.view.window()
         }
     }
 }
@@ -781,15 +812,15 @@ impl PlatformWindow for WindowImpl {
             return;
         }
 
-        if let Some(app) = self.inner().application.take() {
-            if let Some(window) = self.view.window() {
-                window.close();
-            }
-
-            app.stop(Some(&app));
+        if let Some(window) = self.own_window() {
+            window.close();
         }
 
         self.view.removeFromSuperview();
+
+        if let Some(app) = self.inner().application.take() {
+            app.stop(Some(&app));
+        }
     }
 
     fn waker(&self) -> WindowWaker {
@@ -797,9 +828,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_title(&self, title: &str) {
-        if self.is_top_level()
-            && let Some(window) = self.view.window()
-        {
+        if let Some(window) = self.own_window() {
             window.setTitle(&NSString::from_str(title));
         }
     }
@@ -829,9 +858,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_size(&self, size: Size) {
-        if self.is_top_level()
-            && let Some(window) = self.view.window()
-        {
+        if let Some(window) = self.own_window() {
             window.setContentSize(CGSize {
                 width: size.width as _,
                 height: size.height as _,
@@ -845,9 +872,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_position(&self, point: Point) {
-        if self.is_top_level()
-            && let Some(window) = self.view.window()
-        {
+        if let Some(window) = self.own_window() {
             window.setFrameOrigin(CGPoint {
                 x: point.x as _,
                 y: point.y as _,
@@ -861,9 +886,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_visible(&self, visible: bool) {
-        if self.is_top_level()
-            && let Some(window) = self.view.window()
-        {
+        if let Some(window) = self.own_window() {
             if visible {
                 window.orderFront(None);
             } else {
