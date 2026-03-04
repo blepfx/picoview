@@ -10,6 +10,7 @@ use crate::{
     Error, Event, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
     WindowWaker, rwh_06,
 };
+use block2::RcBlock;
 use objc2::rc::{Allocated, Retained, Weak, autoreleasepool};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
@@ -23,8 +24,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
-    NSDragOperation, NSDraggingInfo, NSEvent, NSPasteboardTypeFileURL, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
+    NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventType, NSPasteboardTypeFileURL,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
     NSWindowDidResignKeyNotification, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
@@ -36,7 +37,7 @@ use objc2_foundation::{
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::{CString, c_void};
-use std::ptr::NonNull;
+use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
 
 #[repr(C)]
@@ -53,6 +54,8 @@ unsafe impl Sync for WindowWakerImpl {}
 
 struct WindowImplInner {
     _display_link: DisplayLink,
+    key_event_monitor: Option<Retained<AnyObject>>,
+
     gl_context: Option<GlContext>,
 
     application: RefCell<Option<Retained<NSApplication>>>,
@@ -274,8 +277,43 @@ impl WindowImpl {
             }))?
         };
 
+        // https://github.com/Tremus/CPLUG/blob/master/src/cplug_extensions/window_osx.m#L278
+        let key_event_monitor = unsafe {
+            let view = Weak::from_retained(&view);
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                NSEventMask::KeyDown | NSEventMask::KeyUp,
+                &RcBlock::new(|event| {
+                    let event: &NSEvent = &*event;
+                    let mut capture = false;
+
+                    if let Some(view) = view.load() {
+                        if let Some(key) = keycode_to_key(event.keyCode()) {
+                            if event.r#type() == NSEventType::KeyDown {
+                                view.send_event(Event::KeyDown {
+                                    key,
+                                    capture: &mut capture,
+                                });
+                            } else {
+                                view.send_event(Event::KeyUp {
+                                    key,
+                                    capture: &mut capture,
+                                });
+                            }
+                        }
+                    }
+
+                    match capture {
+                        true => null_mut(),
+                        false => event.as_ptr(),
+                    }
+                }),
+            )
+        };
+
         view.set_inner(Box::new(WindowImplInner {
             _display_link: display_link,
+            key_event_monitor,
+
             application: RefCell::new(blocking),
             gl_context,
 
@@ -402,6 +440,11 @@ impl WindowImpl {
 
                 // Remove notification observers we registered earlier
                 NSNotificationCenter::defaultCenter().removeObserver(&self.view);
+
+                // Remove our key event monitor if we set one up
+                if let Some(monitor) = &self.inner().key_event_monitor.take() {
+                    NSEvent::removeMonitor(monitor);
+                }
 
                 // Dealloc our context box
                 drop(Box::from_raw(context));
