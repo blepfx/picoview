@@ -282,29 +282,29 @@ impl WindowImpl {
             let view = Weak::from_retained(&view);
             NSEvent::addLocalMonitorForEventsMatchingMask_handler(
                 NSEventMask::KeyDown | NSEventMask::KeyUp,
-                &RcBlock::new(|event| {
-                    let event: &NSEvent = &*event;
+                &RcBlock::new(move |event: NonNull<NSEvent>| {
+                    let event = &*event.as_ptr();
                     let mut capture = false;
 
-                    if let Some(view) = view.load() {
-                        if let Some(key) = keycode_to_key(event.keyCode()) {
-                            if event.r#type() == NSEventType::KeyDown {
-                                view.send_event(Event::KeyDown {
-                                    key,
-                                    capture: &mut capture,
-                                });
-                            } else {
-                                view.send_event(Event::KeyUp {
-                                    key,
-                                    capture: &mut capture,
-                                });
-                            }
+                    if let Some(view) = view.load()
+                        && let Some(key) = keycode_to_key(event.keyCode())
+                    {
+                        if event.r#type() == NSEventType::KeyDown {
+                            view.send_event(Event::KeyDown {
+                                key,
+                                capture: &mut capture,
+                            });
+                        } else {
+                            view.send_event(Event::KeyUp {
+                                key,
+                                capture: &mut capture,
+                            });
                         }
                     }
 
                     match capture {
                         true => null_mut(),
-                        false => event.as_ptr(),
+                        false => NonNull::from(event).as_ptr(),
                     }
                 }),
             )
@@ -434,20 +434,22 @@ impl WindowImpl {
 
             // If we actually initialized before
             if !context.is_null() {
+                let mut inner = Box::from_raw(context);
+
                 // we need to drop this before WindowView gets dropped, see the safety comment
                 // at the handler initialization place
-                self.inner().event_handler.take();
+                inner.event_handler.take();
 
                 // Remove notification observers we registered earlier
                 NSNotificationCenter::defaultCenter().removeObserver(&self.view);
 
                 // Remove our key event monitor if we set one up
-                if let Some(monitor) = &self.inner().key_event_monitor.take() {
-                    NSEvent::removeMonitor(monitor);
+                if let Some(monitor) = inner.key_event_monitor.take() {
+                    NSEvent::removeMonitor(&monitor);
                 }
 
-                // Dealloc our context box
-                drop(Box::from_raw(context));
+                // DO NOT USE self.inner() after this
+                drop(inner);
             }
 
             let _: () = msg_send![super(self, NSView::class()), dealloc];
@@ -494,38 +496,6 @@ impl WindowImpl {
 
     unsafe extern "C" fn is_flipped(&self, _cmd: Sel) -> Bool {
         Bool::YES
-    }
-
-    unsafe extern "C" fn key_down(&self, _cmd: Sel, event: &NSEvent) {
-        unsafe {
-            let mut capture = false;
-            if let Some(key) = keycode_to_key((*event).keyCode()) {
-                self.send_event(Event::KeyDown {
-                    key,
-                    capture: &mut capture,
-                });
-            }
-
-            if !capture {
-                msg_send![super(self, NSView::class()), keyDown: event]
-            }
-        }
-    }
-
-    unsafe extern "C" fn key_up(&self, _cmd: Sel, event: &NSEvent) {
-        unsafe {
-            let mut capture = false;
-            if let Some(key) = keycode_to_key((*event).keyCode()) {
-                self.send_event(Event::KeyUp {
-                    key,
-                    capture: &mut capture,
-                });
-            }
-
-            if !capture {
-                msg_send![super(self, NSView::class()), keyUp: event]
-            }
-        }
     }
 
     unsafe extern "C" fn flags_changed(&self, _cmd: Sel, event: &NSEvent) {
@@ -723,14 +693,6 @@ impl WindowImpl {
             builder.add_method(
                 sel!(isFlipped),
                 Self::is_flipped as unsafe extern "C" fn(_, _) -> _,
-            );
-            builder.add_method(
-                sel!(keyDown:),
-                Self::key_down as unsafe extern "C" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(keyUp:),
-                Self::key_up as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
                 sel!(flagsChanged:),
