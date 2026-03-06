@@ -2,10 +2,12 @@ use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
 use crate::platform::x11::connection::ATOM_PICOVIEW_WAKEUP;
-use crate::platform::x11::util::{VisualConfig, get_cursor, get_position_relative};
+use crate::platform::x11::util::{
+    VisualConfig, get_position_relative, query_cursor, request_clipboard,
+};
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
-    Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
+    Event, Modifiers, MouseButton, MouseCursor, OpenError, Point, Size, WakeupError, Window,
     WindowBuilder, WindowFactory, WindowWaker, rwh_06,
 };
 use libc::c_ulong;
@@ -15,20 +17,7 @@ use std::mem::zeroed;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use x11::xlib::{
-    AllocNone, Button1Mask, Button2Mask, Button3Mask, Button4Mask, Button5Mask, ButtonPress,
-    ButtonPressMask, ButtonRelease, ButtonReleaseMask, CWBorderPixel, CWColormap, CWCursor,
-    CWEventMask, CWHeight, CWWidth, CWX, CWY, ClientMessage, ClientMessageData, ConfigureNotify,
-    CurrentTime, DestroyNotify, Expose, ExposureMask, FocusChangeMask, FocusIn, FocusOut,
-    InputOutput, KeyPress, KeyPressMask, KeyRelease, KeyReleaseMask, LeaveNotify, LeaveWindowMask,
-    MotionNotify, NoEventMask, NotifyNormal, PMaxSize, PMinSize, PSize, PointerMotionMask,
-    PropModeReplace, PropertyChangeMask, PropertyNotify, ReparentNotify, RevertToParent,
-    StructureNotifyMask, XChangeProperty, XChangeWindowAttributes, XClientMessageEvent,
-    XConfigureWindow, XCreateColormap, XCreateWindow, XDestroyWindow, XEvent, XFlush, XFree,
-    XMapWindow, XSendEvent, XSetInputFocus, XSetTransientForHint, XSetWMName, XSetWMNormalHints,
-    XSetWMProtocols, XSetWindowAttributes, XSizeHints, XStringListToTextProperty, XSync,
-    XTextProperty, XUnmapWindow, XWarpPointer, XWindowChanges,
-};
+use x11::xlib::*;
 
 unsafe impl Send for WindowImpl {}
 
@@ -52,6 +41,8 @@ pub struct WindowImpl {
     last_window_visible: Cell<bool>,
     last_window_focused: Cell<bool>,
 
+    clipboard_text_selection: RefCell<CString>,
+
     #[allow(clippy::type_complexity)]
     handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
     gl_context: Option<GlContext>,
@@ -63,14 +54,14 @@ pub struct WindowWakerImpl {
 }
 
 impl WindowImpl {
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, OpenError> {
         unsafe {
             let connection = Connection::create()?;
             let window_parent = match mode.handle() {
                 None => connection.default_root(),
                 Some(rwh_06::RawWindowHandle::Xlib(handle)) => handle.window,
                 Some(rwh_06::RawWindowHandle::Xcb(handle)) => handle.window.get() as u64,
-                _ => return Err(Error::InvalidParent),
+                _ => return Err(OpenError::InvalidParent),
             };
 
             let visual_info = options
@@ -163,7 +154,7 @@ impl WindowImpl {
             // window title stuff
             {
                 let title =
-                    CString::new(options.title).map_err(|e| Error::PlatformError(e.to_string()))?;
+                    CString::new(options.title).map_err(|e| OpenError::Platform(e.to_string()))?;
                 let mut text = XTextProperty { ..zeroed() };
                 let status =
                     XStringListToTextProperty(&mut (title.as_ptr() as *mut _), 1, &mut text);
@@ -233,7 +224,7 @@ impl WindowImpl {
                 Duration::from_secs_f64(1.0 / connection.refresh_rate().unwrap_or(60.0));
 
             XSync(connection.display(), 0);
-            connection.check_error().map_err(Error::PlatformError)?;
+            connection.check_error().map_err(OpenError::Platform)?;
 
             let window = Box::new(Self {
                 window_id,
@@ -258,6 +249,8 @@ impl WindowImpl {
                 last_window_focused: Cell::new(false),
                 last_cursor_in_bounds: Cell::new(false),
 
+                clipboard_text_selection: RefCell::new(CString::default()),
+
                 handler: RefCell::new(None),
                 gl_context,
             });
@@ -277,7 +270,7 @@ impl WindowImpl {
     }
 
     #[allow(clippy::boxed_local)]
-    fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), Error> {
+    fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), OpenError> {
         unsafe {
             // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so
             // because:
@@ -294,10 +287,6 @@ impl WindowImpl {
                 scale: self.connection.scale_dpi().map_or(1.0, |x| x / 96.0),
             });
 
-            self.send_event(Event::WindowTheme {
-                theme: self.connection.gtk_theme_variant(self.window_id),
-            });
-
             // main loop
             let mut next_frame = Instant::now();
             while !self.is_closed.get() {
@@ -312,9 +301,7 @@ impl WindowImpl {
                 };
 
                 XFlush(self.connection.display());
-                self.connection
-                    .check_error()
-                    .map_err(Error::PlatformError)?;
+                self.connection.check_error().map_err(OpenError::Platform)?;
 
                 let num_events = self.connection.wait_for_events(Some(wait_time))?;
                 for _ in 0..num_events {
@@ -348,15 +335,6 @@ impl WindowImpl {
                         && event.message_type == self.connection.atom(c"PICOVIEW_WAKEUP") as _
                     {
                         self.send_event(Event::Wakeup);
-                    }
-                }
-
-                PropertyNotify => {
-                    let event = event.property;
-                    if event.atom == self.connection.atom(c"_GTK_THEME_VARIANT") {
-                        self.send_event(Event::WindowTheme {
-                            theme: self.connection.gtk_theme_variant(self.window_id),
-                        });
                     }
                 }
 
@@ -395,6 +373,7 @@ impl WindowImpl {
                         self.send_event(Event::WindowResize { size });
                     }
                 }
+
                 ButtonPress | ButtonRelease => {
                     let event = event.button;
                     if event.type_ == ButtonPress {
@@ -566,6 +545,64 @@ impl WindowImpl {
                         h: event.height.try_into().unwrap_or(0),
                     });
                 }
+
+                SelectionRequest => {
+                    let text = self.clipboard_text_selection.borrow();
+                    let event = event.selection_request;
+                    if event.selection != self.connection.atom(c"CLIPBOARD") {
+                        return;
+                    }
+
+                    if event.property != 0 {
+                        if event.target == self.connection.atom(c"TARGETS") {
+                            let atom = self.connection.atom(c"UTF8_STRING") as u32;
+                            XChangeProperty(
+                                self.connection.display(),
+                                event.requestor,
+                                event.property,
+                                XA_ATOM,
+                                32,
+                                PropModeReplace,
+                                &atom as *const _ as *const u8,
+                                1,
+                            );
+                        } else if event.target == self.connection.atom(c"UTF8_STRING")
+                            || event.target == XA_STRING
+                        {
+                            XChangeProperty(
+                                self.connection.display(),
+                                event.requestor,
+                                event.property,
+                                event.target,
+                                8,
+                                PropModeReplace,
+                                text.as_bytes().as_ptr(),
+                                text.as_bytes().len() as i32,
+                            );
+                        }
+                    }
+
+                    XSendEvent(
+                        self.connection.display(),
+                        event.requestor,
+                        0,
+                        NoEventMask,
+                        &mut XEvent {
+                            selection: x11::xlib::XSelectionEvent {
+                                type_: SelectionNotify,
+                                serial: 0,
+                                send_event: 1,
+                                display: event.display,
+                                requestor: event.requestor,
+                                selection: event.selection,
+                                target: event.target,
+                                property: event.property,
+                                time: event.time,
+                            },
+                        },
+                    );
+                }
+
                 _ => {}
             }
         }
@@ -583,7 +620,7 @@ impl WindowImpl {
         }
     }
 
-    fn destroy(mut self) -> Result<(), Error> {
+    fn destroy(mut self) -> Result<(), OpenError> {
         unsafe {
             // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends
             // on WindowImpl
@@ -598,9 +635,7 @@ impl WindowImpl {
             }
 
             XSync(self.connection.display(), 0);
-            self.connection
-                .check_error()
-                .map_err(Error::PlatformError)?;
+            self.connection.check_error().map_err(OpenError::Platform)?;
 
             Ok(())
         }
@@ -616,7 +651,7 @@ impl crate::GlContext for WindowImpl {
             .get_proc_address(name)
     }
 
-    unsafe fn make_current(&self, current: bool) -> bool {
+    unsafe fn make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
         unsafe {
             self.gl_context
                 .as_ref()
@@ -686,7 +721,7 @@ impl PlatformWindow for WindowImpl {
         }
 
         unsafe {
-            let cursor = get_cursor(&self.connection, cursor);
+            let cursor = query_cursor(&self.connection, cursor);
             if cursor != 0 {
                 XChangeWindowAttributes(
                     self.connection.display(),
@@ -834,11 +869,40 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn get_clipboard_text(&self) -> Option<String> {
+        // TODO: verify if correct
+        for atom in [self.connection.atom(c"UTF8_STRING"), XA_STRING] {
+            if let Some(text) = request_clipboard(
+                &self.connection,
+                self.window_id,
+                atom,
+                |data, size| unsafe {
+                    let slice = std::slice::from_raw_parts(data, size);
+                    String::from_utf8_lossy(slice).into_owned()
+                },
+            ) {
+                return Some(text);
+            }
+        }
+
         None
     }
 
-    fn set_clipboard_text(&self, _text: &str) -> bool {
-        false
+    fn set_clipboard_text(&self, text: &str) -> bool {
+        *self.clipboard_text_selection.borrow_mut() = match CString::new(text) {
+            Ok(cstring) => cstring,
+            Err(_) => return false,
+        };
+
+        unsafe {
+            XSetSelectionOwner(
+                self.connection.display(),
+                self.connection.atom(c"CLIPBOARD"),
+                self.window_id,
+                CurrentTime,
+            );
+        }
+
+        true
     }
 }
 

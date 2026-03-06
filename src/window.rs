@@ -1,5 +1,5 @@
 use crate::{
-    Error, Event, GlConfig, GlContext, MouseCursor, Point, Size, WakeupError, platform, rwh_06,
+    Event, GlConfig, GlContext, MouseCursor, OpenError, Point, Size, WakeupError, platform, rwh_06,
 };
 use std::{fmt::Debug, ops::Range, sync::Arc};
 
@@ -254,7 +254,7 @@ impl WindowBuilder {
     ///
     /// Returns `Err` if the window could not be created or if an error occurred
     /// during the lifetime of the window.
-    pub fn open_blocking(self) -> Result<(), Error> {
+    pub fn open_blocking(self) -> Result<(), OpenError> {
         unsafe { platform::open_window(self, platform::OpenMode::Blocking).map(|_| ()) }
     }
 
@@ -270,13 +270,13 @@ impl WindowBuilder {
     /// Returns `Err` if the window could not be created or if the parent window
     /// handle is invalid, otherwise returns a [`WindowWaker`] associated with
     /// the newly created window.
-    pub fn open_transient<W>(self, parent: W) -> Result<WindowWaker, Error>
+    pub fn open_transient<W>(self, parent: W) -> Result<WindowWaker, OpenError>
     where
         W: rwh_06::HasWindowHandle,
     {
         let handle = parent
             .window_handle()
-            .map_err(|_| Error::InvalidParent)?
+            .map_err(|_| OpenError::InvalidParent)?
             .as_raw();
 
         unsafe { platform::open_window(self, platform::OpenMode::Transient(handle)) }
@@ -293,13 +293,13 @@ impl WindowBuilder {
     /// Returns `Err` if the window could not be created or if the parent window
     /// handle is invalid, otherwise returns a [`WindowWaker`] associated with
     /// the newly created window.
-    pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, Error>
+    pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, OpenError>
     where
         W: rwh_06::HasWindowHandle,
     {
         let handle = parent
             .window_handle()
-            .map_err(|_| Error::InvalidParent)?
+            .map_err(|_| OpenError::InvalidParent)?
             .as_raw();
 
         unsafe { platform::open_window(self, platform::OpenMode::Embedded(handle)) }

@@ -25,9 +25,7 @@ fn main() {
 
         Box::new(move |event| match event {
             Event::WindowFrame => unsafe {
-                if !gl.make_current(true) {
-                    return;
-                }
+                gl.make_current(true).unwrap();
 
                 (clear_color)(0.25, 0.25, 0.25, 0.5);
                 (clear)(0x00004000);
@@ -60,7 +58,7 @@ fn main() {
                 (end)();
 
                 gl.swap_buffers();
-                gl.make_current(false);
+                gl.make_current(false).unwrap();
             },
 
             Event::MouseMove { relative, .. } => {

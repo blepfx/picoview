@@ -1,19 +1,13 @@
 use crate::{Key, Modifiers, MouseCursor, Point, platform::x11::connection::Connection};
 use libc::{c_int, c_uint};
 use std::{
-    ffi::{CStr, c_ulong},
+    ffi::{CStr, c_char, c_ulong},
     mem::zeroed,
     os::unix::process::CommandExt,
     process::{Command, Stdio},
     ptr::null_mut,
 };
-use x11::{
-    glx::GLXFBConfig,
-    xlib::{
-        ControlMask, CopyFromParent, LockMask, Mod1Mask, Mod2Mask, Mod4Mask, ShiftMask, TrueColor,
-        Visual, XMatchVisualInfo, XTranslateCoordinates, XVisualInfo,
-    },
-};
+use x11::{glx::GLXFBConfig, xlib::*};
 
 pub fn open_url(path: &str) -> bool {
     if spawn_detached(Command::new("xdg-open").arg(path)).is_ok() {
@@ -199,8 +193,8 @@ pub fn keymask_to_mods(mods: c_uint) -> Modifiers {
     ret
 }
 
-pub fn get_cursor(conn: &Connection, cursor: MouseCursor) -> u64 {
-    fn load(conn: &Connection, names: &[&'static CStr]) -> u64 {
+pub fn query_cursor(conn: &Connection, cursor: MouseCursor) -> c_ulong {
+    fn query(conn: &Connection, names: &[&'static CStr]) -> c_ulong {
         for name in names {
             let cursor = conn.cursor(Some(*name));
             if cursor != 0 {
@@ -212,39 +206,39 @@ pub fn get_cursor(conn: &Connection, cursor: MouseCursor) -> u64 {
     }
 
     match cursor {
-        MouseCursor::Default => load(conn, &[c"left_ptr"]),
-        MouseCursor::Hand => load(conn, &[c"hand2", c"hand1"]),
-        MouseCursor::HandGrabbing => load(conn, &[c"closedhand", c"grabbing"]),
-        MouseCursor::Help => load(conn, &[c"question_arrow"]),
+        MouseCursor::Default => query(conn, &[c"left_ptr"]),
+        MouseCursor::Hand => query(conn, &[c"hand2", c"hand1"]),
+        MouseCursor::HandGrabbing => query(conn, &[c"closedhand", c"grabbing"]),
+        MouseCursor::Help => query(conn, &[c"question_arrow"]),
         MouseCursor::Hidden => conn.cursor(None),
-        MouseCursor::Text => load(conn, &[c"text", c"xterm"]),
-        MouseCursor::VerticalText => load(conn, &[c"vertical-text"]),
-        MouseCursor::Working => load(conn, &[c"watch"]),
-        MouseCursor::PtrWorking => load(conn, &[c"left_ptr_watch"]),
-        MouseCursor::NotAllowed => load(conn, &[c"crossed_circle"]),
-        MouseCursor::PtrNotAllowed => load(conn, &[c"no-drop", c"crossed_circle"]),
-        MouseCursor::ZoomIn => load(conn, &[c"zoom-in"]),
-        MouseCursor::ZoomOut => load(conn, &[c"zoom-out"]),
-        MouseCursor::Alias => load(conn, &[c"link"]),
-        MouseCursor::Copy => load(conn, &[c"copy"]),
-        MouseCursor::Move => load(conn, &[c"move"]),
-        MouseCursor::AllScroll => load(conn, &[c"all-scroll"]),
-        MouseCursor::Cell => load(conn, &[c"plus"]),
-        MouseCursor::Crosshair => load(conn, &[c"crosshair"]),
-        MouseCursor::EResize => load(conn, &[c"right_side"]),
-        MouseCursor::NResize => load(conn, &[c"top_side"]),
-        MouseCursor::NeResize => load(conn, &[c"top_right_corner"]),
-        MouseCursor::NwResize => load(conn, &[c"top_left_corner"]),
-        MouseCursor::SResize => load(conn, &[c"bottom_side"]),
-        MouseCursor::SeResize => load(conn, &[c"bottom_right_corner"]),
-        MouseCursor::SwResize => load(conn, &[c"bottom_left_corner"]),
-        MouseCursor::WResize => load(conn, &[c"left_side"]),
-        MouseCursor::EwResize => load(conn, &[c"h_double_arrow"]),
-        MouseCursor::NsResize => load(conn, &[c"v_double_arrow"]),
-        MouseCursor::NwseResize => load(conn, &[c"bd_double_arrow", c"size_bdiag"]),
-        MouseCursor::NeswResize => load(conn, &[c"fd_double_arrow", c"size_fdiag"]),
-        MouseCursor::ColResize => load(conn, &[c"split_h", c"h_double_arrow"]),
-        MouseCursor::RowResize => load(conn, &[c"split_v", c"v_double_arrow"]),
+        MouseCursor::Text => query(conn, &[c"text", c"xterm"]),
+        MouseCursor::VerticalText => query(conn, &[c"vertical-text"]),
+        MouseCursor::Working => query(conn, &[c"watch"]),
+        MouseCursor::PtrWorking => query(conn, &[c"left_ptr_watch"]),
+        MouseCursor::NotAllowed => query(conn, &[c"crossed_circle"]),
+        MouseCursor::PtrNotAllowed => query(conn, &[c"no-drop", c"crossed_circle"]),
+        MouseCursor::ZoomIn => query(conn, &[c"zoom-in"]),
+        MouseCursor::ZoomOut => query(conn, &[c"zoom-out"]),
+        MouseCursor::Alias => query(conn, &[c"link"]),
+        MouseCursor::Copy => query(conn, &[c"copy"]),
+        MouseCursor::Move => query(conn, &[c"move"]),
+        MouseCursor::AllScroll => query(conn, &[c"all-scroll"]),
+        MouseCursor::Cell => query(conn, &[c"plus"]),
+        MouseCursor::Crosshair => query(conn, &[c"crosshair"]),
+        MouseCursor::EResize => query(conn, &[c"right_side"]),
+        MouseCursor::NResize => query(conn, &[c"top_side"]),
+        MouseCursor::NeResize => query(conn, &[c"top_right_corner"]),
+        MouseCursor::NwResize => query(conn, &[c"top_left_corner"]),
+        MouseCursor::SResize => query(conn, &[c"bottom_side"]),
+        MouseCursor::SeResize => query(conn, &[c"bottom_right_corner"]),
+        MouseCursor::SwResize => query(conn, &[c"bottom_left_corner"]),
+        MouseCursor::WResize => query(conn, &[c"left_side"]),
+        MouseCursor::EwResize => query(conn, &[c"h_double_arrow"]),
+        MouseCursor::NsResize => query(conn, &[c"v_double_arrow"]),
+        MouseCursor::NwseResize => query(conn, &[c"bd_double_arrow", c"size_bdiag"]),
+        MouseCursor::NeswResize => query(conn, &[c"fd_double_arrow", c"size_fdiag"]),
+        MouseCursor::ColResize => query(conn, &[c"split_h", c"h_double_arrow"]),
+        MouseCursor::RowResize => query(conn, &[c"split_v", c"v_double_arrow"]),
     }
 }
 
@@ -276,6 +270,65 @@ pub fn get_position_relative(
         })
     } else {
         None
+    }
+}
+
+pub fn request_clipboard<R>(
+    conn: &Connection,
+    window: c_ulong,
+    atom: c_ulong,
+    f: impl FnOnce(*mut u8, usize) -> R,
+) -> Option<R> {
+    unsafe extern "C" fn event_filter(_: *mut Display, e: *mut XEvent, _: *mut c_char) -> c_int {
+        unsafe { ((*e).type_ == SelectionNotify) as _ }
+    }
+
+    unsafe {
+        XConvertSelection(
+            conn.display(),
+            conn.atom(c"CLIPBOARD"),
+            atom,
+            conn.atom(c"XSEL_DATA"),
+            window,
+            CurrentTime,
+        );
+
+        XSync(conn.display(), 0);
+
+        let event = {
+            let mut event = zeroed();
+            XIfEvent(conn.display(), &mut event, Some(event_filter), null_mut());
+            event.selection
+        };
+
+        if event.property == 0 || event.selection != conn.atom(c"CLIPBOARD") {
+            return None;
+        }
+
+        let mut target = 0;
+        let mut format = 0;
+        let mut size = 0;
+        let mut nitems = 0;
+        let mut data = null_mut();
+
+        XGetWindowProperty(
+            conn.display(),
+            event.requestor,
+            event.property,
+            0,
+            !0,
+            0,
+            AnyPropertyType as _,
+            &mut target,
+            &mut format,
+            &mut size,
+            &mut nitems,
+            &mut data,
+        );
+
+        let result = f(data, size as usize);
+        XFree(data as *mut _);
+        Some(result)
     }
 }
 

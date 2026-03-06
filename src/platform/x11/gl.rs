@@ -1,6 +1,6 @@
 use super::connection::Connection;
 use crate::platform::x11::util::VisualConfig;
-use crate::{Error, GlConfig, GlVersion};
+use crate::{GlConfig, GlVersion, MakeCurrentError, OpenError};
 use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
 use std::os::raw::{c_int, c_ulong};
@@ -37,11 +37,11 @@ pub struct GlContextScope<'a> {
 impl GlContext {
     pub unsafe fn get_version_info(
         connection: &Connection,
-    ) -> Result<(u8, u8, HashSet<&'static str>), Error> {
+    ) -> Result<(u8, u8, HashSet<&'static str>), OpenError> {
         unsafe {
             let (mut major, mut minor) = (0, 0);
             if glXQueryVersion(connection.display(), &mut major, &mut minor) == 0 {
-                return Err(Error::OpenGlError("glXQueryVersion failed".into()));
+                return Err(OpenError::OpenGl("glXQueryVersion failed".into()));
             }
 
             let extensions = glXGetClientString(connection.display(), GLX_EXTENSIONS);
@@ -53,7 +53,7 @@ impl GlContext {
                 HashSet::new()
             };
 
-            connection.check_error().map_err(Error::OpenGlError)?;
+            connection.check_error().map_err(OpenError::OpenGl)?;
             Ok((major as u8, minor as u8, extensions))
         }
     }
@@ -62,7 +62,7 @@ impl GlContext {
         connection: &Connection,
         config: &GlConfig,
         transparent: bool,
-    ) -> Result<VisualConfig, Error> {
+    ) -> Result<VisualConfig, OpenError> {
         unsafe {
             let (major, minor, extensions) = Self::get_version_info(connection)?;
             let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
@@ -121,7 +121,7 @@ impl GlContext {
             );
 
             if n_configs <= 0 || fb_config_list.is_null() {
-                return Err(Error::OpenGlError("no matching config".into()));
+                return Err(OpenError::OpenGl("no matching config".into()));
             }
 
             let mut preferred_config = 0;
@@ -158,9 +158,9 @@ impl GlContext {
         window: c_ulong,
         config: GlConfig,
         fb_config: GLXFBConfig,
-    ) -> Result<GlContext, Error> {
+    ) -> Result<GlContext, OpenError> {
         if fb_config.is_null() {
-            return Err(Error::OpenGlError("no matching config".into()));
+            return Err(OpenError::OpenGl("no matching config".into()));
         }
 
         unsafe {
@@ -212,7 +212,7 @@ impl GlContext {
                         arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
                         0,
                     ],
-                    _ => return Err(Error::OpenGlError("No ES support extension".into())),
+                    _ => return Err(OpenError::OpenGl("No ES support extension".into())),
                 };
 
                 glXCreateContextAttribsARB(
@@ -225,7 +225,7 @@ impl GlContext {
             } else {
                 let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
                 if fb_visual.is_null() {
-                    return Err(Error::OpenGlError(
+                    return Err(OpenError::OpenGl(
                         "glXGetVisualFromFBConfig returned null".into(),
                     ));
                 }
@@ -237,7 +237,7 @@ impl GlContext {
             };
 
             if context.is_null() {
-                return Err(Error::OpenGlError("GLX context creation error".into()));
+                return Err(OpenError::OpenGl("GLX context creation error".into()));
             }
 
             if ext_swap_control {
@@ -254,7 +254,7 @@ impl GlContext {
             }
 
             XSync(connection.display(), 0);
-            connection.check_error().map_err(Error::OpenGlError)?;
+            connection.check_error().map_err(OpenError::OpenGl)?;
 
             Ok(GlContext { window, context })
         }
@@ -290,7 +290,7 @@ impl<'a> crate::GlContext for GlContextScope<'a> {
         }
     }
 
-    unsafe fn make_current(&self, current: bool) -> bool {
+    unsafe fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         unsafe {
             let result = {
                 if current {
@@ -304,7 +304,11 @@ impl<'a> crate::GlContext for GlContextScope<'a> {
                 }
             };
 
-            result != 0
+            if result == 0 {
+                Err(MakeCurrentError)
+            } else {
+                Ok(())
+            }
         }
     }
 }

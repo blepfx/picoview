@@ -3,6 +3,10 @@ use std::{
     fmt::Debug,
 };
 
+/// An error that can occur when making an OpenGL context current or not-current
+#[derive(Debug)]
+pub struct MakeCurrentError;
+
 /// A requested OpenGL version
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlVersion {
@@ -110,7 +114,7 @@ pub trait GlContext {
     /// # Safety
     /// Making contexts current and uncurrent is inherently unsafe as it can
     /// lead to undefined behavior if misused.
-    unsafe fn make_current(&self, current: bool) -> bool;
+    unsafe fn make_current(&self, current: bool) -> Result<(), MakeCurrentError>;
 
     /// Swap the front and back buffers
     ///

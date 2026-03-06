@@ -1,4 +1,4 @@
-use crate::{Error, SystemTheme};
+use crate::OpenError;
 use libc::c_ulong;
 use raw_window_handle::XlibDisplayHandle;
 use std::{
@@ -16,11 +16,11 @@ use std::{
 use x11::{
     xcursor::XcursorLibraryLoadCursor,
     xlib::{
-        AnyPropertyType, Display, XCloseDisplay, XColor, XConnectionNumber, XCreateBitmapFromData,
+        Display, XCloseDisplay, XColor, XConnectionNumber, XCreateBitmapFromData,
         XCreatePixmapCursor, XDefaultScreen, XErrorEvent, XEvent, XFreeCursor, XFreePixmap,
-        XGetErrorText, XGetWindowProperty, XInternAtom, XNextEvent, XOpenDisplay, XPending,
-        XResourceManagerString, XRootWindow, XSetErrorHandler, XrmDestroyDatabase, XrmGetResource,
-        XrmGetStringDatabase, XrmValue,
+        XGetErrorText, XInternAtom, XNextEvent, XOpenDisplay, XPending, XResourceManagerString,
+        XRootWindow, XSetErrorHandler, XrmDestroyDatabase, XrmGetResource, XrmGetStringDatabase,
+        XrmValue,
     },
     xrandr::{
         XRRFreeCrtcInfo, XRRFreeScreenResources, XRRGetCrtcInfo, XRRGetScreenResourcesCurrent,
@@ -43,11 +43,11 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn create() -> Result<Self, Error> {
+    pub fn create() -> Result<Self, OpenError> {
         unsafe {
             let display = XOpenDisplay(std::ptr::null());
             if display.is_null() {
-                return Err(Error::PlatformError("Failed to open X11 display".into()));
+                return Err(OpenError::Platform("Failed to open X11 display".into()));
             }
 
             XSetErrorHandler(Some(error_handler));
@@ -183,42 +183,6 @@ impl Connection {
         }
     }
 
-    pub fn gtk_theme_variant(&self, window: u64) -> Option<SystemTheme> {
-        unsafe {
-            let mut atom_return = 0u64;
-            let mut format_return = 0i32;
-            let mut prop_return = null_mut();
-
-            let status = XGetWindowProperty(
-                self.display,
-                window,
-                self.atom(c"_GTK_THEME_VARIANT"),
-                0,
-                16,
-                0,
-                AnyPropertyType as c_ulong,
-                &mut atom_return,
-                &mut format_return,
-                &mut 0,
-                &mut 0,
-                &mut prop_return,
-            );
-
-            if status != 0 || format_return != 8 || atom_return != self.atom(c"UTF8_STRING") {
-                return None;
-            }
-
-            let string = CStr::from_ptr(prop_return as *const i8).to_str().ok()?;
-            if string.eq_ignore_ascii_case("dark") {
-                Some(SystemTheme::Dark)
-            } else if string.eq_ignore_ascii_case("light") {
-                Some(SystemTheme::Light)
-            } else {
-                None
-            }
-        }
-    }
-
     pub fn display_handle(&self) -> XlibDisplayHandle {
         XlibDisplayHandle::new(NonNull::new(self.display as *mut _), self.screen)
     }
@@ -271,11 +235,11 @@ impl Connection {
             .or_insert_with(|| unsafe { XInternAtom(self.display, atom.as_ptr(), 0) })
     }
 
-    pub fn next_event(&self) -> Result<XEvent, Error> {
+    pub fn next_event(&self) -> Result<XEvent, OpenError> {
         unsafe {
             let mut event = XEvent { type_: 0 };
             if XNextEvent(self.display, &mut event) != 0 {
-                return Err(Error::PlatformError(
+                return Err(OpenError::Platform(
                     self.check_error()
                         .err()
                         .unwrap_or_else(|| "unknown error".to_owned()),
@@ -286,7 +250,7 @@ impl Connection {
         }
     }
 
-    pub fn wait_for_events(&self, timeout: Option<Duration>) -> Result<u32, Error> {
+    pub fn wait_for_events(&self, timeout: Option<Duration>) -> Result<u32, OpenError> {
         unsafe {
             let timespec = timeout.map(|timeout| libc::timespec {
                 tv_sec: timeout.as_secs() as _,
@@ -305,7 +269,7 @@ impl Connection {
             );
 
             if result == -1 {
-                return Err(Error::PlatformError(
+                return Err(OpenError::Platform(
                     std::io::Error::last_os_error().to_string(),
                 ));
             }

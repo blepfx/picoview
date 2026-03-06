@@ -53,16 +53,6 @@ pub enum MouseCursor {
     RowResize,
 }
 
-/// The system theme (light or dark mode).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SystemTheme {
-    /// Light mode
-    Light,
-
-    /// Dark mode
-    Dark,
-}
-
 bitflags! {
     /// Key modifier flags that are tracked separately from key events
     #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -309,12 +299,6 @@ pub enum Event<'a> {
         scale: f32,
     },
 
-    /// The system theme (light or dark mode) changed.
-    WindowTheme {
-        /// The new system theme, None if unset/unknown
-        theme: Option<SystemTheme>,
-    },
-
     /// The window was resized.
     WindowResize {
         /// The new physical size of the window's client area.
@@ -439,12 +423,12 @@ pub enum Event<'a> {
 
 /// An error that can occur during the creation or lifetime of a window.
 #[derive(Debug)]
-pub enum Error {
+pub enum OpenError {
     /// A platform-specific error occurred.
-    PlatformError(String),
+    Platform(String),
 
     /// Failed to create an OpenGL context
-    OpenGlError(String),
+    OpenGl(String),
 
     /// The parent window passed was invalid.
     InvalidParent,
