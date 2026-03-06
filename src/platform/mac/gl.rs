@@ -1,6 +1,6 @@
 #![allow(deprecated)] // i love you apple <3
 
-use crate::{Error, GlConfig, GlVersion};
+use crate::{GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, rc::Retained};
 use objc2_app_kit::{NSOpenGLContext, NSOpenGLPixelFormat, NSOpenGLView, NSView};
 use objc2_core_foundation::{CFBundle, CFRetained, CFString};
@@ -14,11 +14,15 @@ pub struct GlContext {
 }
 
 impl GlContext {
-    pub fn new(parent: &NSView, config: GlConfig, mtm: MainThreadMarker) -> Result<Self, Error> {
+    pub fn new(
+        parent: &NSView,
+        config: GlConfig,
+        mtm: MainThreadMarker,
+    ) -> Result<Self, WindowError> {
         let version = match config.version {
             GlVersion::Core(major, minor) => {
                 if (major, minor) > (4, 1) {
-                    return Err(Error::OpenGlError(
+                    return Err(WindowError::OpenGl(
                         "macOS only supports OpenGL up to version 4.1".into(),
                     ));
                 } else if (major, minor) > (3, 2) {
@@ -29,7 +33,7 @@ impl GlContext {
             }
             GlVersion::Compat(_, _) => objc2_app_kit::NSOpenGLProfileVersionLegacy,
             GlVersion::ES(_, _) => {
-                return Err(Error::OpenGlError(
+                return Err(WindowError::OpenGl(
                     "macOS does not support OpenGL ES contexts".into(),
                 ));
             }
@@ -77,7 +81,7 @@ impl GlContext {
                 NSOpenGLPixelFormat::alloc(),
                 NonNull::new_unchecked(attrs.as_ptr() as *mut _),
             )
-            .ok_or_else(|| Error::OpenGlError("Failed to create NSOpenGLPixelFormat".into()))?
+            .ok_or_else(|| WindowError::OpenGl("Failed to create NSOpenGLPixelFormat".into()))?
         };
 
         let view = {
@@ -86,7 +90,7 @@ impl GlContext {
                 parent.frame(),
                 Some(&pixel_format),
             )
-            .ok_or_else(|| Error::OpenGlError("Failed to create NSOpenGLView".into()))?
+            .ok_or_else(|| WindowError::OpenGl("Failed to create NSOpenGLView".into()))?
         };
 
         view.setWantsBestResolutionOpenGLSurface(true);
@@ -95,7 +99,7 @@ impl GlContext {
         parent.addSubview(&view);
 
         let context = view.openGLContext().ok_or_else(|| {
-            Error::OpenGlError("Failed to get NSOpenGLContext from NSOpenGLView".into())
+            WindowError::OpenGl("Failed to get NSOpenGLContext from NSOpenGLView".into())
         })?;
 
         unsafe {
@@ -105,7 +109,9 @@ impl GlContext {
 
         let bundle = {
             CFBundle::bundle_with_identifier(Some(&CFString::from_static_str("com.apple.opengl")))
-                .ok_or_else(|| Error::OpenGlError("Failed to get main CFBundle for OpenGL".into()))?
+                .ok_or_else(|| {
+                WindowError::OpenGl("Failed to get main CFBundle for OpenGL".into())
+            })?
         };
 
         Ok(Self {
@@ -123,25 +129,24 @@ impl GlContext {
 
         self.view.setNeedsDisplay(true);
     }
-}
 
-impl crate::GlContext for GlContext {
-    unsafe fn make_current(&self, current: bool) -> bool {
+    pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         if current {
             self.context.makeCurrentContext();
         } else {
             NSOpenGLContext::clearCurrentContext();
         }
 
-        true
+        Ok(())
     }
 
-    unsafe fn swap_buffers(&self) {
+    pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         self.context.flushBuffer();
-        self.view.setNeedsDisplay(true); // TODO: do we need this?
+        self.view.setNeedsDisplay(true); // TODO: do we need this?  
+        Ok(())
     }
 
-    fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
+    pub fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
         match name.to_str() {
             Err(_) => std::ptr::null(),
             Ok(name) => {

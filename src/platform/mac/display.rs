@@ -1,4 +1,3 @@
-use crate::Error;
 use objc2_core_foundation::{
     CFRetained, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, kCFRunLoopCommonModes,
 };
@@ -6,6 +5,8 @@ use objc2_core_video::{CVDisplayLink, CVOptionFlags, CVReturn, CVTimeStamp};
 use std::ffi::c_void;
 use std::ptr::{NonNull, null_mut};
 use std::rc::Rc;
+
+use crate::WindowError;
 
 extern "C-unwind" fn callback(
     _display_link: NonNull<CVDisplayLink>,
@@ -52,7 +53,7 @@ pub struct DisplayLink {
 
 impl DisplayLink {
     #[allow(deprecated)] // smh
-    pub fn new(runner: Box<dyn Fn()>) -> Result<DisplayLink, Error> {
+    pub fn new(runner: Box<dyn Fn()>) -> Result<DisplayLink, WindowError> {
         unsafe {
             let state = Rc::new(DisplayState { runner });
             let mut context = CFRunLoopSourceContext {
@@ -69,9 +70,9 @@ impl DisplayLink {
             };
 
             let source = CFRunLoopSource::new(None, 0, &mut context)
-                .ok_or_else(|| Error::PlatformError("CFRunLoopSource::new".to_owned()))?;
+                .ok_or_else(|| WindowError::Platform("CFRunLoopSource::new".to_owned()))?;
             let run_loop = CFRunLoop::main()
-                .ok_or_else(|| Error::PlatformError("CFRunLoop::main".to_owned()))?;
+                .ok_or_else(|| WindowError::Platform("CFRunLoop::main".to_owned()))?;
             run_loop.add_source(Some(&source), kCFRunLoopCommonModes);
 
             let mut link = null_mut();
@@ -79,7 +80,7 @@ impl DisplayLink {
                 CVDisplayLink::create_with_active_cg_displays(NonNull::from_mut(&mut link));
 
             if result != 0 || link.is_null() {
-                return Err(Error::PlatformError(format!(
+                return Err(WindowError::Platform(format!(
                     "CVDisplayLink::create_with_active_cg_displays: {}",
                     result
                 )));
@@ -90,7 +91,7 @@ impl DisplayLink {
             let result =
                 link.set_output_callback(Some(callback), &*source as *const _ as *mut c_void);
             if result != 0 {
-                return Err(Error::PlatformError(format!(
+                return Err(WindowError::Platform(format!(
                     "CVDisplayLink::set_output_callback: {}",
                     result
                 )));
@@ -98,7 +99,7 @@ impl DisplayLink {
 
             let result = link.start();
             if result != 0 {
-                return Err(Error::PlatformError(format!(
+                return Err(WindowError::Platform(format!(
                     "CVDisplayLink::start: {}",
                     result
                 )));

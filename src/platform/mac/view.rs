@@ -7,7 +7,7 @@ use crate::platform::mac::util::{
 };
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
-    Error, Event, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
+    Event, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder, WindowError,
     WindowWaker, rwh_06,
 };
 use block2::RcBlock;
@@ -78,9 +78,9 @@ unsafe impl RefEncode for WindowImpl {
 unsafe impl Message for WindowImpl {}
 
 impl WindowImpl {
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
         let main_thread = MainThreadMarker::new()
-            .ok_or_else(|| Error::PlatformError("not on main thread".into()))?;
+            .ok_or_else(|| WindowError::Platform("not on main thread".into()))?;
 
         match mode {
             OpenMode::Blocking => unsafe {
@@ -113,7 +113,7 @@ impl WindowImpl {
                     rwh_06::RawWindowHandle::AppKit(window) => {
                         window.ns_view.as_ptr() as *mut NSView
                     }
-                    _ => return Err(Error::InvalidParent),
+                    _ => return Err(WindowError::InvalidParent),
                 };
 
                 let window = Self::create_window(&options, main_thread)?;
@@ -123,7 +123,7 @@ impl WindowImpl {
                 window.makeFirstResponder(Some(&view.view));
 
                 // Set the window delegate to our view
-                // NSWindowDelegate has no required methods, so this is safe
+                // NSWindowDelegate has no required methods, so this is safeWindow
                 window.setDelegate(Some(std::mem::transmute::<
                     &WindowImpl,
                     &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
@@ -141,7 +141,7 @@ impl WindowImpl {
                     rwh_06::RawWindowHandle::AppKit(window) => {
                         window.ns_view.as_ptr() as *mut NSView
                     }
-                    _ => return Err(Error::InvalidParent),
+                    _ => return Err(WindowError::InvalidParent),
                 };
 
                 let view = Self::create_view(options, None, true, main_thread)?;
@@ -154,7 +154,7 @@ impl WindowImpl {
     unsafe fn create_window(
         options: &WindowBuilder,
         main_thread: MainThreadMarker,
-    ) -> Result<Retained<NSWindow>, Error> {
+    ) -> Result<Retained<NSWindow>, WindowError> {
         unsafe {
             let rect = NSRect::new(
                 NSPoint::new(
@@ -211,7 +211,7 @@ impl WindowImpl {
         blocking: Option<Retained<NSApplication>>,
         is_embedded: bool,
         main_thread: MainThreadMarker,
-    ) -> Result<Retained<Self>, Error> {
+    ) -> Result<Retained<Self>, WindowError> {
         let class = Self::register_class()?;
 
         let rect = NSRect::new(
@@ -649,13 +649,17 @@ impl WindowImpl {
         Bool::NO
     }
 
-    fn register_class() -> Result<&'static AnyClass, Error> {
+    fn register_class() -> Result<&'static AnyClass, WindowError> {
         let class_name =
             CString::new(format!("picoview-{}", random_id())).expect("unexpected nul terminator?");
 
         let mut builder = match ClassBuilder::new(&class_name, NSView::class()) {
             Some(builder) => builder,
-            None => return Err(Error::PlatformError("Failed to register class".to_string())),
+            None => {
+                return Err(WindowError::Platform(
+                    "Failed to register class".to_string(),
+                ));
+            }
         };
 
         builder.add_ivar::<*mut c_void>(c"_context");
@@ -805,13 +809,6 @@ impl WindowImpl {
 }
 
 impl PlatformWindow for WindowImpl {
-    fn opengl(&self) -> Option<&dyn crate::GlContext> {
-        self.inner()
-            .gl_context
-            .as_ref()
-            .map(|x| x as &dyn crate::GlContext)
-    }
-
     fn close(&self) {
         if self.inner().is_closed.replace(true) {
             return;
@@ -925,6 +922,34 @@ impl PlatformWindow for WindowImpl {
     fn display_handle(&self) -> rwh_06::RawDisplayHandle {
         rwh_06::RawDisplayHandle::AppKit(rwh_06::AppKitDisplayHandle::new())
     }
+
+    fn is_opengl_supported(&self) -> bool {
+        self.inner().gl_context.is_some()
+    }
+
+    fn opengl_swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
+        self.inner()
+            .gl_context
+            .as_ref()
+            .expect("opengl not supported")
+            .swap_buffers()
+    }
+
+    fn opengl_make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
+        self.inner()
+            .gl_context
+            .as_ref()
+            .expect("opengl not supported")
+            .make_current(current)
+    }
+
+    fn opengl_get_proc_address(&self, name: &std::ffi::CStr) -> *const c_void {
+        self.inner()
+            .gl_context
+            .as_ref()
+            .expect("opengl not supported")
+            .get_proc_address(name)
+    }
 }
 
 impl PlatformWaker for WindowWakerImpl {
@@ -941,7 +966,7 @@ impl PlatformWaker for WindowWakerImpl {
 
             Ok(())
         } else {
-            Err(WakeupError::Disconnected)
+            Err(WakeupError)
         }
     }
 }
