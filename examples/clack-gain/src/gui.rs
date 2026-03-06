@@ -27,7 +27,7 @@ impl GainPluginGui {
                 Event::WindowFrame => unsafe {
                     let time = start.elapsed().as_secs_f32();
 
-                    gl.make_current(true);
+                    gl.make_current(true).unwrap();
 
                     (clear_color)(
                         (time + 0.0).sin().abs(),
@@ -37,8 +37,8 @@ impl GainPluginGui {
                     );
                     (clear)(0x00004000);
 
-                    gl.swap_buffers();
-                    gl.make_current(false);
+                    gl.swap_buffers().unwrap();
+                    gl.make_current(false).unwrap();
                 },
 
                 Event::Wakeup | Event::WindowClose => {

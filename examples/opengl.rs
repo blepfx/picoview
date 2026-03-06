@@ -57,7 +57,7 @@ fn main() {
 
                 (end)();
 
-                gl.swap_buffers();
+                gl.swap_buffers().unwrap();
                 gl.make_current(false).unwrap();
             },
 
