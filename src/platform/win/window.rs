@@ -7,8 +7,8 @@ use super::{
     },
 };
 use crate::{
-    Error, Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
-    WindowBuilder, WindowWaker,
+    Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
+    WindowError, WindowWaker,
     platform::{
         OpenMode, PlatformWaker, PlatformWindow,
         win::{util::window_size_from_client_size, vsync::VSyncCallback},
@@ -107,13 +107,13 @@ impl WindowImpl {
         unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as *const () as isize }
     }
 
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, Error> {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
         unsafe {
             let shared = Win32Shared::get()?;
             let parent = match mode.handle() {
                 None => null_mut(),
                 Some(rwh_06::RawWindowHandle::Win32(window)) => window.hwnd.get() as HWND,
-                Some(_) => return Err(Error::InvalidParent),
+                Some(_) => return Err(WindowError::InvalidParent),
             };
 
             if let OpenMode::Blocking = mode {
@@ -334,10 +334,6 @@ impl PlatformWindow for WindowImpl {
         WindowWaker(self.waker.clone())
     }
 
-    fn opengl(&self) -> Option<&dyn crate::GlContext> {
-        self.gl_context.as_ref().map(|x| x as &dyn crate::GlContext)
-    }
-
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
         unsafe {
             let mut handle = rwh_06::Win32WindowHandle::new(NonZeroIsize::new_unchecked(
@@ -495,6 +491,31 @@ impl PlatformWindow for WindowImpl {
 
         false
     }
+
+    fn is_opengl_supported(&self) -> bool {
+        self.gl_context.is_some()
+    }
+
+    fn opengl_swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
+        self.gl_context
+            .as_ref()
+            .expect("opengl not supported")
+            .swap_buffers()
+    }
+
+    fn opengl_make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
+        self.gl_context
+            .as_ref()
+            .expect("opengl not supported")
+            .make_current(current)
+    }
+
+    fn opengl_get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
+        self.gl_context
+            .as_ref()
+            .expect("opengl not supported")
+            .get_proc_address(name)
+    }
 }
 
 impl PlatformWaker for WindowWakerImpl {
@@ -505,7 +526,7 @@ impl PlatformWaker for WindowWakerImpl {
                 Ok(())
             }
         } else {
-            Err(WakeupError::Disconnected)
+            Err(WakeupError)
         }
     }
 }
@@ -538,8 +559,7 @@ unsafe extern "system" fn wnd_proc(
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
 
                 window.send_event_defer(Event::WindowMove {
-                    absolute: Point { x, y },
-                    relative: Point { x, y },
+                    point: Point { x, y },
                 });
 
                 0

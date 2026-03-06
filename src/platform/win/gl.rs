@@ -1,5 +1,5 @@
 use super::util::{generate_guid, hinstance, to_widestring};
-use crate::Error;
+use crate::{MakeCurrentError, SwapBuffersError, WindowError};
 use std::{
     collections::HashSet,
     ffi::{CStr, c_char, c_void},
@@ -71,7 +71,7 @@ pub struct GlContext {
 }
 
 impl GlContext {
-    pub unsafe fn new(hwnd: HWND, config: crate::GlConfig) -> Result<Self, Error> {
+    pub unsafe fn new(hwnd: HWND, config: crate::GlConfig) -> Result<Self, WindowError> {
         unsafe {
             let ext = WglExtensions::get();
             let hdc = GetDC(hwnd);
@@ -82,7 +82,7 @@ impl GlContext {
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
-                    Error::OpenGlError("Failed to find a matching pixel format".to_owned())
+                    WindowError::OpenGl("Failed to find a matching pixel format".to_owned())
                 })?;
 
             SetPixelFormat(hdc, format_id, &format_desc);
@@ -92,7 +92,7 @@ impl GlContext {
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
-                    Error::OpenGlError(
+                    WindowError::OpenGl(
                         "Failed to create a context with given requirements".to_owned(),
                     )
                 })?;
@@ -113,10 +113,8 @@ impl GlContext {
             })
         }
     }
-}
 
-impl crate::GlContext for GlContext {
-    fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
+    pub fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
         unsafe {
             wglGetProcAddress(symbol.as_ptr() as *const _)
                 .filter(|&ptr| check_ptr(ptr as *const _))
@@ -127,12 +125,20 @@ impl crate::GlContext for GlContext {
         }
     }
 
-    unsafe fn swap_buffers(&self) {
+    pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         unsafe { SwapBuffers(self.hdc) };
+        Ok(())
     }
 
-    unsafe fn make_current(&self, current: bool) -> bool {
-        unsafe { wglMakeCurrent(self.hdc, if current { self.hglrc } else { null_mut() }) != 0 }
+    pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+        let result =
+            unsafe { wglMakeCurrent(self.hdc, if current { self.hglrc } else { null_mut() }) != 0 };
+
+        if result {
+            Ok(())
+        } else {
+            Err(MakeCurrentError)
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{Error, Key, Modifiers, Size};
+use crate::{Key, Modifiers, Size, WindowError};
 use std::{
     ffi::{CStr, OsString},
     os::windows::ffi::OsStrExt,
@@ -107,7 +107,7 @@ pub fn hinstance() -> HINSTANCE {
     unsafe { &__ImageBase as *const IMAGE_DOS_HEADER as _ }
 }
 
-pub fn check_error(assert: bool, message: &'static str) -> Result<(), crate::Error> {
+pub fn check_error(assert: bool, message: &'static str) -> Result<(), crate::WindowError> {
     if !assert {
         unsafe {
             let error = GetLastError();
@@ -131,7 +131,7 @@ pub fn check_error(assert: bool, message: &'static str) -> Result<(), crate::Err
                 Some(String::from_utf16_lossy(parts))
             };
 
-            return Err(Error::PlatformError(match extra {
+            return Err(WindowError::Platform(match extra {
                 Some(desc) => format!("{}: {:X} - {}", message, error, desc),
                 None => format!("{}: {:X}", message, error),
             }));

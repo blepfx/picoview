@@ -1,6 +1,6 @@
 use super::util::load_function_dynamic;
 use crate::{
-    Error, MouseCursor,
+    MouseCursor, WindowError,
     platform::win::{
         util::hinstance,
         window::{WM_USER_KEY_DOWN, WM_USER_KEY_UP, WindowImpl},
@@ -38,7 +38,7 @@ pub struct Win32Shared {
 }
 
 impl Win32Shared {
-    pub fn get() -> Result<Arc<Self>, Error> {
+    pub fn get() -> Result<Arc<Self>, WindowError> {
         static INSTANCE: Mutex<Weak<Win32Shared>> = Mutex::new(Weak::new());
 
         let mut lock = INSTANCE.lock().expect("poisoned");
@@ -74,7 +74,7 @@ impl Win32Shared {
         }
     }
 
-    fn create() -> Result<Arc<Self>, Error> {
+    fn create() -> Result<Arc<Self>, WindowError> {
         unsafe {
             let conn = Arc::new(Self {
                 cursor_cache: CursorCache::load(),

@@ -55,4 +55,3 @@
     - Crashes when closing any window (even transient).
 - Windows:
     - Some cursor icons are not supported, fallbacks used.
-    - `Event::WindowMove` reports wrong absolute position - better WindowMove api needed.
