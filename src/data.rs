@@ -389,7 +389,8 @@ pub enum Event<'a> {
         key: Key,
 
         /// Set to `true` to indicate that the event has been handled and should
-        /// not be propagated to the parent
+        /// not be propagated to the parent (if this window is embedded in
+        /// another window)
         capture: &'a mut bool,
     },
 
@@ -399,7 +400,8 @@ pub enum Event<'a> {
         key: Key,
 
         /// Set to `true` to indicate that the event has been handled and should
-        /// not be propagated to the parent
+        /// not be propagated to the parent (if this window is embedded in
+        /// another window)
         capture: &'a mut bool,
     },
 

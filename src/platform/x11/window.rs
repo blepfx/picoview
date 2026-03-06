@@ -346,6 +346,11 @@ impl WindowImpl {
                     }
                 }
 
+                ReparentNotify => {
+                    let event = event.reparent;
+                    self.window_parent.set(event.parent);
+                }
+
                 ConfigureNotify => {
                     let event = event.configure;
 
