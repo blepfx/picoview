@@ -53,7 +53,7 @@ impl GlContext {
                 HashSet::new()
             };
 
-            connection.check_error().map_err(WindowError::OpenGl)?;
+            connection.last_error().map_err(WindowError::OpenGl)?;
             Ok((major as u8, minor as u8, extensions))
         }
     }
@@ -254,7 +254,7 @@ impl GlContext {
             }
 
             XSync(connection.display(), 0);
-            connection.check_error().map_err(WindowError::OpenGl)?;
+            connection.last_error().map_err(WindowError::OpenGl)?;
 
             Ok(GlContext { window, context })
         }
@@ -275,8 +275,8 @@ impl GlContext {
     }
 }
 
-impl<'a> crate::GlContext for GlContextScope<'a> {
-    fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
+impl GlContextScope<'_> {
+    pub fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
         unsafe {
             glXGetProcAddress(symbol.as_ptr() as *const u8)
                 .map(|x| x as *const c_void)
@@ -284,14 +284,14 @@ impl<'a> crate::GlContext for GlContextScope<'a> {
         }
     }
 
-    fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
+    pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         unsafe {
             glXSwapBuffers(self.connection.display(), self.context.window);
             Ok(())
         }
     }
 
-    fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+    pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         unsafe {
             let result = {
                 if current {

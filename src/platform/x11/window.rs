@@ -1,9 +1,8 @@
 use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
-use crate::platform::x11::connection::ATOM_PICOVIEW_WAKEUP;
 use crate::platform::x11::util::{
-    VisualConfig, get_position_relative, query_cursor, request_clipboard,
+    VisualConfig, query_cursor, relative_position, request_clipboard,
 };
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
@@ -14,7 +13,8 @@ use libc::c_ulong;
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::mem::zeroed;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use x11::xlib::*;
@@ -49,9 +49,13 @@ pub struct WindowImpl {
 }
 
 pub struct WindowWakerImpl {
+    active: AtomicBool,
     window_id: c_ulong,
-    connection: Arc<Mutex<Connection>>,
+    display: *mut Display,
 }
+
+unsafe impl Send for WindowWakerImpl {}
+unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
@@ -224,16 +228,16 @@ impl WindowImpl {
                 Duration::from_secs_f64(1.0 / connection.refresh_rate().unwrap_or(60.0));
 
             XSync(connection.display(), 0);
-            connection.check_error().map_err(WindowError::Platform)?;
+            connection.last_error().map_err(WindowError::Platform)?;
 
             let window = Box::new(Self {
                 window_id,
                 window_parent: Cell::new(window_parent),
 
-                connection,
                 waker: Arc::new(WindowWakerImpl {
+                    active: AtomicBool::new(true),
+                    display: connection.display(),
                     window_id,
-                    connection: Arc::new(Mutex::new(Connection::create()?)),
                 }),
 
                 is_closed: Cell::new(false),
@@ -252,7 +256,9 @@ impl WindowImpl {
                 clipboard_text_selection: RefCell::new(CString::default()),
 
                 handler: RefCell::new(None),
+
                 gl_context,
+                connection,
             });
 
             match mode {
@@ -302,7 +308,7 @@ impl WindowImpl {
 
                 XFlush(self.connection.display());
                 self.connection
-                    .check_error()
+                    .last_error()
                     .map_err(WindowError::Platform)?;
 
                 let num_events = self.connection.wait_for_events(Some(wait_time))?;
@@ -343,28 +349,22 @@ impl WindowImpl {
                 ConfigureNotify => {
                     let event = event.configure;
 
-                    {
-                        if let (Some(relative), Some(absolute)) = (
-                            get_position_relative(
-                                &self.connection,
-                                self.window_parent.get(),
-                                self.window_id,
-                            ),
-                            get_position_relative(
-                                &self.connection,
-                                self.connection.default_root(),
-                                self.window_id,
-                            ),
-                        ) {
-                            self.last_window_position.set(Some(relative));
-                            self.send_event(Event::WindowMove { relative, absolute });
-                        };
-                    }
+                    let point = relative_position(
+                        &self.connection,
+                        self.connection.default_root(),
+                        self.window_id,
+                    );
 
                     let size = Size {
                         width: event.width as u32,
                         height: event.height as u32,
                     };
+
+                    if let Some(point) = point
+                        && self.last_window_position.replace(Some(point)) != Some(point)
+                    {
+                        self.send_event(Event::WindowMove { point });
+                    }
 
                     if self.last_window_size.replace(Some(size)) != Some(size) {
                         self.send_event(Event::WindowResize { size });
@@ -617,6 +617,11 @@ impl WindowImpl {
 
     fn destroy(mut self) -> Result<(), WindowError> {
         unsafe {
+            // we set active to false before sending the close event, to ensure that any
+            // pending wakeups that get triggered by the close event will be ignored,
+            // preventing a potential use-after-free in the `WindowWakerImpl::wakeup` method
+            self.waker.active.store(false, Ordering::SeqCst);
+
             // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends
             // on WindowImpl
             self.handler.take();
@@ -631,37 +636,11 @@ impl WindowImpl {
 
             XSync(self.connection.display(), 0);
             self.connection
-                .check_error()
+                .last_error()
                 .map_err(WindowError::Platform)?;
 
             Ok(())
         }
-    }
-}
-
-impl crate::GlContext for WindowImpl {
-    fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .scope(&self.connection)
-            .get_proc_address(name)
-    }
-
-    fn make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .scope(&self.connection)
-            .make_current(current)
-    }
-
-    fn swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .scope(&self.connection)
-            .swap_buffers()
     }
 }
 
@@ -672,14 +651,6 @@ impl PlatformWindow for WindowImpl {
 
     fn waker(&self) -> WindowWaker {
         WindowWaker(self.waker.clone())
-    }
-
-    fn opengl(&self) -> Option<&dyn crate::GlContext> {
-        if self.gl_context.is_some() {
-            Some(self)
-        } else {
-            None
-        }
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -897,15 +868,45 @@ impl PlatformWindow for WindowImpl {
 
         true
     }
+
+    fn is_opengl_supported(&self) -> bool {
+        self.gl_context.is_some()
+    }
+
+    fn opengl_get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
+        self.gl_context
+            .as_ref()
+            .expect("opengl unavailable")
+            .scope(&self.connection)
+            .get_proc_address(name)
+    }
+
+    fn opengl_make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
+        self.gl_context
+            .as_ref()
+            .expect("opengl unavailable")
+            .scope(&self.connection)
+            .make_current(current)
+    }
+
+    fn opengl_swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
+        self.gl_context
+            .as_ref()
+            .expect("opengl unavailable")
+            .scope(&self.connection)
+            .swap_buffers()
+    }
 }
 
 impl PlatformWaker for WindowWakerImpl {
     fn wakeup(&self) -> Result<(), WakeupError> {
-        let conn = self.connection.lock().expect("poisoned");
+        if !self.active.load(Ordering::SeqCst) {
+            return Err(WakeupError);
+        }
 
         unsafe {
             XSendEvent(
-                conn.display(),
+                self.display,
                 self.window_id,
                 1,
                 NoEventMask,
@@ -914,18 +915,17 @@ impl PlatformWaker for WindowWakerImpl {
                         type_: ClientMessage,
                         serial: 0,
                         send_event: 1,
-                        display: conn.display(),
+                        display: self.display,
                         window: self.window_id,
-                        message_type: conn.atom(ATOM_PICOVIEW_WAKEUP),
+                        message_type: XInternAtom(self.display, c"PICOVIEW_WAKEUP".as_ptr(), 0),
                         format: 32,
                         data: ClientMessageData::new(),
                     },
                 },
             );
-            XFlush(conn.display());
+            XFlush(self.display);
         }
 
-        // TODO: check if we are dead?
         Ok(())
     }
 }

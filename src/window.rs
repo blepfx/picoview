@@ -68,14 +68,14 @@ impl<'a> Window<'a> {
         self.0.waker()
     }
 
+    /// Get the OpenGL context associated with the window, if present.
+    pub fn opengl(&self) -> Option<GlContext<'a>> {
+        self.0.is_opengl_supported().then_some(GlContext(*self))
+    }
+
     /// Close the window and exit its event loop.
     pub fn close(&self) {
         self.0.close();
-    }
-
-    /// Get the OpenGL context associated with the window, if present.
-    pub fn opengl(&self) -> Option<&'a dyn GlContext> {
-        self.0.opengl()
     }
 
     /// Set the window title.
@@ -105,14 +105,17 @@ impl<'a> Window<'a> {
     /// relative to the origin (top-left corner) of the coordinate system.
     ///
     /// The coordinate system depends on how the window was created:
-    /// - For top-level windows, it is the screen coordinate system, with (0, 0)
-    ///   being the top-left corner of the primary monitor.
-    /// - For parented windows, it is the coordinate system of the parent
+    /// - For top-level windows or transient windows, it is the screen
+    ///   coordinate system, with (0, 0) being the top-left corner of the
+    ///   primary monitor.
+    /// - For embedded windows, it is the coordinate system of the parent
     ///   window, with (0, 0) being the top-left corner of the parent window's
     ///   client area.
     ///
     /// If not specified, the window will be centered on the screen or parent
     /// window (or positioned at (0, 0) if embedded)
+    ///
+    /// The coordinate system is X+ right, Y+ down
     pub fn set_position(&self, pos: impl Into<Point>) {
         self.0.set_position(pos.into());
     }
@@ -147,7 +150,7 @@ impl WindowWaker {
     /// waiting for the event handler to actually process the event). Emits a
     /// [`Event::Wakeup`](`crate::Event::Wakeup`) event.
     ///
-    /// Returns [`WakeupError::Disconnected`] if the window has already been
+    /// Returns [`WakeupError`] if the window has already been
     /// closed.
     pub fn wakeup(&self) -> Result<(), WakeupError> {
         self.0.wakeup()

@@ -19,7 +19,6 @@
 |  - `WindowClose`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowFocus`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowScale`                                      | :ok:     | :ok:     | :ok:[^1] | Medium   |
-|  - `WindowTheme`                                      | :x:      | :x:      | :ok:     | Low      |
 |  - `WindowMove`                                       | :ok:     | :x:      | :ok:     | Low      |
 |  - `WindowResize`                                     | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowFrame`                                      | :ok:     | :ok:     | :ok:     | High     |
@@ -30,7 +29,7 @@
 | Event loop wakeup                                     | :ok:     | :ok:     | :ok:     | High     |
 | Vertical blank synchronization                        | :ok:[^2] | :ok:     | :o:[^3]  | High     |
 | OpenGL context creation                               | :ok:     | :ok:     | :ok:     | High     |
-| Clipboard text get/set                                | :ok:     | :ok:     | :x:      | Medium   |
+| Clipboard text get/set                                | :ok:     | :ok:     | :ok:     | Medium   |
 | Pixel scaling abstraction                             | :ok:     | :x:      | :ok:     | High     |
 | Set position                                          | :ok:     | :x:      | :ok:     | Medium   |
 | Set size                                              | :ok:     | :ok:     | :ok:     | High     |
@@ -57,7 +56,3 @@
 - Windows:
     - Some cursor icons are not supported, fallbacks used.
     - `Event::WindowMove` reports wrong absolute position - better WindowMove api needed.
-- X11:
-    - No clipboard support yet (really hard to implement)
-    - `WindowWaker::wakeup` does not report an error if the window is closed.
-     

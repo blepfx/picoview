@@ -1,5 +1,4 @@
 use crate::WindowError;
-use libc::c_ulong;
 use raw_window_handle::XlibDisplayHandle;
 use std::{
     cell::RefCell,
@@ -7,7 +6,7 @@ use std::{
     ffi::CStr,
     marker::PhantomData,
     mem::zeroed,
-    os::raw::c_int,
+    os::raw::{c_char, c_int, c_ulong},
     ptr::{NonNull, null, null_mut},
     str::FromStr,
     sync::{LazyLock, Mutex},
@@ -28,8 +27,6 @@ use x11::{
     },
 };
 
-pub const ATOM_PICOVIEW_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
-
 unsafe impl Send for Connection {}
 pub struct Connection {
     display: *mut Display,
@@ -39,7 +36,7 @@ pub struct Connection {
     cursor_cache: RefCell<HashMap<usize, c_ulong>>,
     atom_cache: RefCell<HashMap<usize, c_ulong>>,
 
-    unsync: PhantomData<*mut ()>,
+    not_sync: PhantomData<*mut ()>,
 }
 
 impl Connection {
@@ -51,7 +48,6 @@ impl Connection {
             }
 
             XSetErrorHandler(Some(error_handler));
-            XInternAtom(display, ATOM_PICOVIEW_WAKEUP.as_ptr() as _, 1);
 
             let screen = XDefaultScreen(display);
             let connection = Self {
@@ -62,7 +58,7 @@ impl Connection {
                 cursor_cache: RefCell::new(HashMap::new()),
                 atom_cache: RefCell::new(HashMap::new()),
 
-                unsync: PhantomData,
+                not_sync: PhantomData,
             };
 
             ERRORS_FOR_EACH_DISPLAY
@@ -74,7 +70,7 @@ impl Connection {
         }
     }
 
-    pub fn check_error(&self) -> Result<(), String> {
+    pub fn last_error(&self) -> Result<(), String> {
         let err = ERRORS_FOR_EACH_DISPLAY
             .lock()
             .expect("poisoned")
@@ -240,7 +236,7 @@ impl Connection {
             let mut event = XEvent { type_: 0 };
             if XNextEvent(self.display, &mut event) != 0 {
                 return Err(WindowError::Platform(
-                    self.check_error()
+                    self.last_error()
                         .err()
                         .unwrap_or_else(|| "unknown error".to_owned()),
                 ));
@@ -309,19 +305,15 @@ unsafe extern "C" fn error_handler(dpy: *mut Display, err: *mut XErrorEvent) -> 
     }
 
     unsafe {
-        let mut buf = [0; 255];
+        let mut buf = [0 as c_char; 255];
         XGetErrorText(
             (*err).display,
             (*err).error_code.into(),
-            buf.as_mut_ptr().cast(),
+            buf.as_mut_ptr(),
             (buf.len() - 1) as i32,
         );
         buf[254] = 0;
-        conn.replace(
-            CStr::from_ptr(buf.as_mut_ptr().cast())
-                .to_string_lossy()
-                .into(),
-        );
+        conn.replace(CStr::from_ptr(buf.as_mut_ptr()).to_string_lossy().into());
     }
 
     0

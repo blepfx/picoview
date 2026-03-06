@@ -14,7 +14,10 @@ pub mod mac;
 #[cfg(target_os = "macos")]
 pub use mac::*;
 
-use crate::{GlContext, MouseCursor, Point, Size, WakeupError, WindowWaker, rwh_06};
+use crate::{
+    MakeCurrentError, MouseCursor, Point, Size, SwapBuffersError, WakeupError, WindowWaker, rwh_06,
+};
+use std::ffi::{CStr, c_void};
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
@@ -40,7 +43,6 @@ pub trait PlatformWindow /* : !Send + !Sync */ {
 
     fn close(&self);
     fn waker(&self) -> WindowWaker;
-    fn opengl(&self) -> Option<&dyn GlContext>;
 
     fn set_title(&self, title: &str);
     fn set_cursor_icon(&self, icon: MouseCursor);
@@ -53,6 +55,11 @@ pub trait PlatformWindow /* : !Send + !Sync */ {
 
     fn get_clipboard_text(&self) -> Option<String>;
     fn set_clipboard_text(&self, text: &str) -> bool;
+
+    fn is_opengl_supported(&self) -> bool;
+    fn opengl_swap_buffers(&self) -> Result<(), SwapBuffersError>;
+    fn opengl_make_current(&self, current: bool) -> Result<(), MakeCurrentError>;
+    fn opengl_get_proc_address(&self, name: &CStr) -> *const c_void;
 }
 
 pub trait PlatformWaker: Send + Sync + 'static {

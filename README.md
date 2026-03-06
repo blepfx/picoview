@@ -6,8 +6,6 @@ Smol low-level windowing abstraction with a focus on audio plugin development
 
 ## Goals
 
-- Small API surface
-    - `picoview` should be easy to use and provide only the essentials for window creation, event handling and OS abstraction.
 - Low compile times
     - `picoview` should compile fast and not bloat your compile times. Uses minimum amount of dependencies.
 - Complete OS abstraction

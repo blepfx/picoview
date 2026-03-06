@@ -242,7 +242,7 @@ pub fn query_cursor(conn: &Connection, cursor: MouseCursor) -> c_ulong {
     }
 }
 
-pub fn get_position_relative(
+pub fn relative_position(
     conn: &Connection,
     window_parent: c_ulong,
     window_id: c_ulong,

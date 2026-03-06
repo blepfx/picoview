@@ -1,6 +1,8 @@
-use std::ffi::{CStr, c_void};
-
 use crate::{MakeCurrentError, SwapBuffersError};
+use std::{
+    ffi::{CStr, c_void},
+    fmt,
+};
 
 /// A requested OpenGL version
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,17 +98,27 @@ impl Default for GlConfig {
 }
 
 /// OpenGL context belonging to a window
-pub trait GlContext {
-    /// Get the address of an OpenGL function
-    fn get_proc_address(&self, name: &CStr) -> *const c_void;
+pub struct GlContext<'a>(pub(crate) crate::Window<'a>);
 
-    /// Make the OpenGL context active or inactive on the current thread
-    /// Returns true on success
-    ///
-    /// All OpenGL calls must be made only when the context is active for the
-    /// current thread
-    fn make_current(&self, current: bool) -> Result<(), MakeCurrentError>;
+impl<'a> GlContext<'a> {
+    /// Make this OpenGL context current or not current
+    pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+        self.0.0.opengl_make_current(current)
+    }
 
-    /// Swap the front and back buffers
-    fn swap_buffers(&self) -> Result<(), SwapBuffersError>;
+    /// Swap the front and back buffers if double buffering is enabled
+    pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
+        self.0.0.opengl_swap_buffers()
+    }
+
+    /// Get the address of an OpenGL function by name
+    pub fn get_proc_address(&self, name: &CStr) -> *const c_void {
+        self.0.0.opengl_get_proc_address(name)
+    }
+}
+
+impl<'a> fmt::Debug for GlContext<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("GlContext").finish_non_exhaustive()
+    }
 }
