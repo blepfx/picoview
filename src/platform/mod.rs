@@ -15,7 +15,8 @@ pub mod mac;
 pub use mac::*;
 
 use crate::{
-    MakeCurrentError, MouseCursor, Point, Size, SwapBuffersError, WakeupError, WindowWaker, rwh_06,
+    Exchange, MakeCurrentError, MouseCursor, Point, Size, SwapBuffersError, WakeupError,
+    WindowWaker, rwh_06,
 };
 use std::ffi::{CStr, c_void};
 
@@ -53,8 +54,8 @@ pub trait PlatformWindow /* : !Send + !Sync */ {
 
     fn open_url(&self, url: &str) -> bool;
 
-    fn get_clipboard_text(&self) -> Option<String>;
-    fn set_clipboard_text(&self, text: &str) -> bool;
+    fn get_clipboard(&self) -> Exchange;
+    fn set_clipboard(&self, data: Exchange) -> bool;
 
     fn is_opengl_supported(&self) -> bool;
     fn opengl_swap_buffers(&self) -> Result<(), SwapBuffersError>;

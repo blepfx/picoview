@@ -1,13 +1,14 @@
 use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
+use crate::platform::x11::connection::ATOM_WAKEUP;
 use crate::platform::x11::util::{
     VisualConfig, query_cursor, relative_position, request_clipboard,
 };
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
-    Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
-    WindowError, WindowFactory, WindowWaker, rwh_06,
+    Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
+    WindowBuilder, WindowError, WindowFactory, WindowWaker, rwh_06,
 };
 use libc::c_ulong;
 use std::cell::{Cell, RefCell};
@@ -41,7 +42,7 @@ pub struct WindowImpl {
     last_window_visible: Cell<bool>,
     last_window_focused: Cell<bool>,
 
-    clipboard_text_selection: RefCell<CString>,
+    clipboard_contents: RefCell<Exchange>,
 
     #[allow(clippy::type_complexity)]
     handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
@@ -252,8 +253,7 @@ impl WindowImpl {
                 last_window_visible: Cell::new(options.visible),
                 last_window_focused: Cell::new(false),
                 last_cursor_in_bounds: Cell::new(false),
-
-                clipboard_text_selection: RefCell::new(CString::default()),
+                clipboard_contents: RefCell::new(Exchange::Empty),
 
                 handler: RefCell::new(None),
 
@@ -340,7 +340,7 @@ impl WindowImpl {
                     }
 
                     if event.format == 32
-                        && event.message_type == self.connection.atom(c"PICOVIEW_WAKEUP") as _
+                        && event.message_type == self.connection.atom(ATOM_WAKEUP) as _
                     {
                         self.send_event(Event::Wakeup);
                     }
@@ -537,7 +537,6 @@ impl WindowImpl {
                 }
                 Expose => {
                     let event = event.expose;
-
                     self.send_event(Event::WindowDamage {
                         x: event.x.try_into().unwrap_or(0),
                         y: event.y.try_into().unwrap_or(0),
@@ -547,15 +546,24 @@ impl WindowImpl {
                 }
 
                 SelectionRequest => {
-                    let text = self.clipboard_text_selection.borrow();
+                    let exchange = &*self.clipboard_contents.borrow();
                     let event = event.selection_request;
+
                     if event.selection != self.connection.atom(c"CLIPBOARD") {
                         return;
                     }
 
+                    let a_targets = self.connection.atom(c"TARGETS");
+                    let a_uri_list = self.connection.atom(c"text/uri-list");
+                    let a_utf8_string = self.connection.atom(c"UTF8_STRING");
+
                     if event.property != 0 {
-                        if event.target == self.connection.atom(c"TARGETS") {
-                            let atom = self.connection.atom(c"UTF8_STRING") as u32;
+                        if event.target == a_targets {
+                            let atom = match exchange {
+                                Exchange::UriList(_) => a_uri_list,
+                                Exchange::Empty | Exchange::Text(_) => a_utf8_string,
+                            };
+
                             XChangeProperty(
                                 self.connection.display(),
                                 event.requestor,
@@ -566,8 +574,8 @@ impl WindowImpl {
                                 &atom as *const _ as *const u8,
                                 1,
                             );
-                        } else if event.target == self.connection.atom(c"UTF8_STRING")
-                            || event.target == XA_STRING
+                        } else if (event.target == a_utf8_string || event.target == XA_STRING)
+                            && let Exchange::Text(text) = exchange
                         {
                             XChangeProperty(
                                 self.connection.display(),
@@ -576,8 +584,22 @@ impl WindowImpl {
                                 event.target,
                                 8,
                                 PropModeReplace,
-                                text.as_bytes().as_ptr(),
-                                text.as_bytes().len() as i32,
+                                text.as_ptr(),
+                                text.len() as i32,
+                            );
+                        } else if event.target == a_uri_list
+                            && let Exchange::UriList(items) = exchange
+                        {
+                            let text = items.join("\r\n");
+                            XChangeProperty(
+                                self.connection.display(),
+                                event.requestor,
+                                event.property,
+                                event.target,
+                                8,
+                                PropModeReplace,
+                                text.as_ptr(),
+                                text.len() as i32,
                             );
                         }
                     }
@@ -837,10 +859,12 @@ impl PlatformWindow for WindowImpl {
         util::open_url(url)
     }
 
-    fn get_clipboard_text(&self) -> Option<String> {
-        // TODO: verify if correct
-        for atom in [self.connection.atom(c"UTF8_STRING"), XA_STRING] {
-            if let Some(text) = request_clipboard(
+    fn get_clipboard(&self) -> Exchange {
+        let utf8_string = self.connection.atom(c"UTF8_STRING");
+        let text_uri_list = self.connection.atom(c"text/uri-list");
+
+        for atom in [text_uri_list, utf8_string, XA_STRING] {
+            let string = match request_clipboard(
                 &self.connection,
                 self.window_id,
                 atom,
@@ -849,24 +873,38 @@ impl PlatformWindow for WindowImpl {
                     String::from_utf8_lossy(slice).into_owned()
                 },
             ) {
-                return Some(text);
+                Some(string) => string,
+                None => continue,
+            };
+
+            if atom == text_uri_list {
+                let paths = string
+                    .lines()
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(|l| l.to_string())
+                    .collect::<Vec<_>>();
+
+                if !paths.is_empty() {
+                    return Exchange::UriList(paths);
+                }
+            } else {
+                return Exchange::Text(string);
             }
         }
 
-        None
+        Exchange::Empty
     }
 
-    fn set_clipboard_text(&self, text: &str) -> bool {
-        *self.clipboard_text_selection.borrow_mut() = match CString::new(text) {
-            Ok(cstring) => cstring,
-            Err(_) => return false,
-        };
+    fn set_clipboard(&self, data: Exchange) -> bool {
+        let is_empty = matches!(data, Exchange::Empty);
+
+        *self.clipboard_contents.borrow_mut() = data;
 
         unsafe {
             XSetSelectionOwner(
                 self.connection.display(),
                 self.connection.atom(c"CLIPBOARD"),
-                self.window_id,
+                if is_empty { 0 } else { self.window_id },
                 CurrentTime,
             );
         }
@@ -922,7 +960,7 @@ impl PlatformWaker for WindowWakerImpl {
                         send_event: 1,
                         display: self.display,
                         window: self.window_id,
-                        message_type: XInternAtom(self.display, c"PICOVIEW_WAKEUP".as_ptr(), 0),
+                        message_type: XInternAtom(self.display, ATOM_WAKEUP.as_ptr(), 0),
                         format: 32,
                         data: ClientMessageData::new(),
                     },

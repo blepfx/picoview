@@ -1,6 +1,6 @@
 use crate::{
-    Event, GlConfig, GlContext, MouseCursor, Point, Size, WakeupError, WindowError, platform,
-    rwh_06,
+    Event, Exchange, GlConfig, GlContext, MouseCursor, Point, Size, WakeupError, WindowError,
+    platform, rwh_06,
 };
 use std::{fmt::Debug, ops::Range, sync::Arc};
 
@@ -135,13 +135,13 @@ impl<'a> Window<'a> {
     /// Set the current text contents of the system clipboard.
     ///
     /// Returns `true` if the action was handled by the OS
-    pub fn set_clipboard_text(&self, text: &str) -> bool {
-        self.0.set_clipboard_text(text)
+    pub fn set_clipboard(&self, data: Exchange) -> bool {
+        self.0.set_clipboard(data)
     }
 
     /// Get the current text contents of the system clipboard, if any.
-    pub fn get_clipboard_text(&self) -> Option<String> {
-        self.0.get_clipboard_text()
+    pub fn get_clipboard(&self) -> Exchange {
+        self.0.get_clipboard()
     }
 }
 

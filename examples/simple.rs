@@ -1,4 +1,4 @@
-use picoview::{Event, Key, MouseCursor, Point, Size, WindowBuilder};
+use picoview::{Event, Exchange, Key, MouseCursor, Point, Size, WindowBuilder};
 use std::{
     mem::replace,
     time::{Duration, Instant},
@@ -10,8 +10,8 @@ fn main() {
         let mut last = Instant::now();
 
         window.set_cursor_icon(MouseCursor::Move);
-        println!("clipboard contents: {:?}", window.get_clipboard_text());
-        window.set_clipboard_text("test");
+        println!("clipboard contents: {:?}", window.get_clipboard());
+        window.set_clipboard(Exchange::Text("Hello from picoview!".to_owned()));
 
         Box::new(move |event| match event {
             Event::WindowFrame => {

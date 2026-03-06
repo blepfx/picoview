@@ -27,6 +27,8 @@ use x11::{
     },
 };
 
+pub const ATOM_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
+
 unsafe impl Send for Connection {}
 pub struct Connection {
     display: *mut Display,
