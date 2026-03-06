@@ -340,11 +340,6 @@ impl WindowImpl {
                     }
                 }
 
-                ReparentNotify => {
-                    let event = event.reparent;
-                    self.window_parent.set(event.parent);
-                }
-
                 ConfigureNotify => {
                     let event = event.configure;
 
@@ -431,52 +426,50 @@ impl WindowImpl {
 
                     self.send_event(result);
                 }
-                KeyPress => {
-                    let mut event = event.key;
-                    self.handle_event_modifiers(
-                        util::keymask_to_mods(event.state) | util::keycode_to_mods(event.keycode),
-                    );
+                KeyPress | KeyRelease => {
+                    let event = event.key;
 
-                    if let Some(key) = util::keycode_to_key(event.keycode) {
-                        let mut capture = false;
-                        self.send_event(Event::KeyDown {
-                            key,
-                            capture: &mut capture,
-                        });
-
-                        if !capture {
-                            event.window = self.window_parent.get();
-                            XSendEvent(
-                                self.connection.display(),
-                                self.window_parent.get(),
-                                1,
-                                KeyPressMask,
-                                &mut XEvent { key: event },
-                            );
+                    self.handle_event_modifiers(match event.type_ {
+                        KeyPress => {
+                            util::keymask_to_mods(event.state)
+                                | util::keycode_to_mods(event.keycode)
                         }
-                    }
-                }
-                KeyRelease => {
-                    let mut event = event.key;
-                    self.handle_event_modifiers(
-                        util::keymask_to_mods(event.state) - util::keycode_to_mods(event.keycode),
-                    );
+                        _ => {
+                            util::keymask_to_mods(event.state)
+                                - util::keycode_to_mods(event.keycode)
+                        }
+                    });
 
                     if let Some(key) = util::keycode_to_key(event.keycode) {
                         let mut capture = false;
-                        self.send_event(Event::KeyUp {
-                            key,
-                            capture: &mut capture,
-                        });
+
+                        if event.type_ == KeyPress {
+                            self.send_event(Event::KeyDown {
+                                key,
+                                capture: &mut capture,
+                            });
+                        } else {
+                            self.send_event(Event::KeyUp {
+                                key,
+                                capture: &mut capture,
+                            });
+                        }
 
                         if !capture {
-                            event.window = self.window_parent.get();
                             XSendEvent(
                                 self.connection.display(),
                                 self.window_parent.get(),
                                 1,
-                                KeyReleaseMask,
-                                &mut XEvent { key: event },
+                                match event.type_ {
+                                    KeyPress => KeyPressMask,
+                                    _ => KeyReleaseMask,
+                                },
+                                &mut XEvent {
+                                    key: XKeyEvent {
+                                        window: self.window_parent.get(),
+                                        ..event
+                                    },
+                                },
                             );
                         }
                     }

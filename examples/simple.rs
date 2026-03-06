@@ -38,7 +38,7 @@ fn main() {
                         Box::new(move |event| {
                             if let Event::KeyDown { key, capture } = event {
                                 if key == Key::Enter {
-                                    *capture = true;
+                                    *capture = false;
                                 } else if key == Key::Escape {
                                     *capture = true;
                                     window.close();
