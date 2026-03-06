@@ -284,7 +284,7 @@ pub fn request_clipboard<R>(
     }
 
     unsafe {
-        XConvertSelection(
+        let result = XConvertSelection(
             conn.display(),
             conn.atom(c"CLIPBOARD"),
             atom,
@@ -292,6 +292,10 @@ pub fn request_clipboard<R>(
             window,
             CurrentTime,
         );
+
+        if result == 0 {
+            return None;
+        }
 
         XSync(conn.display(), 0);
 

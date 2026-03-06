@@ -6,11 +6,13 @@
 #![warn(missing_docs)]
 
 mod data;
+mod error;
 mod opengl;
 mod platform;
 mod window;
 
 pub use data::*;
+pub use error::*;
 pub use opengl::*;
 pub use window::*;
 

@@ -61,6 +61,6 @@ pub trait PlatformWaker: Send + Sync + 'static {
 
 impl PlatformWaker for () {
     fn wakeup(&self) -> Result<(), WakeupError> {
-        Err(WakeupError::Disconnected)
+        Err(WakeupError)
     }
 }

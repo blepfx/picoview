@@ -1,4 +1,4 @@
-use crate::OpenError;
+use crate::WindowError;
 use libc::c_ulong;
 use raw_window_handle::XlibDisplayHandle;
 use std::{
@@ -43,11 +43,11 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn create() -> Result<Self, OpenError> {
+    pub fn create() -> Result<Self, WindowError> {
         unsafe {
             let display = XOpenDisplay(std::ptr::null());
             if display.is_null() {
-                return Err(OpenError::Platform("Failed to open X11 display".into()));
+                return Err(WindowError::Platform("Failed to open X11 display".into()));
             }
 
             XSetErrorHandler(Some(error_handler));
@@ -235,11 +235,11 @@ impl Connection {
             .or_insert_with(|| unsafe { XInternAtom(self.display, atom.as_ptr(), 0) })
     }
 
-    pub fn next_event(&self) -> Result<XEvent, OpenError> {
+    pub fn next_event(&self) -> Result<XEvent, WindowError> {
         unsafe {
             let mut event = XEvent { type_: 0 };
             if XNextEvent(self.display, &mut event) != 0 {
-                return Err(OpenError::Platform(
+                return Err(WindowError::Platform(
                     self.check_error()
                         .err()
                         .unwrap_or_else(|| "unknown error".to_owned()),
@@ -250,7 +250,7 @@ impl Connection {
         }
     }
 
-    pub fn wait_for_events(&self, timeout: Option<Duration>) -> Result<u32, OpenError> {
+    pub fn wait_for_events(&self, timeout: Option<Duration>) -> Result<u32, WindowError> {
         unsafe {
             let timespec = timeout.map(|timeout| libc::timespec {
                 tv_sec: timeout.as_secs() as _,
@@ -269,7 +269,7 @@ impl Connection {
             );
 
             if result == -1 {
-                return Err(OpenError::Platform(
+                return Err(WindowError::Platform(
                     std::io::Error::last_os_error().to_string(),
                 ));
             }

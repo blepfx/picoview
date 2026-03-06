@@ -1,5 +1,6 @@
 use crate::{
-    Event, GlConfig, GlContext, MouseCursor, OpenError, Point, Size, WakeupError, platform, rwh_06,
+    Event, GlConfig, GlContext, MouseCursor, Point, Size, WakeupError, WindowError, platform,
+    rwh_06,
 };
 use std::{fmt::Debug, ops::Range, sync::Arc};
 
@@ -122,20 +123,22 @@ impl<'a> Window<'a> {
     }
 
     /// Open the given URL or file path in the system's default application.
+    ///
+    /// Returns `true` if the action was handled by the OS
     pub fn open_url(&self, url: &str) -> bool {
         self.0.open_url(url)
+    }
+
+    /// Set the current text contents of the system clipboard.
+    ///
+    /// Returns `true` if the action was handled by the OS
+    pub fn set_clipboard_text(&self, text: &str) -> bool {
+        self.0.set_clipboard_text(text)
     }
 
     /// Get the current text contents of the system clipboard, if any.
     pub fn get_clipboard_text(&self) -> Option<String> {
         self.0.get_clipboard_text()
-    }
-
-    /// Set the current text contents of the system clipboard.
-    ///
-    /// Returns `true` on success, `false` otherwise.
-    pub fn set_clipboard_text(&self, text: &str) -> bool {
-        self.0.set_clipboard_text(text)
     }
 }
 
@@ -254,7 +257,7 @@ impl WindowBuilder {
     ///
     /// Returns `Err` if the window could not be created or if an error occurred
     /// during the lifetime of the window.
-    pub fn open_blocking(self) -> Result<(), OpenError> {
+    pub fn open_blocking(self) -> Result<(), WindowError> {
         unsafe { platform::open_window(self, platform::OpenMode::Blocking).map(|_| ()) }
     }
 
@@ -270,13 +273,13 @@ impl WindowBuilder {
     /// Returns `Err` if the window could not be created or if the parent window
     /// handle is invalid, otherwise returns a [`WindowWaker`] associated with
     /// the newly created window.
-    pub fn open_transient<W>(self, parent: W) -> Result<WindowWaker, OpenError>
+    pub fn open_transient<W>(self, parent: W) -> Result<WindowWaker, WindowError>
     where
         W: rwh_06::HasWindowHandle,
     {
         let handle = parent
             .window_handle()
-            .map_err(|_| OpenError::InvalidParent)?
+            .map_err(|_| WindowError::InvalidParent)?
             .as_raw();
 
         unsafe { platform::open_window(self, platform::OpenMode::Transient(handle)) }
@@ -293,13 +296,13 @@ impl WindowBuilder {
     /// Returns `Err` if the window could not be created or if the parent window
     /// handle is invalid, otherwise returns a [`WindowWaker`] associated with
     /// the newly created window.
-    pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, OpenError>
+    pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, WindowError>
     where
         W: rwh_06::HasWindowHandle,
     {
         let handle = parent
             .window_handle()
-            .map_err(|_| OpenError::InvalidParent)?
+            .map_err(|_| WindowError::InvalidParent)?
             .as_raw();
 
         unsafe { platform::open_window(self, platform::OpenMode::Embedded(handle)) }

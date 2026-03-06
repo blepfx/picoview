@@ -1,6 +1,6 @@
 use super::connection::Connection;
 use crate::platform::x11::util::VisualConfig;
-use crate::{GlConfig, GlVersion, MakeCurrentError, OpenError};
+use crate::{GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError};
 use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
 use std::os::raw::{c_int, c_ulong};
@@ -37,11 +37,11 @@ pub struct GlContextScope<'a> {
 impl GlContext {
     pub unsafe fn get_version_info(
         connection: &Connection,
-    ) -> Result<(u8, u8, HashSet<&'static str>), OpenError> {
+    ) -> Result<(u8, u8, HashSet<&'static str>), WindowError> {
         unsafe {
             let (mut major, mut minor) = (0, 0);
             if glXQueryVersion(connection.display(), &mut major, &mut minor) == 0 {
-                return Err(OpenError::OpenGl("glXQueryVersion failed".into()));
+                return Err(WindowError::OpenGl("glXQueryVersion failed".into()));
             }
 
             let extensions = glXGetClientString(connection.display(), GLX_EXTENSIONS);
@@ -53,7 +53,7 @@ impl GlContext {
                 HashSet::new()
             };
 
-            connection.check_error().map_err(OpenError::OpenGl)?;
+            connection.check_error().map_err(WindowError::OpenGl)?;
             Ok((major as u8, minor as u8, extensions))
         }
     }
@@ -62,7 +62,7 @@ impl GlContext {
         connection: &Connection,
         config: &GlConfig,
         transparent: bool,
-    ) -> Result<VisualConfig, OpenError> {
+    ) -> Result<VisualConfig, WindowError> {
         unsafe {
             let (major, minor, extensions) = Self::get_version_info(connection)?;
             let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
@@ -121,7 +121,7 @@ impl GlContext {
             );
 
             if n_configs <= 0 || fb_config_list.is_null() {
-                return Err(OpenError::OpenGl("no matching config".into()));
+                return Err(WindowError::OpenGl("no matching config".into()));
             }
 
             let mut preferred_config = 0;
@@ -158,9 +158,9 @@ impl GlContext {
         window: c_ulong,
         config: GlConfig,
         fb_config: GLXFBConfig,
-    ) -> Result<GlContext, OpenError> {
+    ) -> Result<GlContext, WindowError> {
         if fb_config.is_null() {
-            return Err(OpenError::OpenGl("no matching config".into()));
+            return Err(WindowError::OpenGl("no matching config".into()));
         }
 
         unsafe {
@@ -212,7 +212,7 @@ impl GlContext {
                         arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
                         0,
                     ],
-                    _ => return Err(OpenError::OpenGl("No ES support extension".into())),
+                    _ => return Err(WindowError::OpenGl("No ES support extension".into())),
                 };
 
                 glXCreateContextAttribsARB(
@@ -225,7 +225,7 @@ impl GlContext {
             } else {
                 let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
                 if fb_visual.is_null() {
-                    return Err(OpenError::OpenGl(
+                    return Err(WindowError::OpenGl(
                         "glXGetVisualFromFBConfig returned null".into(),
                     ));
                 }
@@ -237,7 +237,7 @@ impl GlContext {
             };
 
             if context.is_null() {
-                return Err(OpenError::OpenGl("GLX context creation error".into()));
+                return Err(WindowError::OpenGl("GLX context creation error".into()));
             }
 
             if ext_swap_control {
@@ -254,7 +254,7 @@ impl GlContext {
             }
 
             XSync(connection.display(), 0);
-            connection.check_error().map_err(OpenError::OpenGl)?;
+            connection.check_error().map_err(WindowError::OpenGl)?;
 
             Ok(GlContext { window, context })
         }
@@ -284,13 +284,14 @@ impl<'a> crate::GlContext for GlContextScope<'a> {
         }
     }
 
-    unsafe fn swap_buffers(&self) {
+    fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         unsafe {
             glXSwapBuffers(self.connection.display(), self.context.window);
+            Ok(())
         }
     }
 
-    unsafe fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+    fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         unsafe {
             let result = {
                 if current {

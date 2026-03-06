@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use std::{fmt::Debug, path::PathBuf};
+use std::path::PathBuf;
 
 /// A mouse cursor icon that is predefined by the platform.
 ///
@@ -419,24 +419,4 @@ pub enum Event<'a> {
     /// TODO: not implemented yet
     #[allow(missing_docs)]
     DragCancel,
-}
-
-/// An error that can occur during the creation or lifetime of a window.
-#[derive(Debug)]
-pub enum OpenError {
-    /// A platform-specific error occurred.
-    Platform(String),
-
-    /// Failed to create an OpenGL context
-    OpenGl(String),
-
-    /// The parent window passed was invalid.
-    InvalidParent,
-}
-
-/// An error that can occur when waking up a event loop from another thread.
-#[derive(Debug)]
-pub enum WakeupError {
-    /// The window has already been closed.
-    Disconnected,
 }

@@ -7,8 +7,8 @@ use crate::platform::x11::util::{
 };
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
-    Event, Modifiers, MouseButton, MouseCursor, OpenError, Point, Size, WakeupError, Window,
-    WindowBuilder, WindowFactory, WindowWaker, rwh_06,
+    Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
+    WindowError, WindowFactory, WindowWaker, rwh_06,
 };
 use libc::c_ulong;
 use std::cell::{Cell, RefCell};
@@ -54,14 +54,14 @@ pub struct WindowWakerImpl {
 }
 
 impl WindowImpl {
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, OpenError> {
+    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
         unsafe {
             let connection = Connection::create()?;
             let window_parent = match mode.handle() {
                 None => connection.default_root(),
                 Some(rwh_06::RawWindowHandle::Xlib(handle)) => handle.window,
                 Some(rwh_06::RawWindowHandle::Xcb(handle)) => handle.window.get() as u64,
-                _ => return Err(OpenError::InvalidParent),
+                _ => return Err(WindowError::InvalidParent),
             };
 
             let visual_info = options
@@ -153,8 +153,8 @@ impl WindowImpl {
 
             // window title stuff
             {
-                let title =
-                    CString::new(options.title).map_err(|e| OpenError::Platform(e.to_string()))?;
+                let title = CString::new(options.title)
+                    .map_err(|e| WindowError::Platform(e.to_string()))?;
                 let mut text = XTextProperty { ..zeroed() };
                 let status =
                     XStringListToTextProperty(&mut (title.as_ptr() as *mut _), 1, &mut text);
@@ -224,7 +224,7 @@ impl WindowImpl {
                 Duration::from_secs_f64(1.0 / connection.refresh_rate().unwrap_or(60.0));
 
             XSync(connection.display(), 0);
-            connection.check_error().map_err(OpenError::Platform)?;
+            connection.check_error().map_err(WindowError::Platform)?;
 
             let window = Box::new(Self {
                 window_id,
@@ -270,7 +270,7 @@ impl WindowImpl {
     }
 
     #[allow(clippy::boxed_local)]
-    fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), OpenError> {
+    fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), WindowError> {
         unsafe {
             // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so
             // because:
@@ -301,7 +301,9 @@ impl WindowImpl {
                 };
 
                 XFlush(self.connection.display());
-                self.connection.check_error().map_err(OpenError::Platform)?;
+                self.connection
+                    .check_error()
+                    .map_err(WindowError::Platform)?;
 
                 let num_events = self.connection.wait_for_events(Some(wait_time))?;
                 for _ in 0..num_events {
@@ -620,7 +622,7 @@ impl WindowImpl {
         }
     }
 
-    fn destroy(mut self) -> Result<(), OpenError> {
+    fn destroy(mut self) -> Result<(), WindowError> {
         unsafe {
             // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends
             // on WindowImpl
@@ -635,7 +637,9 @@ impl WindowImpl {
             }
 
             XSync(self.connection.display(), 0);
-            self.connection.check_error().map_err(OpenError::Platform)?;
+            self.connection
+                .check_error()
+                .map_err(WindowError::Platform)?;
 
             Ok(())
         }
@@ -651,24 +655,20 @@ impl crate::GlContext for WindowImpl {
             .get_proc_address(name)
     }
 
-    unsafe fn make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
-        unsafe {
-            self.gl_context
-                .as_ref()
-                .expect("opengl unavailable")
-                .scope(&self.connection)
-                .make_current(current)
-        }
+    fn make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
+        self.gl_context
+            .as_ref()
+            .expect("opengl unavailable")
+            .scope(&self.connection)
+            .make_current(current)
     }
 
-    unsafe fn swap_buffers(&self) {
-        unsafe {
-            self.gl_context
-                .as_ref()
-                .expect("opengl unavailable")
-                .scope(&self.connection)
-                .swap_buffers()
-        }
+    fn swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
+        self.gl_context
+            .as_ref()
+            .expect("opengl unavailable")
+            .scope(&self.connection)
+            .swap_buffers()
     }
 }
 

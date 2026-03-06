@@ -1,11 +1,6 @@
-use std::{
-    ffi::{CStr, c_void},
-    fmt::Debug,
-};
+use std::ffi::{CStr, c_void};
 
-/// An error that can occur when making an OpenGL context current or not-current
-#[derive(Debug)]
-pub struct MakeCurrentError;
+use crate::{MakeCurrentError, SwapBuffersError};
 
 /// A requested OpenGL version
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,16 +105,8 @@ pub trait GlContext {
     ///
     /// All OpenGL calls must be made only when the context is active for the
     /// current thread
-    ///
-    /// # Safety
-    /// Making contexts current and uncurrent is inherently unsafe as it can
-    /// lead to undefined behavior if misused.
-    unsafe fn make_current(&self, current: bool) -> Result<(), MakeCurrentError>;
+    fn make_current(&self, current: bool) -> Result<(), MakeCurrentError>;
 
     /// Swap the front and back buffers
-    ///
-    /// # Safety
-    /// Swapping buffers is inherently unsafe as it can lead to undefined
-    /// behavior if misused. TODO: explain more
-    unsafe fn swap_buffers(&self);
+    fn swap_buffers(&self) -> Result<(), SwapBuffersError>;
 }
