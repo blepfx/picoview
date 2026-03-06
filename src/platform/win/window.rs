@@ -125,7 +125,6 @@ impl WindowImpl {
 
             let class_name = to_widestring(&format!("picoview-{}", generate_guid()));
             let window_title = to_widestring(&options.title);
-
             let window_class = RegisterClassW(&WNDCLASSW {
                 style: 0,
                 lpfnWndProc: Some(wnd_proc),
@@ -138,6 +137,7 @@ impl WindowImpl {
                 lpszMenuName: null(),
                 lpszClassName: class_name.as_ptr(),
             });
+
             check_error(window_class != 0, "main window class")?;
 
             let dwstyle = {
@@ -172,7 +172,7 @@ impl WindowImpl {
             let size = window_size_from_client_size(options.size, dwstyle);
             let (pos_x, pos_y) = match options.position {
                 Some(point) => (point.x as i32, point.y as i32),
-                None if !parent.is_null() => (0, 0),
+                None if matches!(mode, OpenMode::Embedded(..)) => (0, 0),
                 None => {
                     let mut rect = RECT { ..zeroed() };
                     if GetClientRect(GetDesktopWindow(), &mut rect) != 0 {
@@ -200,6 +200,7 @@ impl WindowImpl {
                 hinstance(),
                 null(),
             );
+
             check_error(!hwnd.is_null(), "main window create")?;
 
             if options.transparent {

@@ -48,7 +48,7 @@ fn main() {
                             }
                         })
                     })
-                    .open_transient(window)
+                    .open_embedded(window)
                     .expect("failed to open a child window");
 
                     waker.wakeup().unwrap();
