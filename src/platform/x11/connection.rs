@@ -12,22 +12,10 @@ use std::{
     sync::{LazyLock, Mutex},
     time::Duration,
 };
-use x11::{
-    xcursor::XcursorLibraryLoadCursor,
-    xlib::{
-        Display, XCloseDisplay, XColor, XConnectionNumber, XCreateBitmapFromData,
-        XCreatePixmapCursor, XDefaultScreen, XErrorEvent, XEvent, XFreeCursor, XFreePixmap,
-        XGetErrorText, XInternAtom, XNextEvent, XOpenDisplay, XPending, XResourceManagerString,
-        XRootWindow, XSetErrorHandler, XrmDestroyDatabase, XrmGetResource, XrmGetStringDatabase,
-        XrmValue,
-    },
-    xrandr::{
-        XRRFreeCrtcInfo, XRRFreeScreenResources, XRRGetCrtcInfo, XRRGetScreenResourcesCurrent,
-        XRRQueryExtension,
-    },
-};
+use x11::{xcursor::*, xlib::*, xrandr::*};
 
 pub const ATOM_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
+pub const ATOM_PRIVATE: &CStr = c"PICOVIEW_PRIVATE";
 
 unsafe impl Send for Connection {}
 pub struct Connection {
@@ -185,6 +173,86 @@ impl Connection {
         XlibDisplayHandle::new(NonNull::new(self.display as *mut _), self.screen)
     }
 
+    pub fn request_selection<R>(
+        &self,
+        window: c_ulong,
+        selection: c_ulong,
+        property: c_ulong,
+        target: c_ulong,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Result<R, SelectionError> {
+        unsafe extern "C" fn event_filter(
+            _: *mut Display,
+            e: *mut XEvent,
+            _: *mut c_char,
+        ) -> c_int {
+            unsafe { ((*e).type_ == SelectionNotify) as _ }
+        }
+
+        unsafe {
+            let owner = XGetSelectionOwner(self.display, selection);
+            if owner == 0 {
+                return Err(SelectionError::Empty);
+            } else if window == owner {
+                return Err(SelectionError::Recursive);
+            }
+
+            let result = XConvertSelection(
+                self.display,
+                selection,
+                target,
+                property,
+                window,
+                CurrentTime,
+            );
+
+            if result == 0 {
+                return Err(SelectionError::Empty);
+            }
+
+            XSync(self.display, 0);
+
+            let event = {
+                let mut event = zeroed();
+                XIfEvent(self.display, &mut event, Some(event_filter), null_mut());
+                event.selection
+            };
+
+            if event.property == 0 || event.selection != selection || event.target != target {
+                return Err(SelectionError::Empty);
+            }
+
+            let mut target = 0;
+            let mut format = 0;
+            let mut size = 0;
+            let mut nitems = 0;
+            let mut data = null_mut();
+
+            let result = XGetWindowProperty(
+                self.display,
+                event.requestor,
+                event.property,
+                0,
+                !0,
+                0,
+                AnyPropertyType as _,
+                &mut target,
+                &mut format,
+                &mut size,
+                &mut nitems,
+                &mut data,
+            );
+
+            if result != 0 || data.is_null() {
+                return Err(SelectionError::Empty);
+            }
+
+            let result = f(std::slice::from_raw_parts(data as *const u8, size as usize));
+            XFree(data as *mut _);
+            Ok(result)
+        }
+    }
+
     pub fn cursor(&self, cursor: Option<&'static CStr>) -> c_ulong {
         match cursor {
             None => *self
@@ -294,8 +362,15 @@ impl Drop for Connection {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum SelectionError {
+    Empty,
+    Recursive,
+}
+
 static ERRORS_FOR_EACH_DISPLAY: LazyLock<Mutex<HashMap<usize, Option<String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
 unsafe extern "C" fn error_handler(dpy: *mut Display, err: *mut XErrorEvent) -> i32 {
     let mut map = ERRORS_FOR_EACH_DISPLAY.lock().expect("poisoned");
     let Some(conn) = map.get_mut(&(dpy as usize)) else {

@@ -1,10 +1,8 @@
 use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
-use crate::platform::x11::connection::ATOM_WAKEUP;
-use crate::platform::x11::util::{
-    VisualConfig, query_cursor, relative_position, request_clipboard,
-};
+use crate::platform::x11::connection::{ATOM_PRIVATE, ATOM_WAKEUP, SelectionError};
+use crate::platform::x11::util::{VisualConfig, query_cursor, relative_position};
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
     Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
@@ -42,7 +40,7 @@ pub struct WindowImpl {
     last_window_visible: Cell<bool>,
     last_window_focused: Cell<bool>,
 
-    clipboard_contents: RefCell<Exchange>,
+    exchange_clipboard: RefCell<Exchange>,
 
     #[allow(clippy::type_complexity)]
     handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
@@ -253,10 +251,10 @@ impl WindowImpl {
                 last_window_visible: Cell::new(options.visible),
                 last_window_focused: Cell::new(false),
                 last_cursor_in_bounds: Cell::new(false),
-                clipboard_contents: RefCell::new(Exchange::Empty),
+
+                exchange_clipboard: RefCell::new(Exchange::Empty),
 
                 handler: RefCell::new(None),
-
                 gl_context,
                 connection,
             });
@@ -546,7 +544,7 @@ impl WindowImpl {
                 }
 
                 SelectionRequest => {
-                    let exchange = &*self.clipboard_contents.borrow();
+                    let exchange = &*self.exchange_clipboard.borrow();
                     let event = event.selection_request;
 
                     if event.selection != self.connection.atom(c"CLIPBOARD") {
@@ -554,14 +552,17 @@ impl WindowImpl {
                     }
 
                     let a_targets = self.connection.atom(c"TARGETS");
-                    let a_uri_list = self.connection.atom(c"text/uri-list");
                     let a_utf8_string = self.connection.atom(c"UTF8_STRING");
+                    let a_text_plain = self.connection.atom(c"text/plain");
+                    let a_text_uri_list = self.connection.atom(c"text/uri-list");
+                    let a_private = self.connection.atom(ATOM_PRIVATE);
 
                     if event.property != 0 {
                         if event.target == a_targets {
                             let atom = match exchange {
-                                Exchange::UriList(_) => a_uri_list,
+                                Exchange::UriList(_) => a_text_uri_list,
                                 Exchange::Empty | Exchange::Text(_) => a_utf8_string,
+                                Exchange::Private(_) => a_private,
                             };
 
                             XChangeProperty(
@@ -574,7 +575,9 @@ impl WindowImpl {
                                 &atom as *const _ as *const u8,
                                 1,
                             );
-                        } else if (event.target == a_utf8_string || event.target == XA_STRING)
+                        } else if (event.target == a_utf8_string
+                            || event.target == a_text_plain
+                            || event.target == XA_STRING)
                             && let Exchange::Text(text) = exchange
                         {
                             XChangeProperty(
@@ -587,7 +590,7 @@ impl WindowImpl {
                                 text.as_ptr(),
                                 text.len() as i32,
                             );
-                        } else if event.target == a_uri_list
+                        } else if event.target == a_text_uri_list
                             && let Exchange::UriList(items) = exchange
                         {
                             let text = items.join("\r\n");
@@ -600,6 +603,19 @@ impl WindowImpl {
                                 PropModeReplace,
                                 text.as_ptr(),
                                 text.len() as i32,
+                            );
+                        } else if event.target == a_private
+                            && let Exchange::Private(data) = exchange
+                        {
+                            XChangeProperty(
+                                self.connection.display(),
+                                event.requestor,
+                                event.property,
+                                event.target,
+                                8,
+                                PropModeReplace,
+                                data.as_ptr(),
+                                data.len() as i32,
                             );
                         }
                     }
@@ -860,35 +876,52 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn get_clipboard(&self) -> Exchange {
-        let utf8_string = self.connection.atom(c"UTF8_STRING");
-        let text_uri_list = self.connection.atom(c"text/uri-list");
+        let a_clipboard = self.connection.atom(c"CLIPBOARD");
+        let a_xsel_data = self.connection.atom(c"XSEL_DATA");
+        let a_utf8_string = self.connection.atom(c"UTF8_STRING");
+        let a_text_uri_list = self.connection.atom(c"text/uri-list");
+        let a_text_plain = self.connection.atom(c"text/plain");
+        let a_private = self.connection.atom(ATOM_PRIVATE);
 
-        for atom in [text_uri_list, utf8_string, XA_STRING] {
-            let string = match request_clipboard(
-                &self.connection,
+        for atom in [
+            a_private,
+            a_text_uri_list,
+            a_text_plain,
+            a_utf8_string,
+            XA_STRING,
+        ] {
+            let result = self.connection.request_selection(
                 self.window_id,
+                a_clipboard,
+                a_xsel_data,
                 atom,
-                |data, size| unsafe {
-                    let slice = std::slice::from_raw_parts(data, size);
-                    String::from_utf8_lossy(slice).into_owned()
+                |slice| {
+                    if atom == a_private {
+                        Exchange::Private(slice.to_vec())
+                    } else if atom == a_text_uri_list {
+                        let string = match str::from_utf8(slice) {
+                            Ok(s) => s,
+                            Err(_) => return Exchange::Empty,
+                        };
+
+                        Exchange::UriList(
+                            string
+                                .lines()
+                                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                                .map(|l| l.to_string())
+                                .collect(),
+                        )
+                    } else {
+                        Exchange::Text(String::from_utf8_lossy(slice).to_string())
+                    }
                 },
-            ) {
-                Some(string) => string,
-                None => continue,
-            };
+            );
 
-            if atom == text_uri_list {
-                let paths = string
-                    .lines()
-                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                    .map(|l| l.to_string())
-                    .collect::<Vec<_>>();
-
-                if !paths.is_empty() {
-                    return Exchange::UriList(paths);
-                }
-            } else {
-                return Exchange::Text(string);
+            match result {
+                Ok(Exchange::Empty) => continue,
+                Ok(exchange) => return exchange,
+                Err(SelectionError::Empty) => continue,
+                Err(SelectionError::Recursive) => return self.exchange_clipboard.borrow().clone(),
             }
         }
 
@@ -898,7 +931,7 @@ impl PlatformWindow for WindowImpl {
     fn set_clipboard(&self, data: Exchange) -> bool {
         let is_empty = matches!(data, Exchange::Empty);
 
-        *self.clipboard_contents.borrow_mut() = data;
+        *self.exchange_clipboard.borrow_mut() = data;
 
         unsafe {
             XSetSelectionOwner(

@@ -11,7 +11,8 @@ fn main() {
 
         window.set_cursor_icon(MouseCursor::Move);
         println!("clipboard contents: {:?}", window.get_clipboard());
-        window.set_clipboard(Exchange::Text("Hello from picoview!".to_owned()));
+        window.set_clipboard(Exchange::Private("Hello from picoview!".into()));
+        println!("clipboard contents: {:?}", window.get_clipboard());
 
         Box::new(move |event| match event {
             Event::WindowFrame => {

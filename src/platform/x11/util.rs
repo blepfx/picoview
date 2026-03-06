@@ -1,7 +1,7 @@
 use crate::{Key, Modifiers, MouseCursor, Point, platform::x11::connection::Connection};
 use libc::{c_int, c_uint};
 use std::{
-    ffi::{CStr, c_char, c_ulong},
+    ffi::{CStr, c_ulong},
     mem::zeroed,
     os::unix::process::CommandExt,
     process::{Command, Stdio},
@@ -270,69 +270,6 @@ pub fn relative_position(
         })
     } else {
         None
-    }
-}
-
-pub fn request_clipboard<R>(
-    conn: &Connection,
-    window: c_ulong,
-    atom: c_ulong,
-    f: impl FnOnce(*mut u8, usize) -> R,
-) -> Option<R> {
-    unsafe extern "C" fn event_filter(_: *mut Display, e: *mut XEvent, _: *mut c_char) -> c_int {
-        unsafe { ((*e).type_ == SelectionNotify) as _ }
-    }
-
-    unsafe {
-        let result = XConvertSelection(
-            conn.display(),
-            conn.atom(c"CLIPBOARD"),
-            atom,
-            conn.atom(c"XSEL_DATA"),
-            window,
-            CurrentTime,
-        );
-
-        if result == 0 {
-            return None;
-        }
-
-        XSync(conn.display(), 0);
-
-        let event = {
-            let mut event = zeroed();
-            XIfEvent(conn.display(), &mut event, Some(event_filter), null_mut());
-            event.selection
-        };
-
-        if event.property == 0 || event.selection != conn.atom(c"CLIPBOARD") {
-            return None;
-        }
-
-        let mut target = 0;
-        let mut format = 0;
-        let mut size = 0;
-        let mut nitems = 0;
-        let mut data = null_mut();
-
-        XGetWindowProperty(
-            conn.display(),
-            event.requestor,
-            event.property,
-            0,
-            !0,
-            0,
-            AnyPropertyType as _,
-            &mut target,
-            &mut format,
-            &mut size,
-            &mut nitems,
-            &mut data,
-        );
-
-        let result = f(data, size as usize);
-        XFree(data as *mut _);
-        Some(result)
     }
 }
 
