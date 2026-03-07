@@ -15,7 +15,6 @@ use std::{
 use x11::{xcursor::*, xlib::*, xrandr::*};
 
 pub const ATOM_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
-pub const ATOM_PRIVATE: &CStr = c"PICOVIEW_PRIVATE";
 
 unsafe impl Send for Connection {}
 pub struct Connection {

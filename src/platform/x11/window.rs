@@ -1,17 +1,18 @@
 use super::connection::Connection;
 use super::gl::GlContext;
 use super::util;
-use crate::platform::x11::connection::{ATOM_PRIVATE, ATOM_WAKEUP, SelectionError};
-use crate::platform::x11::util::{VisualConfig, query_cursor, relative_position};
+use crate::platform::x11::connection::{ATOM_WAKEUP, SelectionError};
+use crate::platform::x11::util::{VisualConfig, decode_uri_list, query_cursor, relative_position};
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
-    Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, ScrollMode, Size, WakeupError,
-    Window, WindowBuilder, WindowError, WindowFactory, WindowWaker, rwh_06,
+    Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
+    WindowBuilder, WindowError, WindowFactory, WindowWaker, rwh_06,
 };
 use libc::c_ulong;
 use std::cell::{Cell, RefCell};
-use std::ffi::CString;
+use std::ffi::{CString, OsStr};
 use std::mem::zeroed;
+use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -413,11 +414,7 @@ impl WindowImpl {
                                 _ => return,
                             };
 
-                            Event::MouseScroll {
-                                x,
-                                y,
-                                mode: ScrollMode::Discrete,
-                            }
+                            Event::MouseScroll { x, y }
                         }
 
                         _ => return,
@@ -562,14 +559,12 @@ impl WindowImpl {
                     let a_utf8_string = self.connection.atom(c"UTF8_STRING");
                     let a_text_plain = self.connection.atom(c"text/plain");
                     let a_text_uri_list = self.connection.atom(c"text/uri-list");
-                    let a_private = self.connection.atom(ATOM_PRIVATE);
 
                     if event.property != 0 {
                         if event.target == a_targets {
                             let atom = match exchange {
-                                Exchange::UriList(_) => a_text_uri_list,
+                                Exchange::Files(_) => a_text_uri_list,
                                 Exchange::Empty | Exchange::Text(_) => a_utf8_string,
-                                Exchange::Private(_) => a_private,
                             };
 
                             XChangeProperty(
@@ -598,9 +593,9 @@ impl WindowImpl {
                                 text.len() as i32,
                             );
                         } else if event.target == a_text_uri_list
-                            && let Exchange::UriList(items) = exchange
+                            && let Exchange::Files(files) = exchange
                         {
-                            let text = items.join("\r\n");
+                            let list = util::encode_uri_list(files);
                             XChangeProperty(
                                 self.connection.display(),
                                 event.requestor,
@@ -608,21 +603,8 @@ impl WindowImpl {
                                 event.target,
                                 8,
                                 PropModeReplace,
-                                text.as_ptr(),
-                                text.len() as i32,
-                            );
-                        } else if event.target == a_private
-                            && let Exchange::Private(data) = exchange
-                        {
-                            XChangeProperty(
-                                self.connection.display(),
-                                event.requestor,
-                                event.property,
-                                event.target,
-                                8,
-                                PropModeReplace,
-                                data.as_ptr(),
-                                data.len() as i32,
+                                list.as_bytes().as_ptr(),
+                                list.len() as i32,
                             );
                         }
                     }
@@ -888,36 +870,16 @@ impl PlatformWindow for WindowImpl {
         let a_utf8_string = self.connection.atom(c"UTF8_STRING");
         let a_text_uri_list = self.connection.atom(c"text/uri-list");
         let a_text_plain = self.connection.atom(c"text/plain");
-        let a_private = self.connection.atom(ATOM_PRIVATE);
 
-        for atom in [
-            a_private,
-            a_text_uri_list,
-            a_text_plain,
-            a_utf8_string,
-            XA_STRING,
-        ] {
+        for atom in [a_text_uri_list, a_text_plain, a_utf8_string, XA_STRING] {
             let result = self.connection.request_selection(
                 self.window_id,
                 a_clipboard,
                 a_xsel_data,
                 atom,
                 |slice| {
-                    if atom == a_private {
-                        Exchange::Private(slice.to_vec())
-                    } else if atom == a_text_uri_list {
-                        let string = match str::from_utf8(slice) {
-                            Ok(s) => s,
-                            Err(_) => return Exchange::Empty,
-                        };
-
-                        Exchange::UriList(
-                            string
-                                .lines()
-                                .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                                .map(|l| l.to_string())
-                                .collect(),
-                        )
+                    if atom == a_text_uri_list {
+                        Exchange::Files(decode_uri_list(OsStr::from_bytes(slice)))
                     } else {
                         Exchange::Text(String::from_utf8_lossy(slice).to_string())
                     }

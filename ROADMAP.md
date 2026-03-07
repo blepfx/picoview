@@ -24,12 +24,13 @@
 |  - `WindowFrame`                                      | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowDamage`                                     | :ok:     | :ok:     | :ok:     | Medium   |
 |  - `DragHover`                                        | :x:      | :x:      | :x:      | Low      |
-|  - `DragAccept`                                       | :x:      | :x:      | :x:      | Low      |
-|  - `DragCancel`                                       | :x:      | :x:      | :x:      | Low      |
+|  - `DragDrop`                                         | :x:      | :x:      | :x:      | Low      |
+| Clipboard                                             |          |          |          |          |
+|  - Text                                               | :ok:     | :ok:     | :ok:     | High     |
+|  - Files                                              | :ok:     | :x:      | :ok:     | Medium   |
 | Event loop wakeup                                     | :ok:     | :ok:     | :ok:     | High     |
 | Vertical blank synchronization                        | :ok:[^2] | :ok:     | :o:[^3]  | High     |
 | OpenGL context creation                               | :ok:     | :ok:     | :ok:     | High     |
-| Clipboard text get/set                                | :ok:     | :ok:     | :ok:     | Medium   |
 | Pixel scaling abstraction                             | :ok:     | :x:      | :ok:     | High     |
 | Set position                                          | :ok:     | :x:      | :ok:     | Medium   |
 | Set size                                              | :ok:     | :ok:     | :ok:     | High     |

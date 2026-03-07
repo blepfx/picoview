@@ -1,9 +1,11 @@
 use crate::{Key, Modifiers, MouseCursor, Point, platform::x11::connection::Connection};
 use libc::{c_int, c_uint};
 use std::{
-    ffi::{CStr, c_ulong},
+    array::from_fn,
+    ffi::{CStr, OsStr, OsString, c_ulong},
     mem::zeroed,
-    os::unix::process::CommandExt,
+    os::unix::{ffi::OsStrExt, process::CommandExt},
+    path::PathBuf,
     process::{Command, Stdio},
     ptr::null_mut,
 };
@@ -271,6 +273,55 @@ pub fn relative_position(
     } else {
         None
     }
+}
+
+pub fn encode_uri_list(files: &[PathBuf]) -> OsString {
+    let mut ret = OsString::new();
+    for file in files {
+        if !ret.is_empty() {
+            ret.push("\r\n");
+        }
+        ret.push("file://");
+        ret.push(file.as_os_str());
+    }
+
+    ret
+}
+
+pub fn decode_uri_list(list: &OsStr) -> Vec<PathBuf> {
+    fn percent_decode(bytes: &[u8]) -> Vec<u8> {
+        let mut iter = bytes.iter();
+        let mut result = Vec::with_capacity(bytes.len());
+
+        while let Some(&b) = iter.next() {
+            if b == b'%' {
+                let [high, low] = from_fn(|_| {
+                    iter.next()
+                        .copied()
+                        .map(char::from)
+                        .and_then(|c| c.to_digit(16))
+                });
+
+                if let (Some(high), Some(low)) = (high, low) {
+                    result.push((high * 16 + low) as u8);
+                }
+            } else {
+                result.push(b);
+            }
+        }
+
+        result
+    }
+
+    list.as_bytes()
+        .split(|&b| b == b'\n')
+        .filter(|line| !line.is_empty() && !line.starts_with(b"#"))
+        .map(|line| {
+            let line = line.strip_prefix(b"file://").unwrap_or(line);
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            PathBuf::from(OsStr::from_bytes(&percent_decode(line)))
+        })
+        .collect()
 }
 
 pub struct VisualConfig {
