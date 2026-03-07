@@ -1,19 +1,24 @@
 use crate::{Key, Modifiers, Size, WindowError};
 use std::{
-    ffi::{CStr, OsString},
-    os::windows::ffi::OsStrExt,
-    ptr::null_mut,
+    ffi::{CStr, OsString, c_void},
+    os::windows::ffi::{OsStrExt, OsStringExt},
+    path::PathBuf,
+    ptr::{copy_nonoverlapping, null_mut},
 };
 use windows_sys::{
     Win32::{
         Foundation::{GetLastError, HINSTANCE, HWND, POINT, RECT},
         System::{
             Com::CoCreateGuid,
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
+            },
             Diagnostics::Debug::{
                 FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
                 FORMAT_MESSAGE_IGNORE_INSERTS, FormatMessageW,
             },
             LibraryLoader::{GetProcAddress, LoadLibraryA},
+            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
             SystemServices::IMAGE_DOS_HEADER,
         },
         UI::{
@@ -21,6 +26,7 @@ use windows_sys::{
                 GetKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU, VK_NUMLOCK,
                 VK_RWIN, VK_SCROLL, VK_SHIFT,
             },
+            Shell::{DROPFILES, DragQueryFileW},
             WindowsAndMessaging::{
                 AdjustWindowRectEx, DispatchMessageW, GetMessageW, MSG, TranslateMessage,
                 WINDOW_STYLE,
@@ -302,6 +308,103 @@ pub fn window_size_from_client_size(size: Size, dwstyle: WINDOW_STYLE) -> POINT 
         POINT {
             x: rect.right - rect.left,
             y: rect.bottom - rect.top,
+        }
+    }
+}
+
+pub fn decode_hdrop(hdrop: *mut c_void) -> Vec<PathBuf> {
+    unsafe {
+        let num_files = DragQueryFileW(hdrop, u32::MAX, null_mut(), 0);
+        (0..num_files)
+            .map(|i| {
+                let len = DragQueryFileW(hdrop, i, null_mut(), 0) + 1;
+                let mut buf = vec![0u16; len as usize];
+                let len = DragQueryFileW(hdrop, i, buf.as_mut_ptr(), len);
+                PathBuf::from(OsString::from_wide(&buf[..len as usize]))
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
+pub fn encode_hdrop(paths: &[PathBuf]) -> Vec<u16> {
+    let mut result = Vec::new();
+
+    unsafe {
+        let dropfiles = DROPFILES {
+            pFiles: std::mem::size_of::<DROPFILES>() as u32,
+            pt: POINT { x: 0, y: 0 },
+            fNC: 0,
+            fWide: 1,
+        };
+
+        result.extend_from_slice(std::slice::from_raw_parts(
+            &dropfiles as *const DROPFILES as *const u16,
+            std::mem::size_of::<DROPFILES>() / 2,
+        ));
+    }
+
+    for path in paths {
+        result.extend(OsString::from(path).encode_wide());
+        result.push(0);
+    }
+
+    result.push(0);
+    result
+}
+
+pub struct Clipboard(());
+
+impl Clipboard {
+    pub unsafe fn open(hwnd: HWND) -> Option<Self> {
+        unsafe {
+            if OpenClipboard(hwnd) != 0 {
+                Some(Self(()))
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn empty(&self) {
+        unsafe {
+            EmptyClipboard();
+        }
+    }
+
+    pub fn set<T>(&self, format: u16, data: &[T]) {
+        unsafe {
+            let buf = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(data));
+            let buf = GlobalLock(buf) as *mut T;
+            copy_nonoverlapping(data.as_ptr(), buf, data.len());
+            GlobalUnlock(buf as *mut _);
+            SetClipboardData(format as _, buf as *mut _);
+        }
+    }
+
+    pub fn get<R>(&self, format: u16, f: impl FnOnce(*const u8) -> R) -> Option<R> {
+        unsafe {
+            let data = GetClipboardData(format as _);
+            if !data.is_null() {
+                let data = GlobalLock(data);
+                let result = if !data.is_null() {
+                    Some(f(data as *const u8))
+                } else {
+                    None
+                };
+
+                GlobalUnlock(data as *mut _);
+                result
+            } else {
+                None
+            }
+        }
+    }
+}
+
+impl Drop for Clipboard {
+    fn drop(&mut self) {
+        unsafe {
+            CloseClipboard();
         }
     }
 }

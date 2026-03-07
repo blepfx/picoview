@@ -7,11 +7,14 @@ use super::{
     },
 };
 use crate::{
-    Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
-    WindowError, WindowWaker,
+    Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
+    WindowBuilder, WindowError, WindowWaker,
     platform::{
         OpenMode, PlatformWaker, PlatformWindow,
-        win::{util::window_size_from_client_size, vsync::VSyncCallback},
+        win::{
+            util::{Clipboard, decode_hdrop, encode_hdrop, window_size_from_client_size},
+            vsync::VSyncCallback,
+        },
     },
     rwh_06,
 };
@@ -20,7 +23,7 @@ use std::{
     collections::VecDeque,
     mem::{size_of, zeroed},
     num::NonZeroIsize,
-    ptr::{copy_nonoverlapping, null, null_mut},
+    ptr::{null, null_mut},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -34,11 +37,7 @@ use windows_sys::Win32::{
     },
     System::{
         Com::CoInitialize,
-        DataExchange::{
-            CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
-        },
-        Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
-        Ole::CF_UNICODETEXT,
+        Ole::{CF_HDROP, CF_UNICODETEXT},
     },
     UI::{
         Controls::WM_MOUSELEAVE,
@@ -448,49 +447,44 @@ impl PlatformWindow for WindowImpl {
         }
     }
 
-    fn get_clipboard_text(&self) -> Option<String> {
+    fn get_clipboard(&self) -> Exchange {
         unsafe {
-            if OpenClipboard(self.window_hwnd) != 0 {
-                let data = GetClipboardData(CF_UNICODETEXT as _);
-                let result = if !data.is_null() {
-                    let data = GlobalLock(data);
-                    let result = if !data.is_null() {
-                        Some(from_widestring(data as *const u16))
-                    } else {
-                        None
-                    };
+            let clipboard = match Clipboard::open(self.window_hwnd) {
+                Some(clipboard) => clipboard,
+                None => return Exchange::Empty,
+            };
 
-                    GlobalUnlock(data);
-                    result
-                } else {
-                    None
-                };
-
-                CloseClipboard();
-                result
-            } else {
-                None
+            if let Some(files) = clipboard.get(CF_HDROP, |hdrop| decode_hdrop(hdrop as _)) {
+                return Exchange::Files(files);
             }
+
+            if let Some(text) = clipboard.get(CF_UNICODETEXT, |data| from_widestring(data as _)) {
+                return Exchange::Text(text);
+            }
+
+            Exchange::Empty
         }
     }
 
-    fn set_clipboard_text(&self, text: &str) -> bool {
+    fn set_clipboard(&self, data: Exchange) -> bool {
         unsafe {
-            if OpenClipboard(self.window_hwnd) != 0 {
-                EmptyClipboard();
-                let wide = to_widestring(text);
-                let buf = GlobalAlloc(GMEM_MOVEABLE, (wide.len() + 1) * size_of::<u16>());
-                let buf = GlobalLock(buf) as *mut u16;
-                copy_nonoverlapping(wide.as_ptr(), buf, wide.len());
-                buf.add(wide.len()).write(0);
-                GlobalUnlock(buf as *mut _);
-                SetClipboardData(CF_UNICODETEXT as _, buf as *mut _);
-                CloseClipboard();
-                return true;
-            }
-        }
+            let clipboard = match Clipboard::open(self.window_hwnd) {
+                Some(clipboard) => clipboard,
+                None => return false,
+            };
 
-        false
+            match data {
+                Exchange::Empty => clipboard.empty(),
+                Exchange::Text(text) => {
+                    clipboard.set(CF_UNICODETEXT, &to_widestring(&text));
+                }
+                Exchange::Files(files) => {
+                    clipboard.set(CF_HDROP, &encode_hdrop(&files));
+                }
+            }
+
+            true
+        }
     }
 
     fn is_opengl_supported(&self) -> bool {
@@ -657,7 +651,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
-                let wheel_delta: i16 = (wparam >> 16) as i16;
+                let wheel_delta = (wparam >> 16) as i16;
                 let wheel_delta = wheel_delta as f32 / WHEEL_DELTA as f32;
 
                 window.send_event_defer(Event::MouseScroll {
