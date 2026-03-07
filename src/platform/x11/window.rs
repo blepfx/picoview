@@ -5,8 +5,8 @@ use crate::platform::x11::connection::{ATOM_PRIVATE, ATOM_WAKEUP, SelectionError
 use crate::platform::x11::util::{VisualConfig, query_cursor, relative_position};
 use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
 use crate::{
-    Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
-    WindowBuilder, WindowError, WindowFactory, WindowWaker, rwh_06,
+    Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, ScrollMode, Size, WakeupError,
+    Window, WindowBuilder, WindowError, WindowFactory, WindowWaker, rwh_06,
 };
 use libc::c_ulong;
 use std::cell::{Cell, RefCell};
@@ -311,8 +311,7 @@ impl WindowImpl {
 
                 let num_events = self.connection.wait_for_events(Some(wait_time))?;
                 for _ in 0..num_events {
-                    let event = self.connection.next_event()?;
-                    self.handle_event(event);
+                    self.handle_event(self.connection.next_event()?);
                 }
 
                 if num_events != 0 {
@@ -405,13 +404,21 @@ impl WindowImpl {
                             }
                         }
 
-                        4..=7 if event.type_ == ButtonPress => match event.button {
-                            4 => Event::MouseScroll { x: 0.0, y: 1.0 },
-                            5 => Event::MouseScroll { x: 0.0, y: -1.0 },
-                            6 => Event::MouseScroll { x: 1.0, y: 0.0 },
-                            7 => Event::MouseScroll { x: -1.0, y: 0.0 },
-                            _ => return,
-                        },
+                        4..=7 if event.type_ == ButtonPress => {
+                            let (x, y) = match event.button {
+                                4 => (0.0, 1.0),
+                                5 => (0.0, -1.0),
+                                6 => (1.0, 0.0),
+                                7 => (-1.0, 0.0),
+                                _ => return,
+                            };
+
+                            Event::MouseScroll {
+                                x,
+                                y,
+                                mode: ScrollMode::Discrete,
+                            }
+                        }
 
                         _ => return,
                     };

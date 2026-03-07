@@ -261,6 +261,18 @@ pub enum Key {
     F12,
 }
 
+/// The mode of scroll events. This is a hint that the application can use to
+/// adjust the scroll sensitivity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollMode {
+    /// Scroll events are generated in discrete steps (mouse wheel click).
+    /// The `x` and `y` values of the scroll event will typically be integers
+    /// (but not necessarily).
+    Discrete,
+    /// Scroll events are generated with high precision (touchpad).
+    Precise,
+}
+
 /// A data exchange format for clipboard and drag-and-drop operations.
 #[derive(Debug, Clone)]
 pub enum Exchange {
@@ -390,6 +402,9 @@ pub enum Event<'a> {
 
         /// The amount scrolled in the vertical direction
         y: f32,
+
+        /// The mode of the scroll event
+        mode: ScrollMode,
     },
 
     /// The state of the modifier keys (Shift, Ctrl, Alt, etc.) changed.
