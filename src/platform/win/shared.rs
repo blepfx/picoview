@@ -79,6 +79,7 @@ impl Win32Shared {
             let conn = Arc::new(Self {
                 cursor_cache: CursorCache::load(),
 
+                // TODO: fix this, set a hook per window (due to thread id stuff)
                 keyboard_hook: SetWindowsHookExW(
                     WH_GETMESSAGE,
                     Some(keyboard_hook_proc),
