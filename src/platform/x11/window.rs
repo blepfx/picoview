@@ -1,10 +1,7 @@
 use super::gl::GlContext;
 use super::util::*;
-use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
-use crate::{
-    Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
-    WindowBuilder, WindowError, WindowFactory, WindowWaker, rwh_06,
-};
+use crate::platform::{OpenMode, PlatformOpenGl, PlatformWaker, PlatformWindow};
+use crate::*;
 use libc::c_ulong;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -686,6 +683,10 @@ impl PlatformWindow for WindowImpl {
         WindowWaker(self.waker.clone())
     }
 
+    fn opengl(&self) -> Option<&dyn PlatformOpenGl> {
+        self.gl_context.as_ref().map(|gl| gl as &dyn PlatformOpenGl)
+    }
+
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
         rwh_06::RawWindowHandle::Xlib(rwh_06::XlibWindowHandle::new(self.window_id))
     }
@@ -925,31 +926,6 @@ impl PlatformWindow for WindowImpl {
         }
 
         true
-    }
-
-    fn is_opengl_supported(&self) -> bool {
-        self.gl_context.is_some()
-    }
-
-    fn opengl_get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .get_proc_address(name)
-    }
-
-    fn opengl_make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .make_current(current)
-    }
-
-    fn opengl_swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .swap_buffers()
     }
 }
 

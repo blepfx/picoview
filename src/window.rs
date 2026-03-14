@@ -341,6 +341,7 @@ impl Debug for WindowBuilder {
             .field("size", &self.size)
             .field("resizable", &self.resizable)
             .field("position", &self.position)
+            .field("opengl", &self.opengl)
             .finish_non_exhaustive()
     }
 }

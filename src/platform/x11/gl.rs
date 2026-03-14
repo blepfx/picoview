@@ -1,3 +1,4 @@
+use crate::platform::PlatformOpenGl;
 use crate::platform::x11::util::{Connection, VisualConfig};
 use crate::{GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError};
 use std::collections::HashSet;
@@ -265,8 +266,10 @@ impl GlContext {
             glXDestroyContext(connection.display(), self.context);
         }
     }
+}
 
-    pub fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
+impl PlatformOpenGl for GlContext {
+    fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
         unsafe {
             glXGetProcAddress(symbol.as_ptr() as *const u8)
                 .map(|x| x as *const c_void)
@@ -274,14 +277,14 @@ impl GlContext {
         }
     }
 
-    pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
+    fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         unsafe {
             glXSwapBuffers(self.connection.display(), self.window);
             Ok(())
         }
     }
 
-    pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+    fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         unsafe {
             let result = {
                 if current {
