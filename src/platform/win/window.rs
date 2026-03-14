@@ -1,29 +1,12 @@
-use super::{
-    gl::GlContext,
-    shared::Win32Shared,
-    util::{
-        check_error, from_widestring, generate_guid, get_modifiers, hinstance, run_event_loop,
-        scan_code_to_key, to_widestring,
-    },
-};
-use crate::{
-    Event, Exchange, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window,
-    WindowBuilder, WindowError, WindowWaker,
-    platform::{
-        OpenMode, PlatformWaker, PlatformWindow,
-        win::{
-            util::{Clipboard, decode_hdrop, encode_hdrop, window_size_from_client_size},
-            vsync::VSyncCallback,
-        },
-    },
-    rwh_06,
-};
+use super::{gl::GlContext, hook::KeyboardHook, util::*, vsync::VSyncCallback};
+use crate::{platform::*, *};
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
     mem::{size_of, zeroed},
     num::NonZeroIsize,
     ptr::{null, null_mut},
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -40,26 +23,8 @@ use windows_sys::Win32::{
         Ole::{CF_HDROP, CF_UNICODETEXT},
     },
     UI::{
-        Controls::WM_MOUSELEAVE,
-        Input::KeyboardAndMouse::{
-            SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
-        },
-        Shell::ShellExecuteW,
-        WindowsAndMessaging::{
-            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_STYLE,
-            GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDesktopWindow, GetWindowLongPtrW,
-            GetWindowLongW, HCURSOR, HTCLIENT, IDC_ARROW, LoadCursorW, MINMAXINFO, PostMessageW,
-            PostQuitMessage, RegisterClassW, SW_SHOWDEFAULT, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW, SetCursor,
-            SetCursorPos, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowCursor,
-            USER_DEFAULT_SCREEN_DPI, UnregisterClassW, WHEEL_DELTA, WM_CLOSE, WM_DESTROY,
-            WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-            WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
-            WS_CHILD, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_VISIBLE,
-            XBUTTON1, XBUTTON2,
-        },
+        Controls::WM_MOUSELEAVE, Input::KeyboardAndMouse::*, Shell::ShellExecuteW,
+        WindowsAndMessaging::*,
     },
 };
 
@@ -71,16 +36,17 @@ pub const WM_USER_WAKEUP: u32 = WM_USER + 5;
 
 pub struct WindowImpl {
     gl_context: Option<GlContext>,
+    waker: Arc<WindowWakerImpl>,
 
     #[allow(clippy::type_complexity)]
     event_handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
     event_queue: RefCell<VecDeque<Event<'static>>>,
 
-    shared: Arc<Win32Shared>,
-    waker: Arc<WindowWakerImpl>,
-
     window_hwnd: HWND,
     window_class: u16,
+
+    // we have to keep it alive so the hook doesnt get uninstalled
+    _keyboard_hook: Rc<KeyboardHook>,
     vsync_callback: VSyncCallback,
 
     is_blocking: bool,
@@ -91,6 +57,8 @@ pub struct WindowImpl {
     state_current_modifiers: Cell<Modifiers>,
     state_current_cursor: Cell<HCURSOR>,
     state_mouse_capture: Cell<u32>,
+
+    cursor_cache: CursorCache,
 }
 
 pub struct WindowWakerImpl {
@@ -108,7 +76,6 @@ impl WindowImpl {
 
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
         unsafe {
-            let shared = Win32Shared::get()?;
             let parent = match mode.handle() {
                 None => null_mut(),
                 Some(rwh_06::RawWindowHandle::Win32(window)) => window.hwnd.get() as HWND,
@@ -120,7 +87,7 @@ impl WindowImpl {
                 check_error(com_init == 0, "com sta init")?;
             }
 
-            shared.try_set_thread_dpi_awareness_monitor_aware();
+            try_set_thread_dpi_awareness_monitor_aware();
 
             let class_name = to_widestring(&format!("picoview-{}", generate_guid()));
             let window_title = to_widestring(&options.title);
@@ -220,15 +187,15 @@ impl WindowImpl {
                 None => None,
             };
 
+            let cursor_cache = CursorCache::load();
             let window = Box::new(Self {
-                shared: shared.clone(),
                 waker: Arc::new(WindowWakerImpl {
                     window_hwnd: hwnd,
                     window_open: AtomicBool::new(true),
                 }),
 
                 state_mouse_capture: Cell::new(0),
-                state_current_cursor: Cell::new(shared.load_cursor(MouseCursor::Default)),
+                state_current_cursor: Cell::new(cursor_cache.get_closest(MouseCursor::Default)),
                 state_current_modifiers: Cell::new(Modifiers::empty()),
                 state_focused: Cell::new(true),
 
@@ -249,10 +216,13 @@ impl WindowImpl {
                         .unwrap_or((size, size)),
                 ),
 
+                gl_context,
+                cursor_cache,
+
                 event_handler: RefCell::new(None),
                 event_queue: RefCell::new(VecDeque::new()),
-                gl_context,
 
+                _keyboard_hook: KeyboardHook::install(),
                 vsync_callback: VSyncCallback::new(hwnd, |hwnd| {
                     SendMessageW(hwnd, WM_USER_VSYNC, 0, 0);
                 }),
@@ -271,14 +241,19 @@ impl WindowImpl {
                 .replace(Some((options.factory)(Window(&*(&*window as *const Self)))));
 
             window.send_event(Event::WindowScale {
-                scale: shared.try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
+                scale: try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
             });
 
             let waker = window.waker();
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(window) as _);
 
             if let OpenMode::Blocking = mode {
-                run_event_loop(null_mut());
+                // our favorite - win32 event pump
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, hwnd, 0, 0) > 0 {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
 
             Ok(waker)
@@ -334,6 +309,10 @@ impl PlatformWindow for WindowImpl {
         WindowWaker(self.waker.clone())
     }
 
+    fn opengl(&self) -> Option<&dyn PlatformOpenGl> {
+        self.gl_context.as_ref().map(|c| c as &dyn PlatformOpenGl)
+    }
+
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
         unsafe {
             let mut handle = rwh_06::Win32WindowHandle::new(NonZeroIsize::new_unchecked(
@@ -357,7 +336,7 @@ impl PlatformWindow for WindowImpl {
 
     fn set_cursor_icon(&self, cursor: MouseCursor) {
         self.state_current_cursor
-            .set(self.shared.load_cursor(cursor));
+            .set(self.cursor_cache.get_closest(cursor));
     }
 
     fn set_cursor_position(&self, point: Point) {
@@ -486,31 +465,6 @@ impl PlatformWindow for WindowImpl {
             true
         }
     }
-
-    fn is_opengl_supported(&self) -> bool {
-        self.gl_context.is_some()
-    }
-
-    fn opengl_swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
-        self.gl_context
-            .as_ref()
-            .expect("opengl not supported")
-            .swap_buffers()
-    }
-
-    fn opengl_make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
-        self.gl_context
-            .as_ref()
-            .expect("opengl not supported")
-            .make_current(current)
-    }
-
-    fn opengl_get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
-        self.gl_context
-            .as_ref()
-            .expect("opengl not supported")
-            .get_proc_address(name)
-    }
 }
 
 impl PlatformWaker for WindowWakerImpl {
@@ -589,6 +543,18 @@ unsafe extern "system" fn wnd_proc(
             WM_DPICHANGED => {
                 let dpi = (wparam & 0xFFFF) as u16 as u32;
                 let scale = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
+                let rect = &*(lparam as *const RECT);
+
+                SetWindowPos(
+                    hwnd,
+                    null_mut(),
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+
                 window.send_event_defer(Event::WindowScale { scale });
                 0
             }
@@ -801,6 +767,7 @@ unsafe extern "system" fn wnd_proc(
 
             WM_USER_KILL_WINDOW => {
                 DestroyWindow(hwnd);
+
                 0
             }
 

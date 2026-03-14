@@ -1,5 +1,5 @@
 mod gl;
-mod shared;
+mod hook;
 mod util;
 mod vsync;
 mod window;

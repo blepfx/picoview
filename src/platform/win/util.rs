@@ -1,55 +1,13 @@
-use crate::{Key, Modifiers, Size, WindowError};
-use std::{
-    ffi::{CStr, OsString, c_void},
-    os::windows::ffi::{OsStrExt, OsStringExt},
-    path::PathBuf,
-    ptr::{copy_nonoverlapping, null_mut},
-};
+use crate::Size;
+use std::{ffi::OsString, os::windows::ffi::OsStrExt};
 use windows_sys::{
     Win32::{
-        Foundation::{GetLastError, HINSTANCE, HWND, POINT, RECT},
-        System::{
-            Com::CoCreateGuid,
-            DataExchange::{
-                CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
-            },
-            Diagnostics::Debug::{
-                FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
-                FORMAT_MESSAGE_IGNORE_INSERTS, FormatMessageW,
-            },
-            LibraryLoader::{GetProcAddress, LoadLibraryA},
-            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
-            SystemServices::IMAGE_DOS_HEADER,
-        },
-        UI::{
-            Input::KeyboardAndMouse::{
-                GetKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU, VK_NUMLOCK,
-                VK_RWIN, VK_SCROLL, VK_SHIFT,
-            },
-            Shell::{DROPFILES, DragQueryFileW},
-            WindowsAndMessaging::{
-                AdjustWindowRectEx, DispatchMessageW, GetMessageW, MSG, TranslateMessage,
-                WINDOW_STYLE,
-            },
-        },
+        Foundation::{POINT, RECT},
+        System::Com::CoCreateGuid,
+        UI::WindowsAndMessaging::{AdjustWindowRectEx, WINDOW_STYLE},
     },
-    core::{GUID, PWSTR},
+    core::GUID,
 };
-
-pub unsafe fn load_function_dynamic<A, R>(
-    module: &CStr,
-    function: &CStr,
-) -> Option<unsafe fn(A) -> R> {
-    unsafe {
-        let lib = LoadLibraryA(module.as_ptr() as *const _);
-        if lib.is_null() {
-            None
-        } else {
-            let proc = GetProcAddress(lib, function.as_ptr() as *const _);
-            proc.map(|x| std::mem::transmute(x))
-        }
-    }
-}
 
 pub fn generate_guid() -> String {
     unsafe {
@@ -73,20 +31,6 @@ pub fn generate_guid() -> String {
     }
 }
 
-pub unsafe fn run_event_loop(hwnd: HWND) {
-    unsafe {
-        let mut msg: MSG = std::mem::zeroed();
-        loop {
-            if GetMessageW(&mut msg, hwnd, 0, 0) == 0 {
-                break;
-            }
-
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-}
-
 pub fn to_widestring(str: &str) -> Vec<u16> {
     OsString::from(str).encode_wide().chain([0]).collect()
 }
@@ -103,195 +47,6 @@ pub unsafe fn from_widestring(wide: *const u16) -> String {
             i += 1;
         }
     }
-}
-
-pub fn hinstance() -> HINSTANCE {
-    unsafe extern "C" {
-        unsafe static __ImageBase: IMAGE_DOS_HEADER;
-    }
-
-    unsafe { &__ImageBase as *const IMAGE_DOS_HEADER as _ }
-}
-
-pub fn check_error(assert: bool, message: &'static str) -> Result<(), crate::WindowError> {
-    if !assert {
-        unsafe {
-            let error = GetLastError();
-            let mut buffer = null_mut::<u16>();
-            let chars = FormatMessageW(
-                FORMAT_MESSAGE_ALLOCATE_BUFFER
-                    | FORMAT_MESSAGE_FROM_SYSTEM
-                    | FORMAT_MESSAGE_IGNORE_INSERTS,
-                null_mut(),
-                error,
-                0,
-                &mut buffer as *mut PWSTR as *mut _,
-                0,
-                null_mut(),
-            );
-
-            let extra = if chars == 0 || buffer.is_null() {
-                None
-            } else {
-                let parts = std::slice::from_raw_parts(buffer, chars as _);
-                Some(String::from_utf16_lossy(parts))
-            };
-
-            return Err(WindowError::Platform(match extra {
-                Some(desc) => format!("{}: {:X} - {}", message, error, desc),
-                None => format!("{}: {:X}", message, error),
-            }));
-        }
-    }
-
-    Ok(())
-}
-
-pub fn scan_code_to_key(scan_code: u32) -> Option<Key> {
-    use Key::*;
-    Some(match scan_code {
-        0x1 => Escape,
-        0x2 => D1,
-        0x3 => D2,
-        0x4 => D3,
-        0x5 => D4,
-        0x6 => D5,
-        0x7 => D6,
-        0x8 => D7,
-        0x9 => D8,
-        0xA => D9,
-        0xB => D0,
-        0xC => Minus,
-        0xD => Equal,
-        0xE => Backspace,
-        0xF => Tab,
-        0x10 => Q,
-        0x11 => W,
-        0x12 => E,
-        0x13 => R,
-        0x14 => T,
-        0x15 => Y,
-        0x16 => U,
-        0x17 => I,
-        0x18 => O,
-        0x19 => P,
-        0x1A => BracketLeft,
-        0x1B => BracketRight,
-        0x1C => Enter,
-        0x1D => ControlLeft,
-        0x1E => A,
-        0x1F => S,
-        0x20 => D,
-        0x21 => F,
-        0x22 => G,
-        0x23 => H,
-        0x24 => J,
-        0x25 => K,
-        0x26 => L,
-        0x27 => Semicolon,
-        0x28 => Quote,
-        0x29 => Backquote,
-        0x2A => ShiftLeft,
-        0x2B => Backslash,
-        0x2C => Z,
-        0x2D => X,
-        0x2E => C,
-        0x2F => V,
-        0x30 => B,
-        0x31 => N,
-        0x32 => M,
-        0x33 => Comma,
-        0x34 => Period,
-        0x35 => Slash,
-        0x36 => ShiftRight,
-        0x37 => NumpadMultiply,
-        0x38 => AltLeft,
-        0x39 => Space,
-        0x3A => CapsLock,
-        0x3B => F1,
-        0x3C => F2,
-        0x3D => F3,
-        0x3E => F4,
-        0x3F => F5,
-        0x40 => F6,
-        0x41 => F7,
-        0x42 => F8,
-        0x43 => F9,
-        0x44 => F10,
-        0x46 => ScrollLock,
-        0x47 => Numpad7,
-        0x48 => Numpad8,
-        0x49 => Numpad9,
-        0x4A => NumpadSubtract,
-        0x4B => Numpad4,
-        0x4C => Numpad5,
-        0x4D => Numpad6,
-        0x4E => NumpadAdd,
-        0x4F => Numpad1,
-        0x50 => Numpad2,
-        0x51 => Numpad3,
-        0x52 => Numpad0,
-        0x53 => NumpadDecimal,
-        0x54 => PrintScreen,
-        0x57 => F11,
-        0x58 => F12,
-        0x59 => NumpadEqual,
-        0x7E => NumpadComma,
-        0x11C => NumpadEnter,
-        0x11D => ControlRight,
-        0x135 => NumpadDivide,
-        0x137 => PrintScreen,
-        0x138 => AltRight,
-        0x145 => NumLock,
-        0x147 => Home,
-        0x148 => ArrowUp,
-        0x149 => PageUp,
-        0x14B => ArrowLeft,
-        0x14D => ArrowRight,
-        0x14F => End,
-        0x150 => ArrowDown,
-        0x151 => PageDown,
-        0x152 => Insert,
-        0x153 => Delete,
-        0x15B => MetaLeft,
-        0x15C => MetaRight,
-        0x15D => ContextMenu,
-        _ => return None,
-    })
-}
-
-pub unsafe fn get_modifiers() -> Modifiers {
-    const KEY_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
-        (VK_SHIFT, Modifiers::SHIFT),
-        (VK_CONTROL, Modifiers::CTRL),
-        (VK_MENU, Modifiers::ALT),
-        (VK_LWIN, Modifiers::META),
-        (VK_RWIN, Modifiers::META),
-    ];
-
-    const TOGGLE_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
-        (VK_CAPITAL, Modifiers::CAPS_LOCK),
-        (VK_NUMLOCK, Modifiers::NUM_LOCK),
-        (VK_SCROLL, Modifiers::SCROLL_LOCK),
-    ];
-
-    let mut state = Modifiers::empty();
-
-    unsafe {
-        for &(key, mods) in KEY_MODIFIERS {
-            if GetKeyState(key as _) & !0x1 != 0 {
-                state.insert(mods);
-            }
-        }
-
-        for &(key, mods) in TOGGLE_MODIFIERS {
-            if GetKeyState(key as _) & 0x1 != 0 {
-                state.insert(mods);
-            }
-        }
-    }
-
-    state
 }
 
 pub fn window_size_from_client_size(size: Size, dwstyle: WINDOW_STYLE) -> POINT {
@@ -312,99 +67,465 @@ pub fn window_size_from_client_size(size: Size, dwstyle: WINDOW_STYLE) -> POINT 
     }
 }
 
-pub fn decode_hdrop(hdrop: *mut c_void) -> Vec<PathBuf> {
-    unsafe {
-        let num_files = DragQueryFileW(hdrop, u32::MAX, null_mut(), 0);
-        (0..num_files)
-            .map(|i| {
-                let len = DragQueryFileW(hdrop, i, null_mut(), 0) + 1;
-                let mut buf = vec![0u16; len as usize];
-                let len = DragQueryFileW(hdrop, i, buf.as_mut_ptr(), len);
-                PathBuf::from(OsString::from_wide(&buf[..len as usize]))
-            })
-            .collect::<Vec<_>>()
-    }
-}
+pub use clipboard::*;
+pub use cursor::*;
+pub use dpi::*;
+pub use keyboard::*;
+pub use win32_bullshit::*;
 
-pub fn encode_hdrop(paths: &[PathBuf]) -> Vec<u16> {
-    let mut result = Vec::new();
+mod keyboard {
+    use crate::{Key, Modifiers};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 
-    unsafe {
-        let dropfiles = DROPFILES {
-            pFiles: std::mem::size_of::<DROPFILES>() as u32,
-            pt: POINT { x: 0, y: 0 },
-            fNC: 0,
-            fWide: 1,
-        };
+    const KEY_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
+        (VK_SHIFT, Modifiers::SHIFT),
+        (VK_CONTROL, Modifiers::CTRL),
+        (VK_MENU, Modifiers::ALT),
+        (VK_LWIN, Modifiers::META),
+        (VK_RWIN, Modifiers::META),
+    ];
 
-        result.extend_from_slice(std::slice::from_raw_parts(
-            &dropfiles as *const DROPFILES as *const u16,
-            std::mem::size_of::<DROPFILES>() / 2,
-        ));
-    }
+    const TOGGLE_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
+        (VK_CAPITAL, Modifiers::CAPS_LOCK),
+        (VK_NUMLOCK, Modifiers::NUM_LOCK),
+        (VK_SCROLL, Modifiers::SCROLL_LOCK),
+    ];
 
-    for path in paths {
-        result.extend(OsString::from(path).encode_wide());
-        result.push(0);
-    }
+    pub unsafe fn get_modifiers() -> Modifiers {
+        let mut state = Modifiers::empty();
 
-    result.push(0);
-    result
-}
-
-pub struct Clipboard(());
-
-impl Clipboard {
-    pub unsafe fn open(hwnd: HWND) -> Option<Self> {
         unsafe {
-            if OpenClipboard(hwnd) != 0 {
-                Some(Self(()))
-            } else {
-                None
+            for &(key, mods) in KEY_MODIFIERS {
+                if GetKeyState(key as _) & !0x1 != 0 {
+                    state.insert(mods);
+                }
+            }
+
+            for &(key, mods) in TOGGLE_MODIFIERS {
+                if GetKeyState(key as _) & 0x1 != 0 {
+                    state.insert(mods);
+                }
             }
         }
+
+        state
     }
 
-    pub fn empty(&self) {
+    pub fn scan_code_to_key(scan_code: u32) -> Option<Key> {
+        use Key::*;
+        Some(match scan_code {
+            0x1 => Escape,
+            0x2 => D1,
+            0x3 => D2,
+            0x4 => D3,
+            0x5 => D4,
+            0x6 => D5,
+            0x7 => D6,
+            0x8 => D7,
+            0x9 => D8,
+            0xA => D9,
+            0xB => D0,
+            0xC => Minus,
+            0xD => Equal,
+            0xE => Backspace,
+            0xF => Tab,
+            0x10 => Q,
+            0x11 => W,
+            0x12 => E,
+            0x13 => R,
+            0x14 => T,
+            0x15 => Y,
+            0x16 => U,
+            0x17 => I,
+            0x18 => O,
+            0x19 => P,
+            0x1A => BracketLeft,
+            0x1B => BracketRight,
+            0x1C => Enter,
+            0x1D => ControlLeft,
+            0x1E => A,
+            0x1F => S,
+            0x20 => D,
+            0x21 => F,
+            0x22 => G,
+            0x23 => H,
+            0x24 => J,
+            0x25 => K,
+            0x26 => L,
+            0x27 => Semicolon,
+            0x28 => Quote,
+            0x29 => Backquote,
+            0x2A => ShiftLeft,
+            0x2B => Backslash,
+            0x2C => Z,
+            0x2D => X,
+            0x2E => C,
+            0x2F => V,
+            0x30 => B,
+            0x31 => N,
+            0x32 => M,
+            0x33 => Comma,
+            0x34 => Period,
+            0x35 => Slash,
+            0x36 => ShiftRight,
+            0x37 => NumpadMultiply,
+            0x38 => AltLeft,
+            0x39 => Space,
+            0x3A => CapsLock,
+            0x3B => F1,
+            0x3C => F2,
+            0x3D => F3,
+            0x3E => F4,
+            0x3F => F5,
+            0x40 => F6,
+            0x41 => F7,
+            0x42 => F8,
+            0x43 => F9,
+            0x44 => F10,
+            0x46 => ScrollLock,
+            0x47 => Numpad7,
+            0x48 => Numpad8,
+            0x49 => Numpad9,
+            0x4A => NumpadSubtract,
+            0x4B => Numpad4,
+            0x4C => Numpad5,
+            0x4D => Numpad6,
+            0x4E => NumpadAdd,
+            0x4F => Numpad1,
+            0x50 => Numpad2,
+            0x51 => Numpad3,
+            0x52 => Numpad0,
+            0x53 => NumpadDecimal,
+            0x54 => PrintScreen,
+            0x57 => F11,
+            0x58 => F12,
+            0x59 => NumpadEqual,
+            0x7E => NumpadComma,
+            0x11C => NumpadEnter,
+            0x11D => ControlRight,
+            0x135 => NumpadDivide,
+            0x137 => PrintScreen,
+            0x138 => AltRight,
+            0x145 => NumLock,
+            0x147 => Home,
+            0x148 => ArrowUp,
+            0x149 => PageUp,
+            0x14B => ArrowLeft,
+            0x14D => ArrowRight,
+            0x14F => End,
+            0x150 => ArrowDown,
+            0x151 => PageDown,
+            0x152 => Insert,
+            0x153 => Delete,
+            0x15B => MetaLeft,
+            0x15C => MetaRight,
+            0x15D => ContextMenu,
+            _ => return None,
+        })
+    }
+}
+
+mod clipboard {
+    use std::{
+        ffi::{OsString, c_void},
+        marker::PhantomData,
+        os::windows::ffi::{OsStrExt, OsStringExt},
+        path::PathBuf,
+        ptr::{copy_nonoverlapping, null_mut},
+    };
+    use windows_sys::Win32::{
+        Foundation::{HWND, POINT},
+        System::{DataExchange::*, Memory::*},
+        UI::Shell::*,
+    };
+
+    pub unsafe fn decode_hdrop(hdrop: *mut c_void) -> Vec<PathBuf> {
         unsafe {
-            EmptyClipboard();
+            let num_files = DragQueryFileW(hdrop, u32::MAX, null_mut(), 0);
+            (0..num_files)
+                .map(|i| {
+                    let len = DragQueryFileW(hdrop, i, null_mut(), 0) + 1;
+                    let mut buf = vec![0u16; len as usize];
+                    let len = DragQueryFileW(hdrop, i, buf.as_mut_ptr(), len);
+                    PathBuf::from(OsString::from_wide(&buf[..len as usize]))
+                })
+                .collect::<Vec<_>>()
         }
     }
 
-    pub fn set<T>(&self, format: u16, data: &[T]) {
+    pub fn encode_hdrop(paths: &[PathBuf]) -> Vec<u16> {
+        let mut result = Vec::new();
+
         unsafe {
-            let buf = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(data));
-            let buf = GlobalLock(buf) as *mut T;
-            copy_nonoverlapping(data.as_ptr(), buf, data.len());
-            GlobalUnlock(buf as *mut _);
-            SetClipboardData(format as _, buf as *mut _);
+            let dropfiles = DROPFILES {
+                pFiles: std::mem::size_of::<DROPFILES>() as u32,
+                pt: POINT { x: 0, y: 0 },
+                fNC: 0,
+                fWide: 1,
+            };
+
+            result.extend_from_slice(std::slice::from_raw_parts(
+                &dropfiles as *const DROPFILES as *const u16,
+                std::mem::size_of::<DROPFILES>() / 2,
+            ));
         }
+
+        for path in paths {
+            result.extend(OsString::from(path).encode_wide());
+            result.push(0);
+        }
+
+        result.push(0);
+        result
     }
 
-    pub fn get<R>(&self, format: u16, f: impl FnOnce(*const u8) -> R) -> Option<R> {
-        unsafe {
-            let data = GetClipboardData(format as _);
-            if !data.is_null() {
-                let data = GlobalLock(data);
-                let result = if !data.is_null() {
-                    Some(f(data as *const u8))
+    pub struct Clipboard(PhantomData<*const ()>);
+
+    impl Clipboard {
+        pub unsafe fn open(hwnd: HWND) -> Option<Self> {
+            unsafe {
+                if OpenClipboard(hwnd) != 0 {
+                    Some(Self(PhantomData))
                 } else {
                     None
-                };
+                }
+            }
+        }
 
-                GlobalUnlock(data as *mut _);
-                result
-            } else {
-                None
+        pub fn empty(&self) {
+            unsafe {
+                EmptyClipboard();
+            }
+        }
+
+        pub fn set<T>(&self, format: u16, data: &[T]) {
+            unsafe {
+                let buf = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(data));
+                let buf = GlobalLock(buf) as *mut T;
+                copy_nonoverlapping(data.as_ptr(), buf, data.len());
+                GlobalUnlock(buf as *mut _);
+                SetClipboardData(format as _, buf as *mut _);
+            }
+        }
+
+        pub fn get<R>(&self, format: u16, f: impl FnOnce(*const u8) -> R) -> Option<R> {
+            unsafe {
+                let data = GetClipboardData(format as _);
+                if !data.is_null() {
+                    let data = GlobalLock(data);
+                    let result = if !data.is_null() {
+                        Some(f(data as *const u8))
+                    } else {
+                        None
+                    };
+
+                    GlobalUnlock(data as *mut _);
+                    result
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    impl Drop for Clipboard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseClipboard();
             }
         }
     }
 }
 
-impl Drop for Clipboard {
-    fn drop(&mut self) {
-        unsafe {
-            CloseClipboard();
+mod cursor {
+    use crate::MouseCursor;
+    use std::ptr::null_mut;
+    use windows_sys::{Win32::UI::WindowsAndMessaging::*, core::PCWSTR};
+
+    pub struct CursorCache {
+        pub arrow: HCURSOR,
+        pub cross: HCURSOR,
+        pub hand: HCURSOR,
+        pub help: HCURSOR,
+        pub ibeam: HCURSOR,
+        pub no: HCURSOR,
+        pub app_starting: HCURSOR,
+        pub wait: HCURSOR,
+
+        pub size_all: HCURSOR,
+        pub size_ns: HCURSOR,
+        pub size_ew: HCURSOR,
+        pub size_nesw: HCURSOR,
+        pub size_nwse: HCURSOR,
+
+        pub scroll_ns: HCURSOR,
+        pub scroll_ew: HCURSOR,
+        pub scroll_all: HCURSOR,
+    }
+
+    impl CursorCache {
+        pub fn load() -> Self {
+            fn load_cursor(name: PCWSTR) -> HCURSOR {
+                unsafe { LoadCursorW(null_mut(), name) }
+            }
+
+            Self {
+                arrow: load_cursor(IDC_ARROW),
+                cross: load_cursor(IDC_CROSS),
+                hand: load_cursor(IDC_HAND),
+                help: load_cursor(IDC_HELP),
+                ibeam: load_cursor(IDC_IBEAM),
+                no: load_cursor(IDC_NO),
+                wait: load_cursor(IDC_WAIT),
+                app_starting: load_cursor(IDC_APPSTARTING),
+
+                size_ns: load_cursor(IDC_SIZENS),
+                size_ew: load_cursor(IDC_SIZEWE),
+                size_nesw: load_cursor(IDC_SIZENESW),
+                size_nwse: load_cursor(IDC_SIZENWSE),
+                size_all: load_cursor(IDC_SIZEALL),
+
+                // https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors
+                scroll_ns: load_cursor(32652 as *const _),
+                scroll_ew: load_cursor(32653 as *const _),
+                scroll_all: load_cursor(32654 as *const _),
+            }
         }
+
+        pub fn get_closest(&self, cursor: MouseCursor) -> HCURSOR {
+            // unfortunately winapi does not provide us with all of these,
+            // so we have to improvise a bit.
+            match cursor {
+                MouseCursor::Default => self.arrow,
+                MouseCursor::Help => self.help,
+                MouseCursor::Cell => self.cross,
+                MouseCursor::Crosshair => self.cross,
+                MouseCursor::Text => self.ibeam,
+                MouseCursor::VerticalText => self.ibeam, // fallback
+                MouseCursor::Alias => self.arrow,        // fallback
+                MouseCursor::Copy => self.arrow,         // fallback
+                MouseCursor::Move => self.size_all,
+                MouseCursor::PtrNotAllowed => self.no, // fallback
+                MouseCursor::NotAllowed => self.no,
+                MouseCursor::EResize => self.size_ew, // fallback
+                MouseCursor::NResize => self.size_ns, // fallback
+                MouseCursor::NeResize => self.size_nesw, // fallback
+                MouseCursor::NwResize => self.size_nwse, // fallback
+                MouseCursor::SResize => self.size_ns, // fallback
+                MouseCursor::SeResize => self.size_nwse, // fallback
+                MouseCursor::SwResize => self.size_nesw, // fallback
+                MouseCursor::WResize => self.size_ew, // fallback
+                MouseCursor::EwResize => self.size_ew,
+                MouseCursor::NsResize => self.size_ns,
+                MouseCursor::NeswResize => self.size_nesw,
+                MouseCursor::NwseResize => self.size_nwse,
+                MouseCursor::ColResize => self.scroll_ew,
+                MouseCursor::RowResize => self.scroll_ns,
+                MouseCursor::AllScroll => self.scroll_all,
+                MouseCursor::ZoomIn => self.size_all, // fallback
+                MouseCursor::ZoomOut => self.size_all, // fallback
+                MouseCursor::Hand => self.hand,
+                MouseCursor::HandGrabbing => self.hand, // fallback
+                MouseCursor::Working => self.wait,
+                MouseCursor::PtrWorking => self.app_starting,
+                MouseCursor::Hidden => null_mut(),
+            }
+        }
+    }
+}
+
+mod dpi {
+    use std::ffi::CStr;
+    use windows_sys::Win32::{
+        Foundation::HWND,
+        System::LibraryLoader::{GetProcAddress, LoadLibraryA},
+        UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI,
+    };
+
+    unsafe fn proc_address<A, R>(module: &CStr, function: &CStr) -> Option<unsafe fn(A) -> R> {
+        unsafe {
+            let lib = LoadLibraryA(module.as_ptr() as *const _);
+            if lib.is_null() {
+                None
+            } else {
+                let proc = GetProcAddress(lib, function.as_ptr() as *const _);
+                proc.map(|x| std::mem::transmute(x))
+            }
+        }
+    }
+
+    pub unsafe fn try_set_thread_dpi_awareness_monitor_aware() -> bool {
+        unsafe {
+            match proc_address::<usize, usize>(c"user32.dll", c"SetThreadDpiAwarenessContext") {
+                Some(set_thread_dpi_awareness_context) => {
+                    set_thread_dpi_awareness_context(-3i32 as _); /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE */
+                    true
+                }
+                None => false,
+            }
+        }
+    }
+
+    pub unsafe fn try_get_dpi_for_window(window: HWND) -> u32 {
+        unsafe {
+            match proc_address::<HWND, u32>(c"user32.dll", c"GetDpiForWindow") {
+                Some(get_dpi_for_window) => get_dpi_for_window(window),
+                None => USER_DEFAULT_SCREEN_DPI,
+            }
+        }
+    }
+}
+
+mod win32_bullshit {
+    use crate::WindowError;
+    use std::ptr::null_mut;
+    use windows_sys::{
+        Win32::{
+            Foundation::{GetLastError, HINSTANCE},
+            System::{Diagnostics::Debug::*, SystemServices::IMAGE_DOS_HEADER},
+        },
+        core::PWSTR,
+    };
+
+    pub fn hinstance() -> HINSTANCE {
+        unsafe extern "C" {
+            unsafe static __ImageBase: IMAGE_DOS_HEADER;
+        }
+
+        unsafe { &__ImageBase as *const IMAGE_DOS_HEADER as _ }
+    }
+
+    pub fn check_error(assert: bool, message: &'static str) -> Result<(), crate::WindowError> {
+        if !assert {
+            unsafe {
+                let error = GetLastError();
+                let mut buffer = null_mut::<u16>();
+                let chars = FormatMessageW(
+                    FORMAT_MESSAGE_ALLOCATE_BUFFER
+                        | FORMAT_MESSAGE_FROM_SYSTEM
+                        | FORMAT_MESSAGE_IGNORE_INSERTS,
+                    null_mut(),
+                    error,
+                    0,
+                    &mut buffer as *mut PWSTR as *mut _,
+                    0,
+                    null_mut(),
+                );
+
+                let extra = if chars == 0 || buffer.is_null() {
+                    None
+                } else {
+                    let parts = std::slice::from_raw_parts(buffer, chars as _);
+                    Some(String::from_utf16_lossy(parts))
+                };
+
+                return Err(WindowError::Platform(match extra {
+                    Some(desc) => format!("{}: {:X} - {}", message, error, desc),
+                    None => format!("{}: {:X}", message, error),
+                }));
+            }
+        }
+
+        Ok(())
     }
 }

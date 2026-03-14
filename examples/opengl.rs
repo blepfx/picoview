@@ -76,6 +76,7 @@ fn main() {
             }
 
             Event::WindowResize { size: new_size } => {
+                println!("{:?}", event);
                 size = new_size;
             }
 
