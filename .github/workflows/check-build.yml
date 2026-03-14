@@ -13,7 +13,7 @@ jobs:
       RUST_BACKTRACE: 1
       DISPLAY: :99
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Install X11 and GL dependencies
       run: |
         sudo apt-get update
