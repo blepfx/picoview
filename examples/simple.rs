@@ -11,7 +11,7 @@ fn main() {
 
         window.set_cursor_icon(MouseCursor::Move);
         println!("clipboard contents: {:?}", window.get_clipboard());
-        window.set_clipboard(Exchange::Files(vec!["/example.txt".into()]));
+        window.set_clipboard(Exchange::Text("Hello from picoview!".to_string()));
         println!("clipboard contents: {:?}", window.get_clipboard());
 
         Box::new(move |event| match event {

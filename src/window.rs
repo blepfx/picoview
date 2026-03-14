@@ -70,7 +70,7 @@ impl<'a> Window<'a> {
 
     /// Get the OpenGL context associated with the window, if present.
     pub fn opengl(&self) -> Option<GlContext<'a>> {
-        self.0.is_opengl_supported().then_some(GlContext(*self))
+        self.0.opengl().map(GlContext)
     }
 
     /// Close the window and exit its event loop.

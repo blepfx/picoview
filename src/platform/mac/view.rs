@@ -1,15 +1,8 @@
 use super::display::*;
-use super::util::{flags_to_modifiers, get_cursor, keycode_to_key, random_id};
 use crate::platform::mac::gl::GlContext;
-use crate::platform::mac::util::{
-    get_clipboard_text, point_local_to_screen, point_window_to_global, point_window_to_local,
-    set_clipboard_text, spawn_detached,
-};
-use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
-use crate::{
-    Event, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder, WindowError,
-    WindowWaker, rwh_06,
-};
+use crate::platform::mac::util::*;
+use crate::platform::{OpenMode, PlatformOpenGl, PlatformWaker, PlatformWindow};
+use crate::*;
 use block2::RcBlock;
 use objc2::rc::{Allocated, Retained, Weak, autoreleasepool};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -24,8 +17,9 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
-    NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventType, NSPasteboardTypeFileURL,
-    NSTrackingArea, NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
+    NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
+    NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
     NSWindowDidResignKeyNotification, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
@@ -37,6 +31,7 @@ use objc2_foundation::{
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::{CString, c_void};
+use std::ops::Deref;
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
 
@@ -45,14 +40,7 @@ pub struct WindowImpl {
     view: NSView,
 }
 
-struct WindowWakerImpl {
-    weak: Weak<WindowImpl>,
-}
-
-unsafe impl Send for WindowWakerImpl {}
-unsafe impl Sync for WindowWakerImpl {}
-
-struct WindowImplInner {
+pub struct WindowImplInner {
     _display_link: DisplayLink,
     key_event_monitor: Option<Retained<AnyObject>>,
 
@@ -71,12 +59,27 @@ struct WindowImplInner {
     is_embedded: bool,
 }
 
+struct WindowWakerImpl {
+    weak: Weak<WindowImpl>,
+}
+
+unsafe impl Send for WindowWakerImpl {}
+unsafe impl Sync for WindowWakerImpl {}
+
+unsafe impl Message for WindowImpl {}
 unsafe impl RefEncode for WindowImpl {
     const ENCODING_REF: Encoding = NSView::ENCODING_REF;
 }
 
-unsafe impl Message for WindowImpl {}
+impl Deref for WindowImpl {
+    type Target = WindowImplInner;
 
+    fn deref(&self) -> &Self::Target {
+        self.inner().expect("WindowImplInner is not initialized")
+    }
+}
+
+// rust methods stuff
 impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
         let main_thread = MainThreadMarker::new()
@@ -84,25 +87,22 @@ impl WindowImpl {
 
         match mode {
             OpenMode::Blocking => unsafe {
-                let app = autoreleasepool(|_| {
-                    let app = NSApp(main_thread);
-                    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+                let app = NSApp(main_thread);
+                app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-                    let window = Self::create_window(&options, main_thread)?;
-                    let view = Self::create_view(options, Some(app.clone()), false, main_thread)?;
+                let window = Self::create_window(&options, main_thread)?;
+                let view = Self::create_view(options, Some(app.clone()), false, main_thread)?;
 
-                    window.setContentView(Some(&view.view));
-                    window.makeFirstResponder(Some(&view.view));
+                window.setContentView(Some(&view.view));
+                window.makeFirstResponder(Some(&view.view));
+                window.setReleasedWhenClosed(true);
 
-                    // Set the window delegate to our view
-                    // NSWindowDelegate has no required methods, so this is safe
-                    window.setDelegate(Some(std::mem::transmute::<
-                        &WindowImpl,
-                        &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
-                    >(&*view)));
-
-                    Ok(app)
-                })?;
+                // Set the window delegate to our view
+                // NSWindowDelegate has no required methods, so this is safe
+                window.setDelegate(Some(std::mem::transmute::<
+                    &WindowImpl,
+                    &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
+                >(&*view)));
 
                 app.run();
                 Ok(WindowWaker::default())
@@ -310,7 +310,7 @@ impl WindowImpl {
             )
         };
 
-        view.set_inner(Box::new(WindowImplInner {
+        view.set_inner(Some(Box::new(WindowImplInner {
             _display_link: display_link,
             key_event_monitor,
 
@@ -327,7 +327,7 @@ impl WindowImpl {
             current_cursor: Cell::new(MouseCursor::Default),
             is_closed: Cell::new(false),
             is_embedded,
-        }));
+        })));
 
         // SAFETY: we erase the lifetime of our OsWindowView; it should be safe to do so
         // because:
@@ -339,8 +339,7 @@ impl WindowImpl {
         //    expected to be single threaded (as that would violate the handler's !Send
         //    requirement)
         unsafe {
-            view.inner()
-                .event_handler
+            view.event_handler
                 .replace(Some((options.factory)(Window(&*Retained::as_ptr(&view)))));
         }
 
@@ -348,11 +347,11 @@ impl WindowImpl {
     }
 
     fn send_event(&self, event: Event) {
-        if let Ok(mut handler) = self.inner().event_handler.try_borrow_mut() {
+        if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
             if let Some(handler) = handler.as_mut() {
                 (handler)(event);
 
-                while let Some(event) = self.inner().event_queue.borrow_mut().pop_front() {
+                while let Some(event) = self.event_queue.borrow_mut().pop_front() {
                     (handler)(event);
                 }
             }
@@ -362,10 +361,10 @@ impl WindowImpl {
     }
 
     fn send_event_defer(&self, event: Event<'static>) {
-        if self.inner().event_handler.try_borrow_mut().is_ok() {
+        if self.event_handler.try_borrow_mut().is_ok() {
             self.send_event(event);
         } else {
-            self.inner().event_queue.borrow_mut().push_back(event);
+            self.event_queue.borrow_mut().push_back(event);
         }
     }
 
@@ -385,18 +384,22 @@ impl WindowImpl {
         });
     }
 
-    fn set_inner(&self, context: Box<WindowImplInner>) {
+    fn set_inner(&self, context: Option<Box<WindowImplInner>>) {
         unsafe {
             self.view
                 .class()
                 .instance_variable(c"_context")
                 .unwrap_unchecked()
                 .load_ptr::<*mut c_void>(&self.view)
-                .write(Box::into_raw(context) as *mut c_void);
+                .write(
+                    context
+                        .map(|x| Box::into_raw(x) as *mut c_void)
+                        .unwrap_or(null_mut()),
+                );
         }
     }
 
-    fn inner(&self) -> &WindowImplInner {
+    fn inner(&self) -> Option<&WindowImplInner> {
         unsafe {
             let ivar = self
                 .view
@@ -404,13 +407,16 @@ impl WindowImpl {
                 .instance_variable(c"_context")
                 .unwrap_unchecked();
             let context = *ivar.load::<*mut c_void>(&self.view) as *mut WindowImplInner;
-            assert!(!context.is_null());
-            &*context
+            if context.is_null() {
+                None
+            } else {
+                Some(&*context)
+            }
         }
     }
 
     fn own_window(&self) -> Option<Retained<NSWindow>> {
-        if self.inner().is_embedded {
+        if self.is_embedded {
             None
         } else {
             self.view.window()
@@ -418,6 +424,7 @@ impl WindowImpl {
     }
 }
 
+// objective c class stuff
 impl WindowImpl {
     // NSView
     unsafe extern "C" fn init_with_frame(&self, _cmd: Sel, rect: NSRect) -> Option<&Self> {
@@ -427,14 +434,11 @@ impl WindowImpl {
     unsafe extern "C" fn dealloc(&self, _cmd: Sel) {
         unsafe {
             let class = self.view.class();
-            let context = *class
-                .instance_variable(c"_context")
-                .unwrap_unchecked()
-                .load::<*mut c_void>(&self.view) as *mut WindowImplInner;
 
             // If we actually initialized before
-            if !context.is_null() {
-                let mut inner = Box::from_raw(context);
+            if let Some(inner) = self.inner() {
+                let mut inner = Box::from_raw(inner as *const _ as *mut WindowImplInner);
+                self.set_inner(None);
 
                 // we need to drop this before WindowView gets dropped, see the safety comment
                 // at the handler initialization place
@@ -447,9 +451,6 @@ impl WindowImpl {
                 if let Some(monitor) = inner.key_event_monitor.take() {
                     NSEvent::removeMonitor(&monitor);
                 }
-
-                // DO NOT USE self.inner() after this
-                drop(inner);
             }
 
             let _: () = msg_send![super(self, NSView::class()), dealloc];
@@ -600,7 +601,7 @@ impl WindowImpl {
             },
         });
 
-        if let Some(gl) = &self.inner().gl_context {
+        if let Some(gl) = &self.gl_context {
             gl.resize(frame.size.width as u32, frame.size.height as u32);
         }
     }
@@ -810,7 +811,7 @@ impl WindowImpl {
 
 impl PlatformWindow for WindowImpl {
     fn close(&self) {
-        if self.inner().is_closed.replace(true) {
+        if self.is_closed.replace(true) {
             return;
         }
 
@@ -820,13 +821,33 @@ impl PlatformWindow for WindowImpl {
 
         self.view.removeFromSuperview();
 
-        if let Some(app) = self.inner().application.take() {
+        if let Some(app) = self.application.take() {
             app.stop(Some(&app));
+
+            // it is stupid that we have to send a dummy event to _actually_ stop the event
+            // loop but here we are, thank you apple!!!!
+            app.postEvent_atStart(&NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+                NSEventType::ApplicationDefined,
+                NSPoint::new(0.0, 0.0),
+                NSEventModifierFlags::empty(),
+                0.0,
+                0,
+                None,
+                0,
+                0,
+                0,
+            ).expect("Failed to create dummy event"), false);
         }
     }
 
     fn waker(&self) -> WindowWaker {
-        WindowWaker(self.inner().waker.clone())
+        WindowWaker(self.waker.clone())
+    }
+
+    fn opengl(&self) -> Option<&dyn PlatformOpenGl> {
+        self.gl_context
+            .as_ref()
+            .map(|ctx| ctx as &dyn PlatformOpenGl)
     }
 
     fn set_title(&self, title: &str) {
@@ -836,7 +857,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_cursor_icon(&self, cursor: MouseCursor) {
-        let old_cursor = self.inner().current_cursor.replace(cursor);
+        let old_cursor = self.current_cursor.replace(cursor);
         if old_cursor != cursor {
             match get_cursor(cursor) {
                 Some(cursor) => {
@@ -903,12 +924,58 @@ impl PlatformWindow for WindowImpl {
         spawn_detached(std::process::Command::new("/usr/bin/open").arg(url)).is_ok()
     }
 
-    fn get_clipboard_text(&self) -> Option<String> {
-        get_clipboard_text()
+    fn set_clipboard(&self, data: Exchange) -> bool {
+        unsafe {
+            let pasteboard: Option<Retained<NSPasteboard>> =
+                msg_send![NSPasteboard::class(), generalPasteboard];
+
+            let pasteboard = match pasteboard {
+                Some(pb) => pb,
+                None => return false,
+            };
+
+            pasteboard.clearContents();
+
+            match data {
+                Exchange::Empty => true,
+                Exchange::Text(text) => {
+                    let string = ProtocolObject::from_retained(NSString::from_str(&text));
+                    pasteboard.writeObjects(&NSArray::from_retained_slice(&[string]))
+                }
+                Exchange::Files(files) => {
+                    let uri_list = encode_uri_list(&files);
+                    if uri_list.is_empty() {
+                        return false;
+                    }
+
+                    pasteboard.writeObjects(&NSArray::from_retained_slice(&uri_list))
+                }
+            }
+        }
     }
 
-    fn set_clipboard_text(&self, text: &str) -> bool {
-        set_clipboard_text(text)
+    fn get_clipboard(&self) -> Exchange {
+        unsafe {
+            autoreleasepool(|_| {
+                let pasteboard: Option<Retained<NSPasteboard>> =
+                    msg_send![NSPasteboard::class(), generalPasteboard];
+
+                let pasteboard = match pasteboard {
+                    Some(pb) => pb,
+                    None => return Exchange::Empty,
+                };
+
+                if let Some(files) = decode_uri_list(&pasteboard) {
+                    return Exchange::Files(files);
+                }
+
+                if let Some(string) = pasteboard.stringForType(NSPasteboardTypeString) {
+                    return Exchange::Text(string.to_string());
+                }
+
+                Exchange::Empty
+            })
+        }
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -921,34 +988,6 @@ impl PlatformWindow for WindowImpl {
 
     fn display_handle(&self) -> rwh_06::RawDisplayHandle {
         rwh_06::RawDisplayHandle::AppKit(rwh_06::AppKitDisplayHandle::new())
-    }
-
-    fn is_opengl_supported(&self) -> bool {
-        self.inner().gl_context.is_some()
-    }
-
-    fn opengl_swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
-        self.inner()
-            .gl_context
-            .as_ref()
-            .expect("opengl not supported")
-            .swap_buffers()
-    }
-
-    fn opengl_make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
-        self.inner()
-            .gl_context
-            .as_ref()
-            .expect("opengl not supported")
-            .make_current(current)
-    }
-
-    fn opengl_get_proc_address(&self, name: &std::ffi::CStr) -> *const c_void {
-        self.inner()
-            .gl_context
-            .as_ref()
-            .expect("opengl not supported")
-            .get_proc_address(name)
     }
 }
 
