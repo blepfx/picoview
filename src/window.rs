@@ -1,6 +1,6 @@
 use crate::{
-    Event, GlConfig, GlContext, MouseCursor, Point, Size, WakeupError, WindowError, platform,
-    rwh_06,
+    Event, Exchange, GlConfig, GlContext, MouseCursor, Point, Size, WakeupError, WindowError,
+    platform, rwh_06,
 };
 use std::{fmt::Debug, ops::Range, sync::Arc};
 
@@ -70,7 +70,7 @@ impl<'a> Window<'a> {
 
     /// Get the OpenGL context associated with the window, if present.
     pub fn opengl(&self) -> Option<GlContext<'a>> {
-        self.0.is_opengl_supported().then_some(GlContext(*self))
+        self.0.opengl().map(GlContext)
     }
 
     /// Close the window and exit its event loop.
@@ -135,13 +135,13 @@ impl<'a> Window<'a> {
     /// Set the current text contents of the system clipboard.
     ///
     /// Returns `true` if the action was handled by the OS
-    pub fn set_clipboard_text(&self, text: &str) -> bool {
-        self.0.set_clipboard_text(text)
+    pub fn set_clipboard(&self, data: Exchange) -> bool {
+        self.0.set_clipboard(data)
     }
 
     /// Get the current text contents of the system clipboard, if any.
-    pub fn get_clipboard_text(&self) -> Option<String> {
-        self.0.get_clipboard_text()
+    pub fn get_clipboard(&self) -> Exchange {
+        self.0.get_clipboard()
     }
 }
 
@@ -341,6 +341,7 @@ impl Debug for WindowBuilder {
             .field("size", &self.size)
             .field("resizable", &self.resizable)
             .field("position", &self.position)
+            .field("opengl", &self.opengl)
             .finish_non_exhaustive()
     }
 }

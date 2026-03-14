@@ -1,5 +1,5 @@
 use super::util::{generate_guid, hinstance, to_widestring};
-use crate::{MakeCurrentError, SwapBuffersError, WindowError};
+use crate::{MakeCurrentError, SwapBuffersError, WindowError, platform::PlatformOpenGl};
 use std::{
     collections::HashSet,
     ffi::{CStr, c_char, c_void},
@@ -113,8 +113,10 @@ impl GlContext {
             })
         }
     }
+}
 
-    pub fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
+impl PlatformOpenGl for GlContext {
+    fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
         unsafe {
             wglGetProcAddress(symbol.as_ptr() as *const _)
                 .filter(|&ptr| check_ptr(ptr as *const _))
@@ -125,12 +127,12 @@ impl GlContext {
         }
     }
 
-    pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
+    fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         unsafe { SwapBuffers(self.hdc) };
         Ok(())
     }
 
-    pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+    fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         let result =
             unsafe { wglMakeCurrent(self.hdc, if current { self.hglrc } else { null_mut() }) != 0 };
 

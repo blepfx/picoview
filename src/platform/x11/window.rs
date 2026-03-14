@@ -1,25 +1,20 @@
-use super::connection::Connection;
 use super::gl::GlContext;
-use super::util;
-use crate::platform::x11::util::{
-    VisualConfig, query_cursor, relative_position, request_clipboard,
-};
-use crate::platform::{OpenMode, PlatformWaker, PlatformWindow};
-use crate::{
-    Event, Modifiers, MouseButton, MouseCursor, Point, Size, WakeupError, Window, WindowBuilder,
-    WindowError, WindowFactory, WindowWaker, rwh_06,
-};
+use super::util::*;
+use crate::platform::{OpenMode, PlatformOpenGl, PlatformWaker, PlatformWindow};
+use crate::*;
 use libc::c_ulong;
 use std::cell::{Cell, RefCell};
-use std::ffi::CString;
+use std::collections::HashMap;
+use std::ffi::{CStr, CString, OsStr};
 use std::mem::zeroed;
+use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use x11::xlib::*;
 
-unsafe impl Send for WindowImpl {}
+pub const ATOM_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
 
 pub struct WindowImpl {
     window_id: c_ulong,
@@ -41,7 +36,10 @@ pub struct WindowImpl {
     last_window_visible: Cell<bool>,
     last_window_focused: Cell<bool>,
 
-    clipboard_text_selection: RefCell<CString>,
+    exchange_clipboard: RefCell<Exchange>,
+
+    cursor_empty: EmptyCursor,
+    cursor_cache: RefCell<HashMap<MouseCursor, c_ulong>>,
 
     #[allow(clippy::type_complexity)]
     handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
@@ -54,15 +52,20 @@ pub struct WindowWakerImpl {
     display: *mut Display,
 }
 
+unsafe impl Send for WindowImpl {}
 unsafe impl Send for WindowWakerImpl {}
 unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
         unsafe {
-            let connection = Connection::create()?;
+            let connection = Connection::open().ok_or_else(|| {
+                WindowError::Platform("Failed to connect to X server".to_string())
+            })?;
+
+            let default_root = XDefaultRootWindow(connection.display());
             let window_parent = match mode.handle() {
-                None => connection.default_root(),
+                None => default_root,
                 Some(rwh_06::RawWindowHandle::Xlib(handle)) => handle.window,
                 Some(rwh_06::RawWindowHandle::Xcb(handle)) => handle.window.get() as u64,
                 _ => return Err(WindowError::InvalidParent),
@@ -84,7 +87,7 @@ impl WindowImpl {
 
             let colormap = XCreateColormap(
                 connection.display(),
-                connection.default_root(),
+                default_root,
                 visual_info.visual,
                 AllocNone,
             );
@@ -93,7 +96,7 @@ impl WindowImpl {
                 connection.display(),
                 match mode {
                     OpenMode::Embedded(..) => window_parent,
-                    _ => connection.default_root(),
+                    _ => default_root,
                 },
                 0,
                 0,
@@ -219,13 +222,19 @@ impl WindowImpl {
             }
 
             let gl_context = if let Some(config) = options.opengl {
-                GlContext::new(&connection, window_id as _, config, visual_info.fb_config).ok()
+                GlContext::new(
+                    connection.clone(),
+                    window_id as _,
+                    config,
+                    visual_info.fb_config,
+                )
+                .ok()
             } else {
                 None
             };
 
             let refresh_interval =
-                Duration::from_secs_f64(1.0 / connection.refresh_rate().unwrap_or(60.0));
+                Duration::from_secs_f64(1.0 / query_refresh_rate(&connection).unwrap_or(60.0));
 
             XSync(connection.display(), 0);
             connection.last_error().map_err(WindowError::Platform)?;
@@ -253,10 +262,12 @@ impl WindowImpl {
                 last_window_focused: Cell::new(false),
                 last_cursor_in_bounds: Cell::new(false),
 
-                clipboard_text_selection: RefCell::new(CString::default()),
+                exchange_clipboard: RefCell::new(Exchange::Empty),
+
+                cursor_empty: EmptyCursor::new(connection.clone()),
+                cursor_cache: RefCell::new(HashMap::new()),
 
                 handler: RefCell::new(None),
-
                 gl_context,
                 connection,
             });
@@ -289,9 +300,9 @@ impl WindowImpl {
             self.handler
                 .replace(Some((factory)(Window(&*(&*self as *const Self)))));
 
-            self.send_event(Event::WindowScale {
-                scale: self.connection.scale_dpi().map_or(1.0, |x| x / 96.0),
-            });
+            if let Some(dpi) = query_scale_dpi(&self.connection) {
+                self.send_event(Event::WindowScale { scale: dpi / 96.0 });
+            }
 
             // main loop
             let mut next_frame = Instant::now();
@@ -307,18 +318,15 @@ impl WindowImpl {
                 };
 
                 XFlush(self.connection.display());
+
                 self.connection
                     .last_error()
                     .map_err(WindowError::Platform)?;
 
-                let num_events = self.connection.wait_for_events(Some(wait_time))?;
-                for _ in 0..num_events {
-                    let event = self.connection.next_event()?;
+                for event in wait_for_events(&self.connection, Some(wait_time))
+                    .map_err(WindowError::Platform)?
+                {
                     self.handle_event(event);
-                }
-
-                if num_events != 0 {
-                    XFlush(self.connection.display());
                 }
             }
 
@@ -340,7 +348,7 @@ impl WindowImpl {
                     }
 
                     if event.format == 32
-                        && event.message_type == self.connection.atom(c"PICOVIEW_WAKEUP") as _
+                        && event.message_type == self.connection.atom(ATOM_WAKEUP) as _
                     {
                         self.send_event(Event::Wakeup);
                     }
@@ -353,13 +361,7 @@ impl WindowImpl {
 
                 ConfigureNotify => {
                     let event = event.configure;
-
-                    let point = relative_position(
-                        &self.connection,
-                        self.connection.default_root(),
-                        self.window_id,
-                    );
-
+                    let point = window_position(&self.connection, self.window_id);
                     let size = Size {
                         width: event.width as u32,
                         height: event.height as u32,
@@ -387,7 +389,7 @@ impl WindowImpl {
                         );
                     }
 
-                    self.handle_event_modifiers(util::keymask_to_mods(event.state));
+                    self.handle_event_modifiers(keymask_to_mods(event.state));
 
                     let result = match event.button {
                         1 | 2 | 3 | 8 | 9 => {
@@ -407,13 +409,17 @@ impl WindowImpl {
                             }
                         }
 
-                        4..=7 if event.type_ == ButtonPress => match event.button {
-                            4 => Event::MouseScroll { x: 0.0, y: 1.0 },
-                            5 => Event::MouseScroll { x: 0.0, y: -1.0 },
-                            6 => Event::MouseScroll { x: 1.0, y: 0.0 },
-                            7 => Event::MouseScroll { x: -1.0, y: 0.0 },
-                            _ => return,
-                        },
+                        4..=7 if event.type_ == ButtonPress => {
+                            let (x, y) = match event.button {
+                                4 => (0.0, 1.0),
+                                5 => (0.0, -1.0),
+                                6 => (1.0, 0.0),
+                                7 => (-1.0, 0.0),
+                                _ => return,
+                            };
+
+                            Event::MouseScroll { x, y }
+                        }
 
                         _ => return,
                     };
@@ -435,17 +441,11 @@ impl WindowImpl {
                     let event = event.key;
 
                     self.handle_event_modifiers(match event.type_ {
-                        KeyPress => {
-                            util::keymask_to_mods(event.state)
-                                | util::keycode_to_mods(event.keycode)
-                        }
-                        _ => {
-                            util::keymask_to_mods(event.state)
-                                - util::keycode_to_mods(event.keycode)
-                        }
+                        KeyPress => keymask_to_mods(event.state) | keycode_to_mods(event.keycode),
+                        _ => keymask_to_mods(event.state) - keycode_to_mods(event.keycode),
                     });
 
-                    if let Some(key) = util::keycode_to_key(event.keycode) {
+                    if let Some(key) = keycode_to_key(event.keycode) {
                         let mut capture = false;
 
                         if event.type_ == KeyPress {
@@ -482,7 +482,7 @@ impl WindowImpl {
                 MotionNotify => {
                     let event = event.motion;
                     self.last_cursor_in_bounds.set(true);
-                    self.handle_event_modifiers(util::keymask_to_mods(event.state));
+                    self.handle_event_modifiers(keymask_to_mods(event.state));
                     self.send_event(Event::MouseMove {
                         relative: Point {
                             x: event.x as f32,
@@ -500,7 +500,7 @@ impl WindowImpl {
 
                     let event = event.crossing;
 
-                    self.handle_event_modifiers(util::keymask_to_mods(event.state));
+                    self.handle_event_modifiers(keymask_to_mods(event.state));
 
                     let grabbed = (event.state & ANY_BUTTON) != 0;
                     if grabbed || !self.last_cursor_in_bounds.replace(false) {
@@ -537,7 +537,6 @@ impl WindowImpl {
                 }
                 Expose => {
                     let event = event.expose;
-
                     self.send_event(Event::WindowDamage {
                         x: event.x.try_into().unwrap_or(0),
                         y: event.y.try_into().unwrap_or(0),
@@ -547,15 +546,25 @@ impl WindowImpl {
                 }
 
                 SelectionRequest => {
-                    let text = self.clipboard_text_selection.borrow();
+                    let exchange = &*self.exchange_clipboard.borrow();
                     let event = event.selection_request;
+
                     if event.selection != self.connection.atom(c"CLIPBOARD") {
                         return;
                     }
 
+                    let a_targets = self.connection.atom(c"TARGETS");
+                    let a_utf8_string = self.connection.atom(c"UTF8_STRING");
+                    let a_text_plain = self.connection.atom(c"text/plain");
+                    let a_text_uri_list = self.connection.atom(c"text/uri-list");
+
                     if event.property != 0 {
-                        if event.target == self.connection.atom(c"TARGETS") {
-                            let atom = self.connection.atom(c"UTF8_STRING") as u32;
+                        if event.target == a_targets {
+                            let atom = match exchange {
+                                Exchange::Files(_) => a_text_uri_list,
+                                Exchange::Empty | Exchange::Text(_) => a_utf8_string,
+                            };
+
                             XChangeProperty(
                                 self.connection.display(),
                                 event.requestor,
@@ -566,8 +575,10 @@ impl WindowImpl {
                                 &atom as *const _ as *const u8,
                                 1,
                             );
-                        } else if event.target == self.connection.atom(c"UTF8_STRING")
-                            || event.target == XA_STRING
+                        } else if (event.target == a_utf8_string
+                            || event.target == a_text_plain
+                            || event.target == XA_STRING)
+                            && let Exchange::Text(text) = exchange
                         {
                             XChangeProperty(
                                 self.connection.display(),
@@ -576,8 +587,22 @@ impl WindowImpl {
                                 event.target,
                                 8,
                                 PropModeReplace,
-                                text.as_bytes().as_ptr(),
-                                text.as_bytes().len() as i32,
+                                text.as_ptr(),
+                                text.len() as i32,
+                            );
+                        } else if event.target == a_text_uri_list
+                            && let Exchange::Files(files) = exchange
+                        {
+                            let list = encode_uri_list(files);
+                            XChangeProperty(
+                                self.connection.display(),
+                                event.requestor,
+                                event.property,
+                                event.target,
+                                8,
+                                PropModeReplace,
+                                list.as_bytes().as_ptr(),
+                                list.len() as i32,
                             );
                         }
                     }
@@ -658,6 +683,10 @@ impl PlatformWindow for WindowImpl {
         WindowWaker(self.waker.clone())
     }
 
+    fn opengl(&self) -> Option<&dyn PlatformOpenGl> {
+        self.gl_context.as_ref().map(|gl| gl as &dyn PlatformOpenGl)
+    }
+
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
         rwh_06::RawWindowHandle::Xlib(rwh_06::XlibWindowHandle::new(self.window_id))
     }
@@ -690,15 +719,26 @@ impl PlatformWindow for WindowImpl {
         }
 
         unsafe {
-            let cursor = query_cursor(&self.connection, cursor);
-            if cursor != 0 {
-                XChangeWindowAttributes(
-                    self.connection.display(),
-                    self.window_id,
-                    CWCursor,
-                    &mut XSetWindowAttributes { cursor, ..zeroed() },
-                );
-            }
+            let cursor = match cursor {
+                MouseCursor::Hidden => self.cursor_empty.cursor(),
+                cursor => *self
+                    .cursor_cache
+                    .borrow_mut()
+                    .entry(cursor)
+                    .or_insert_with(|| {
+                        load_cursor_by_enum(&self.connection, cursor).unwrap_or_else(|| {
+                            load_cursor_by_enum(&self.connection, MouseCursor::Default)
+                                .unwrap_or_else(|| self.cursor_empty.cursor())
+                        })
+                    }),
+            };
+
+            XChangeWindowAttributes(
+                self.connection.display(),
+                self.window_id,
+                CWCursor,
+                &mut XSetWindowAttributes { cursor, ..zeroed() },
+            );
         }
     }
 
@@ -834,72 +874,58 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn open_url(&self, url: &str) -> bool {
-        util::open_url(url)
+        open_url(url)
     }
 
-    fn get_clipboard_text(&self) -> Option<String> {
-        // TODO: verify if correct
-        for atom in [self.connection.atom(c"UTF8_STRING"), XA_STRING] {
-            if let Some(text) = request_clipboard(
+    fn get_clipboard(&self) -> Exchange {
+        let a_clipboard = self.connection.atom(c"CLIPBOARD");
+        let a_xsel_data = self.connection.atom(c"XSEL_DATA");
+        let a_utf8_string = self.connection.atom(c"UTF8_STRING");
+        let a_text_uri_list = self.connection.atom(c"text/uri-list");
+        let a_text_plain = self.connection.atom(c"text/plain");
+
+        for atom in [a_text_uri_list, a_text_plain, a_utf8_string, XA_STRING] {
+            let result = request_selection(
                 &self.connection,
                 self.window_id,
+                a_clipboard,
+                a_xsel_data,
                 atom,
-                |data, size| unsafe {
-                    let slice = std::slice::from_raw_parts(data, size);
-                    String::from_utf8_lossy(slice).into_owned()
+                |slice| {
+                    if atom == a_text_uri_list {
+                        Exchange::Files(decode_uri_list(OsStr::from_bytes(slice)))
+                    } else {
+                        Exchange::Text(String::from_utf8_lossy(slice).to_string())
+                    }
                 },
-            ) {
-                return Some(text);
+            );
+
+            match result {
+                Ok(Exchange::Empty) => continue,
+                Ok(exchange) => return exchange,
+                Err(SelectionError::Empty) => continue,
+                Err(SelectionError::Recursive) => return self.exchange_clipboard.borrow().clone(),
             }
         }
 
-        None
+        Exchange::Empty
     }
 
-    fn set_clipboard_text(&self, text: &str) -> bool {
-        *self.clipboard_text_selection.borrow_mut() = match CString::new(text) {
-            Ok(cstring) => cstring,
-            Err(_) => return false,
-        };
+    fn set_clipboard(&self, data: Exchange) -> bool {
+        let is_empty = matches!(data, Exchange::Empty);
+
+        *self.exchange_clipboard.borrow_mut() = data;
 
         unsafe {
             XSetSelectionOwner(
                 self.connection.display(),
                 self.connection.atom(c"CLIPBOARD"),
-                self.window_id,
+                if is_empty { 0 } else { self.window_id },
                 CurrentTime,
             );
         }
 
         true
-    }
-
-    fn is_opengl_supported(&self) -> bool {
-        self.gl_context.is_some()
-    }
-
-    fn opengl_get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .scope(&self.connection)
-            .get_proc_address(name)
-    }
-
-    fn opengl_make_current(&self, current: bool) -> Result<(), crate::MakeCurrentError> {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .scope(&self.connection)
-            .make_current(current)
-    }
-
-    fn opengl_swap_buffers(&self) -> Result<(), crate::SwapBuffersError> {
-        self.gl_context
-            .as_ref()
-            .expect("opengl unavailable")
-            .scope(&self.connection)
-            .swap_buffers()
     }
 }
 
@@ -922,7 +948,7 @@ impl PlatformWaker for WindowWakerImpl {
                         send_event: 1,
                         display: self.display,
                         window: self.window_id,
-                        message_type: XInternAtom(self.display, c"PICOVIEW_WAKEUP".as_ptr(), 0),
+                        message_type: XInternAtom(self.display, ATOM_WAKEUP.as_ptr(), 0),
                         format: 32,
                         data: ClientMessageData::new(),
                     },

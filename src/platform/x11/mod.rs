@@ -1,4 +1,3 @@
-mod connection;
 mod gl;
 mod util;
 mod window;

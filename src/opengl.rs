@@ -1,4 +1,4 @@
-use crate::{MakeCurrentError, SwapBuffersError};
+use crate::*;
 use std::{
     ffi::{CStr, c_void},
     fmt,
@@ -98,22 +98,22 @@ impl Default for GlConfig {
 }
 
 /// OpenGL context belonging to a window
-pub struct GlContext<'a>(pub(crate) crate::Window<'a>);
+pub struct GlContext<'a>(pub(crate) &'a dyn platform::PlatformOpenGl);
 
 impl<'a> GlContext<'a> {
     /// Make this OpenGL context current or not current
     pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
-        self.0.0.opengl_make_current(current)
+        self.0.make_current(current)
     }
 
     /// Swap the front and back buffers if double buffering is enabled
     pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
-        self.0.0.opengl_swap_buffers()
+        self.0.swap_buffers()
     }
 
     /// Get the address of an OpenGL function by name
     pub fn get_proc_address(&self, name: &CStr) -> *const c_void {
-        self.0.0.opengl_get_proc_address(name)
+        self.0.get_proc_address(name)
     }
 }
 

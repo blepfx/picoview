@@ -15,6 +15,7 @@
 |  - `MouseScroll`                                      | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyUp`                                            | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyDown`                                          | :ok:     | :ok:     | :ok:     | High     |
+|  - `KeyText`                                          | :x:      | :x:      | :x:      | Medium   |
 |  - `KeyModifiers`                                     | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowClose`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowFocus`                                      | :ok:     | :ok:     | :ok:     | Low      |
@@ -24,12 +25,13 @@
 |  - `WindowFrame`                                      | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowDamage`                                     | :ok:     | :ok:     | :ok:     | Medium   |
 |  - `DragHover`                                        | :x:      | :x:      | :x:      | Low      |
-|  - `DragAccept`                                       | :x:      | :x:      | :x:      | Low      |
-|  - `DragCancel`                                       | :x:      | :x:      | :x:      | Low      |
+|  - `DragDrop`                                         | :x:      | :x:      | :x:      | Low      |
+| Clipboard                                             |          |          |          |          |
+|  - Text                                               | :ok:     | :ok:     | :ok:     | High     |
+|  - Files                                              | :ok:     | :x:      | :ok:     | Medium   |
 | Event loop wakeup                                     | :ok:     | :ok:     | :ok:     | High     |
 | Vertical blank synchronization                        | :ok:[^2] | :ok:     | :o:[^3]  | High     |
 | OpenGL context creation                               | :ok:     | :ok:     | :ok:     | High     |
-| Clipboard text get/set                                | :ok:     | :ok:     | :ok:     | Medium   |
 | Pixel scaling abstraction                             | :ok:     | :x:      | :ok:     | High     |
 | Set position                                          | :ok:     | :x:      | :ok:     | Medium   |
 | Set size                                              | :ok:     | :ok:     | :ok:     | High     |
@@ -52,6 +54,5 @@
 - MacOS:
     - Window/event/size positioning is all over the place due to differences in coordinate systems.
     - Needed an API to create a `Size` from os-dependent units for proper interoperation with VST3/CLAP APIs
-    - Crashes when closing any window (even transient).
 - Windows:
     - Some cursor icons are not supported, fallbacks used.

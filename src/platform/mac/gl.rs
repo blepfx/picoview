@@ -1,6 +1,8 @@
 #![allow(deprecated)] // i love you apple <3
 
-use crate::{GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError};
+use crate::{
+    GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError, platform::PlatformOpenGl,
+};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, rc::Retained};
 use objc2_app_kit::{NSOpenGLContext, NSOpenGLPixelFormat, NSOpenGLView, NSView};
 use objc2_core_foundation::{CFBundle, CFRetained, CFString};
@@ -129,8 +131,10 @@ impl GlContext {
 
         self.view.setNeedsDisplay(true);
     }
+}
 
-    pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+impl PlatformOpenGl for GlContext {
+    fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         if current {
             self.context.makeCurrentContext();
         } else {
@@ -140,13 +144,13 @@ impl GlContext {
         Ok(())
     }
 
-    pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
+    fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         self.context.flushBuffer();
         self.view.setNeedsDisplay(true); // TODO: do we need this?  
         Ok(())
     }
 
-    pub fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
+    fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
         match name.to_str() {
             Err(_) => std::ptr::null(),
             Ok(name) => {

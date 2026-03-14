@@ -1,12 +1,12 @@
-use super::connection::Connection;
-use crate::platform::x11::util::VisualConfig;
+use crate::platform::PlatformOpenGl;
+use crate::platform::x11::util::{Connection, VisualConfig};
 use crate::{GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError};
 use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
 use std::os::raw::{c_int, c_ulong};
 use std::ptr::{null, null_mut};
 use x11::glx::*;
-use x11::xlib::{Bool, Display, XFree, XSync};
+use x11::xlib::{Bool, Display, XDefaultScreen, XFree, XSync};
 use x11::xrender::XRenderFindVisualFormat;
 
 const GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20B2;
@@ -27,11 +27,7 @@ unsafe impl Send for GlContext {}
 pub struct GlContext {
     window: c_ulong,
     context: GLXContext,
-}
-
-pub struct GlContextScope<'a> {
-    context: &'a GlContext,
-    connection: &'a Connection,
+    connection: Connection,
 }
 
 impl GlContext {
@@ -115,7 +111,7 @@ impl GlContext {
             let mut n_configs = 0;
             let fb_config_list = glXChooseFBConfig(
                 connection.display(),
-                connection.screen(),
+                XDefaultScreen(connection.display()),
                 fb_attribs.as_ptr(),
                 &mut n_configs,
             );
@@ -154,7 +150,7 @@ impl GlContext {
 
     #[allow(non_snake_case)]
     pub unsafe fn new(
-        connection: &Connection,
+        connection: Connection,
         window: c_ulong,
         config: GlConfig,
         fb_config: GLXFBConfig,
@@ -164,7 +160,7 @@ impl GlContext {
         }
 
         unsafe {
-            let (_, _, extensions) = Self::get_version_info(connection)?;
+            let (_, _, extensions) = Self::get_version_info(&connection)?;
             let ext_es_support = extensions.contains("GLX_EXT_create_context_es2_profile")
                 || extensions.contains("GLX_EXT_create_context_es_profile");
             let ext_context = extensions.contains("GLX_ARB_create_context");
@@ -256,14 +252,11 @@ impl GlContext {
             XSync(connection.display(), 0);
             connection.last_error().map_err(WindowError::OpenGl)?;
 
-            Ok(GlContext { window, context })
-        }
-    }
-
-    pub fn scope<'a>(&'a self, connection: &'a Connection) -> GlContextScope<'a> {
-        GlContextScope {
-            context: self,
-            connection,
+            Ok(GlContext {
+                window,
+                context,
+                connection,
+            })
         }
     }
 
@@ -275,8 +268,8 @@ impl GlContext {
     }
 }
 
-impl GlContextScope<'_> {
-    pub fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
+impl PlatformOpenGl for GlContext {
+    fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
         unsafe {
             glXGetProcAddress(symbol.as_ptr() as *const u8)
                 .map(|x| x as *const c_void)
@@ -284,22 +277,18 @@ impl GlContextScope<'_> {
         }
     }
 
-    pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
+    fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         unsafe {
-            glXSwapBuffers(self.connection.display(), self.context.window);
+            glXSwapBuffers(self.connection.display(), self.window);
             Ok(())
         }
     }
 
-    pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+    fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         unsafe {
             let result = {
                 if current {
-                    glXMakeCurrent(
-                        self.connection.display(),
-                        self.context.window,
-                        self.context.context,
-                    )
+                    glXMakeCurrent(self.connection.display(), self.window, self.context)
                 } else {
                     glXMakeCurrent(self.connection.display(), 0, std::ptr::null_mut())
                 }

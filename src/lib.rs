@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 #![allow(clippy::identity_op)]
-#![deny(clippy::panic, clippy::unwrap_used, clippy::indexing_slicing)]
+#![deny(clippy::panic, clippy::unwrap_used)]
 #![warn(clippy::todo, clippy::unimplemented)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]
