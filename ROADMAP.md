@@ -15,6 +15,7 @@
 |  - `MouseScroll`                                      | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyUp`                                            | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyDown`                                          | :ok:     | :ok:     | :ok:     | High     |
+|  - `KeyText`                                          | :x:      | :x:      | :x:      | Medium   |
 |  - `KeyModifiers`                                     | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowClose`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowFocus`                                      | :ok:     | :ok:     | :ok:     | Low      |

@@ -419,6 +419,19 @@ pub enum Event<'a> {
         capture: &'a mut bool,
     },
 
+    /// The user typed a character. This takes precendence over `KeyDown` and
+    /// `KeyUp` events, if the event handler does not "capture" the text
+    /// event, a `KeyDown` event will be dispatched.
+    KeyText {
+        /// The text that was typed. This may contain multiple characters.
+        text: &'a str,
+
+        /// Set to `true` to indicate that the event has been handled and should
+        /// not be propagated to the parent (if this window is embedded in
+        /// another window)
+        capture: &'a mut bool,
+    },
+
     /// Drag-and-drop data was dragged into/out of the window but not yet
     /// released.
     ///
