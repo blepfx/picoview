@@ -12,6 +12,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+use x11::xinput2::{
+    XI_Enter, XI_HierarchyChanged, XI_Motion, XIAllDevices, XIDeviceEvent, XIEventMask,
+    XIMaskIsSet, XISelectEvents, XISetMask,
+};
 use x11::xlib::*;
 
 pub const ATOM_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
@@ -40,6 +44,9 @@ pub struct WindowImpl {
 
     cursor_empty: EmptyCursor,
     cursor_cache: RefCell<HashMap<MouseCursor, c_ulong>>,
+
+    xi2_info: Option<XI2Info>,
+    xi2_axes: RefCell<Vec<XI2DeviceAxis>>,
 
     #[allow(clippy::type_complexity)]
     handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
@@ -134,6 +141,30 @@ impl WindowImpl {
                 &mut connection.atom(c"WM_DELETE_WINDOW"),
                 1,
             );
+
+            // xinput2 stuff
+            let (xi2_info, xi2_axes) = match XI2Info::query(&connection) {
+                Some(info) => {
+                    let mut mask = [0; 4];
+                    XISetMask(&mut mask, XI_Enter);
+                    XISetMask(&mut mask, XI_Motion);
+                    XISetMask(&mut mask, XI_HierarchyChanged);
+                    XISelectEvents(
+                        connection.display(),
+                        window_id,
+                        &mut XIEventMask {
+                            deviceid: XIAllDevices,
+                            mask_len: 4,
+                            mask: mask.as_mut_ptr(),
+                        },
+                        1,
+                    );
+
+                    (Some(info), XI2DeviceAxis::list(&connection))
+                }
+
+                None => (None, Vec::new()),
+            };
 
             // resize stuff
             {
@@ -264,6 +295,9 @@ impl WindowImpl {
 
                 exchange_clipboard: RefCell::new(Exchange::Empty),
 
+                xi2_info,
+                xi2_axes: RefCell::new(xi2_axes),
+
                 cursor_empty: EmptyCursor::new(connection.clone()),
                 cursor_cache: RefCell::new(HashMap::new()),
 
@@ -338,6 +372,72 @@ impl WindowImpl {
     fn handle_event(&self, event: XEvent) {
         unsafe {
             match event.type_ {
+                GenericEvent => {
+                    let mut event = event.generic_event_cookie;
+                    let is_xi2 = self
+                        .xi2_info
+                        .as_ref()
+                        .is_some_and(|info| event.extension == info.ext_opcode);
+
+                    if event.evtype == XI_Motion && is_xi2 {
+                        if XGetEventData(self.connection.display(), &mut event) == 0 {
+                            return;
+                        }
+
+                        let event = &*(event.data as *const XIDeviceEvent);
+                        let mask = std::slice::from_raw_parts(
+                            event.valuators.mask,
+                            event.valuators.mask_len as usize,
+                        );
+
+                        if event.sourceid != event.deviceid {
+                            return; // this is a master device event
+                        }
+
+                        let mut scroll_x = 0.0;
+                        let mut scroll_y = 0.0;
+
+                        let mut values = event.valuators.values;
+                        for i in 0..event.valuators.mask_len * 8 {
+                            if !XIMaskIsSet(mask, i) {
+                                continue;
+                            }
+
+                            let value = {
+                                let value = *values;
+                                values = values.offset(1);
+                                value
+                            };
+
+                            if let Some(axis) =
+                                self.xi2_axes.borrow_mut().iter_mut().find(|axis| {
+                                    axis.source_id == event.sourceid && axis.valuator == i
+                                })
+                            {
+                                let delta = axis.track_position(value);
+                                if axis.is_horizontal {
+                                    scroll_x += delta;
+                                } else {
+                                    scroll_y += delta;
+                                }
+                            }
+                        }
+
+                        if scroll_x != 0.0 || scroll_y != 0.0 {
+                            self.send_event(Event::MouseScroll {
+                                x: scroll_x as f32,
+                                y: scroll_y as f32,
+                            });
+                        }
+                    } else if event.evtype == XI_Enter {
+                        for device in self.xi2_axes.borrow_mut().iter_mut() {
+                            device.reset_position(&self.connection);
+                        }
+                    } else if event.evtype == XI_HierarchyChanged {
+                        self.xi2_axes.replace(XI2DeviceAxis::list(&self.connection));
+                    }
+                }
+
                 ClientMessage => {
                     let event = event.client_message;
                     if event.format == 32
@@ -409,12 +509,12 @@ impl WindowImpl {
                             }
                         }
 
-                        4..=7 if event.type_ == ButtonPress => {
+                        4..=7 if event.type_ == ButtonPress && self.xi2_info.is_none() => {
                             let (x, y) = match event.button {
-                                4 => (0.0, 1.0),
-                                5 => (0.0, -1.0),
-                                6 => (1.0, 0.0),
-                                7 => (-1.0, 0.0),
+                                4 => (0.0, -1.0),
+                                5 => (0.0, 1.0),
+                                6 => (-1.0, 0.0),
+                                7 => (1.0, 0.0),
                                 _ => return,
                             };
 

@@ -123,9 +123,10 @@ impl From<(f32, f32)> for Point {
 
 /// A mouse button.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum MouseButton {
     /// Left mouse button
-    Left,
+    Left = 0,
     /// Right mouse button
     Right,
     /// Middle mouse button (usually the scroll wheel button)
@@ -134,19 +135,6 @@ pub enum MouseButton {
     Forward,
     /// Back mouse button (usually the 5th button)
     Back,
-}
-
-/// Axis for gesture events.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum GestureAxis {
-    /// Pan gesture in the horizontal direction
-    Horizontal,
-    /// Pan gesture in the vertical direction
-    Vertical,
-    /// Rotate (twist) gesture
-    Rotate,
-    /// Zoom (pinch) gesture
-    Zoom,
 }
 
 /// A logical key of a keyboard.
@@ -396,10 +384,10 @@ pub enum Event<'a> {
     /// `picoview` normalizes scroll events to a consistent unit across
     /// platforms.
     MouseScroll {
-        /// The amount scrolled in the horizontal direction
+        /// The amount scrolled in the horizontal direction (positive right)
         x: f32,
 
-        /// The amount scrolled in the vertical direction
+        /// The amount scrolled in the vertical direction (positive down)
         y: f32,
     },
 
@@ -443,28 +431,6 @@ pub enum Event<'a> {
         /// not be propagated to the parent (if this window is embedded in
         /// another window)
         capture: &'a mut bool,
-    },
-
-    /// A gesture (such as a touchpad gesture) has begun/moved.
-    GestureMove {
-        /// The axis of the gesture
-        axis: GestureAxis,
-
-        /// The amount of movement since the last [`Event::GestureMove`] event.
-        ///
-        /// Units, for each axis, are as follows:
-        /// - [`GestureAxis::Horizontal`]: physical pixels
-        /// - [`GestureAxis::Vertical`]: physical pixels
-        /// - [`GestureAxis::Rotate`](GestureAxis::Rotate): degrees (positive
-        ///   means clockwise)
-        /// - [`GestureAxis::Zoom`]: scale factor (1.0 means no zoom)
-        delta: f32,
-    },
-
-    /// A gesture (such as a touchpad gesture) has ended.
-    GestureStop {
-        /// The axis of the gesture
-        axis: GestureAxis,
     },
 
     /// Drag-and-drop data was dragged into/out of the window but not yet

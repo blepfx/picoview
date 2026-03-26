@@ -6,7 +6,11 @@ use std::{
 };
 use x11::xlib::*;
 
+/// Open the given URL with the default system handler. Returns `true` if we
+/// successfully started a process.
 pub fn open_url(path: &str) -> bool {
+    /// Spawns a process in a detached state, so it won't be killed when the
+    /// parent process exits.
     fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -81,7 +85,7 @@ pub use connection::*;
 pub use cursor::*;
 pub use events::*;
 pub use info::*;
-pub use keyboard::*;
+pub use input::*;
 pub use selection::*;
 pub use visual::*;
 
@@ -97,10 +101,14 @@ mod connection {
     };
     use x11::xlib::*;
 
+    /// A cloneable handle to an X11 display connection. The connection is
+    /// automatically closed when all handles are dropped.
     #[derive(Clone)]
     pub struct Connection(Rc<ConnectionInner>);
 
     impl Connection {
+        /// Open a new connection to the X server. Returns `None` if the
+        /// connection could not be established.
         pub fn open() -> Option<Self> {
             unsafe {
                 let display = XOpenDisplay(std::ptr::null());
@@ -119,6 +127,7 @@ mod connection {
             }
         }
 
+        /// Get the last error that occurred on this display connection.
         pub fn last_error(&self) -> Result<(), String> {
             let err = ERRORS_FOR_EACH_DISPLAY
                 .lock()
@@ -132,6 +141,7 @@ mod connection {
             }
         }
 
+        /// Get a raw-window-handle display handle to this connection.
         pub fn display_handle(&self) -> XlibDisplayHandle {
             unsafe {
                 XlibDisplayHandle::new(
@@ -141,10 +151,12 @@ mod connection {
             }
         }
 
+        /// Get the raw `Display` pointer for this connection for `xlib` calls
         pub fn display(&self) -> *mut Display {
             self.0.display
         }
 
+        /// Get the atom for the given name, caching it for future calls
         pub fn atom(&self, name: &'static CStr) -> c_ulong {
             ATOM_CACHE.with_borrow_mut(|cache| {
                 *cache
@@ -216,12 +228,17 @@ mod selection {
     };
     use x11::xlib::*;
 
+    /// An error that can occur when requesting a selection value.
     #[derive(Debug, PartialEq, Eq, Clone, Copy)]
     pub enum SelectionError {
+        /// Selection is empty
         Empty,
+        /// Selection is owned by the current window and must be handled
+        /// separately to avoid a deadlock
         Recursive,
     }
 
+    /// Encode a list of file paths into a `text/uri-list` selection value
     pub fn encode_uri_list(files: &[PathBuf]) -> OsString {
         let mut ret = OsString::new();
         for file in files {
@@ -235,6 +252,7 @@ mod selection {
         ret
     }
 
+    /// Decode a list of file URIs from the given selection data
     pub fn decode_uri_list(list: &OsStr) -> Vec<PathBuf> {
         fn percent_decode(bytes: &[u8]) -> Vec<u8> {
             let mut iter = bytes.iter();
@@ -271,6 +289,8 @@ mod selection {
             .collect()
     }
 
+    /// Request a selection value (clipboard/drag-n-drop) and wait for the
+    /// response.
     pub fn request_selection<R>(
         conn: &Connection,
         window: c_ulong,
@@ -357,6 +377,8 @@ mod visual {
     use std::{ffi::c_int, mem::zeroed, ptr::null_mut};
     use x11::{glx::GLXFBConfig, xlib::*};
 
+    /// A visual config is used for creating a backing surface for an X window
+    /// (and optionally an OpenGl context)
     pub struct VisualConfig {
         pub fb_config: GLXFBConfig,
         pub depth: c_int,
@@ -364,6 +386,7 @@ mod visual {
     }
 
     impl VisualConfig {
+        /// Copy the visual and depth from the parent window
         pub fn copy_from_parent() -> Self {
             Self {
                 depth: CopyFromParent,
@@ -372,6 +395,7 @@ mod visual {
             }
         }
 
+        /// Try to find a true-color visual with the given depth, if available.
         pub fn try_new_true_color(conn: &Connection, depth: u8) -> Option<Self> {
             let visual = unsafe {
                 let mut visual = XVisualInfo { ..zeroed() };
@@ -396,11 +420,13 @@ mod visual {
     }
 }
 
-mod keyboard {
+mod input {
+    use super::Connection;
     use crate::{Key, Modifiers};
-    use std::ffi::c_uint;
-    use x11::xlib::*;
+    use std::ffi::{c_int, c_uint};
+    use x11::{xinput2::*, xlib::*};
 
+    /// Convert event key code to a `Key` enum variant, if possible.
     pub fn keycode_to_key(code: c_uint) -> Option<Key> {
         Some(match code {
             0x09 => Key::Escape,
@@ -512,6 +538,7 @@ mod keyboard {
         })
     }
 
+    /// Convert event key code to a set of `Modifiers` flags, if possible.
     pub fn keycode_to_mods(code: c_uint) -> Modifiers {
         match code {
             0x25 | 0x69 => Modifiers::CTRL,
@@ -522,6 +549,7 @@ mod keyboard {
         }
     }
 
+    /// Convert modifier mask to a set of `Modifiers` flags, if possible.
     pub fn keymask_to_mods(mods: c_uint) -> Modifiers {
         const MAP: &[(c_uint, Modifiers)] = &[
             (ShiftMask, Modifiers::SHIFT),
@@ -540,6 +568,124 @@ mod keyboard {
         }
         ret
     }
+
+    /// Information about the XInput2 extension.
+    pub struct XI2Info {
+        pub ext_opcode: c_int,
+    }
+
+    /// Information about an axis of a physical input device.
+    #[derive(Debug)]
+    pub struct XI2DeviceAxis {
+        pub source_id: c_int,
+        pub valuator: c_int,
+        pub is_horizontal: bool,
+        pub increment: f64,
+        pub position: Option<f64>,
+    }
+
+    impl XI2Info {
+        /// Query the XInput2 extension and return its opcode if available.
+        pub fn query(conn: &Connection) -> Option<Self> {
+            unsafe {
+                let mut ext_opcode = 0;
+                if XQueryExtension(
+                    conn.display(),
+                    c"XInputExtension".as_ptr() as _,
+                    &mut ext_opcode,
+                    &mut 0,
+                    &mut 0,
+                ) == 0
+                {
+                    None
+                } else {
+                    Some(Self { ext_opcode })
+                }
+            }
+        }
+    }
+
+    impl XI2DeviceAxis {
+        /// Get all available axes for physical devices.
+        pub fn list(conn: &Connection) -> Vec<Self> {
+            let mut result = Vec::new();
+            xi2_list_classes_for(conn, XIAllDevices, |device, class| {
+                if device.deviceid != class.sourceid {
+                    return; // physical devices only
+                }
+
+                if class._type == XIScrollClass {
+                    let info = unsafe { &*(class as *const _ as *const XIScrollClassInfo) };
+                    if info.scroll_type == XIScrollTypeHorizontal {
+                        result.push(Self {
+                            source_id: info.sourceid,
+                            valuator: info.number,
+                            increment: info.increment,
+                            position: None,
+                            is_horizontal: true,
+                        });
+                    } else if info.scroll_type == XIScrollTypeVertical {
+                        result.push(Self {
+                            source_id: info.sourceid,
+                            valuator: info.number,
+                            increment: info.increment,
+                            position: None,
+                            is_horizontal: false,
+                        });
+                    }
+                }
+            });
+
+            result
+        }
+
+        /// Reset the position of all axes to their current value.
+        pub fn reset_position(&mut self, conn: &Connection) {
+            xi2_list_classes_for(conn, self.source_id, |_, class| {
+                if class._type == XIValuatorClass {
+                    let info = unsafe { &*(class as *const _ as *const XIValuatorClassInfo) };
+                    if info.sourceid == self.source_id && info.number == self.valuator {
+                        self.position.replace(info.value);
+                    }
+                }
+            });
+        }
+
+        /// Track the delta of the axis position since the last reset or
+        /// track_position call.
+        pub fn track_position(&mut self, position: f64) -> f64 {
+            (position - self.position.replace(position).unwrap_or(position)) / self.increment
+        }
+    }
+
+    /// Enumerate all (device, class) pairs for the given device id or all
+    /// devices if `XIAllDevices` is given.
+    fn xi2_list_classes_for(
+        conn: &Connection,
+        device_id: c_int,
+        mut f: impl FnMut(&XIDeviceInfo, &XIAnyClassInfo),
+    ) {
+        unsafe {
+            let mut count = 0;
+            let info = XIQueryDevice(conn.display(), device_id, &mut count);
+            if info.is_null() {
+                return;
+            }
+
+            for i in 0..count {
+                let device = &*info.add(i as usize);
+                let classes =
+                    std::slice::from_raw_parts(device.classes, device.num_classes as usize);
+
+                for class in classes {
+                    let class = &**class;
+                    f(device, class);
+                }
+            }
+
+            XIFreeDeviceInfo(info as *mut _);
+        }
+    }
 }
 
 mod info {
@@ -547,6 +693,7 @@ mod info {
     use std::{ffi::CStr, mem::zeroed, ptr::null_mut, str::FromStr};
     use x11::{xlib::*, xrandr::*};
 
+    /// Get the DPI scaling factor from X resources, if available.
     pub fn query_scale_dpi(conn: &Connection) -> Option<f32> {
         unsafe {
             let rms = XResourceManagerString(conn.display());
@@ -589,6 +736,7 @@ mod info {
         }
     }
 
+    /// Get the current refresh rate of the default screen, if available.
     pub fn query_refresh_rate(conn: &Connection) -> Option<f64> {
         unsafe {
             let has_randr = XRRQueryExtension(conn.display(), &mut 0, &mut 0);
@@ -641,6 +789,9 @@ mod cursor {
     };
     use x11::{xcursor::XcursorLibraryLoadCursor, xlib::*};
 
+    /// Empty cursor that can be used to hide the mouse cursor. It is
+    /// implemented by creating a 1x1 transparent pixmap and using it as the
+    /// cursor image.
     pub struct EmptyCursor {
         conn: Connection,
         cursor: c_ulong,
@@ -689,6 +840,7 @@ mod cursor {
         }
     }
 
+    /// Load a cursor by trying multiple names until one is found.
     pub fn load_cursor_by_name(conn: &Connection, name: &[&CStr]) -> Option<c_ulong> {
         for name in name {
             let cursor = unsafe { XcursorLibraryLoadCursor(conn.display(), name.as_ptr()) };
@@ -700,6 +852,7 @@ mod cursor {
         None
     }
 
+    /// Load a cursor corresponding to the given `MouseCursor` variant.
     pub fn load_cursor_by_enum(conn: &Connection, cursor: super::MouseCursor) -> Option<c_ulong> {
         use super::MouseCursor::*;
 
@@ -746,6 +899,8 @@ mod events {
     use std::{ptr::null, time::Duration};
     use x11::xlib::*;
 
+    /// Wait for events with an optional timeout and return an iterator over all
+    /// pending events.
     pub fn wait_for_events(
         conn: &Connection,
         timeout: Option<Duration>,
