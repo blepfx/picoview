@@ -17,7 +17,7 @@ jobs:
     - name: Install X11 and GL dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev xvfb x11-utils
+        sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev libxi-dev xvfb x11-utils
     - name: Start Xvfb
       run: |
         sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
