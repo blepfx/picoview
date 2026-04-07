@@ -1,7 +1,14 @@
 use picoview::{Event, WindowBuilder};
 use std::{thread::sleep, time::Duration};
 
-#[test]
+/// Because some OSes require the windows to be created on the main-thread
+/// we have to run the tests with `harness = false`.
+fn main() {
+    test_startup_blocking();
+    test_startup_transient();
+    test_startup_embedded();
+}
+
 fn test_startup_blocking() {
     WindowBuilder::new(|window| {
         Box::new(move |event| {
@@ -19,7 +26,6 @@ fn test_startup_blocking() {
     .unwrap();
 }
 
-#[test]
 fn test_startup_transient() {
     WindowBuilder::new(|window| {
         let mut frames = 0;
@@ -61,7 +67,6 @@ fn test_startup_transient() {
     .unwrap();
 }
 
-#[test]
 fn test_startup_embedded() {
     WindowBuilder::new(|window| {
         let mut frames = 0;

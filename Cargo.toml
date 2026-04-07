@@ -74,9 +74,14 @@ windows-sys = { version = "0.61.2", features = [
 [profile.bench]
 debug = true
 
+[[test]]
+name = "startup"
+harness = false
+
 [workspace]
 members = [
     ".",
     "examples/clack-gain", 
     "examples/softbuffer",
 ]
+
