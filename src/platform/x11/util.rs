@@ -123,7 +123,10 @@ mod connection {
                     .expect("poisoned")
                     .insert(display as usize, None);
 
-                Some(Self(Rc::new(ConnectionInner { display })))
+                Some(Self(Rc::new(ConnectionInner {
+                    display,
+                    atoms: RefCell::new(HashMap::new()),
+                })))
             }
         }
 
@@ -158,16 +161,18 @@ mod connection {
 
         /// Get the atom for the given name, caching it for future calls
         pub fn atom(&self, name: &'static CStr) -> c_ulong {
-            ATOM_CACHE.with_borrow_mut(|cache| {
-                *cache
-                    .entry(name.as_ptr() as usize)
-                    .or_insert_with(|| unsafe { XInternAtom(self.display(), name.as_ptr(), 0) })
-            })
+            *self
+                .0
+                .atoms
+                .borrow_mut()
+                .entry(name.as_ptr() as usize)
+                .or_insert_with(|| unsafe { XInternAtom(self.display(), name.as_ptr(), 0) })
         }
     }
 
     struct ConnectionInner {
         display: *mut Display,
+        atoms: RefCell<HashMap<usize, c_ulong>>,
     }
 
     impl Drop for ConnectionInner {
@@ -185,10 +190,6 @@ mod connection {
 
     static ERRORS_FOR_EACH_DISPLAY: LazyLock<Mutex<HashMap<usize, Option<String>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
-
-    thread_local! {
-        static ATOM_CACHE: RefCell<HashMap<usize, c_ulong>> = RefCell::new(HashMap::new());
-    }
 
     unsafe extern "C" fn error_handler(dpy: *mut Display, err: *mut XErrorEvent) -> i32 {
         let mut map = ERRORS_FOR_EACH_DISPLAY.lock().expect("poisoned");
