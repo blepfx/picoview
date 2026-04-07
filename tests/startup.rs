@@ -5,7 +5,9 @@ use std::{thread::sleep, time::Duration};
 /// we have to run the tests with `harness = false`.
 fn main() {
     test_startup_blocking();
+    sleep(Duration::from_millis(1000));
     test_startup_transient();
+    sleep(Duration::from_millis(1000));
     test_startup_embedded();
 }
 

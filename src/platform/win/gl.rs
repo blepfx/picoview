@@ -302,17 +302,6 @@ fn create_context_fallback(hdc: HDC) -> Option<HGLRC> {
     }
 }
 
-/*  "WGL_ARB_multisample" => Extensions::MULTISAMPLE,
-"WGL_ARB_framebuffer_sRGB"
-| "WGL_EXT_framebuffer_sRGB"
-| "WGL_EXT_colorspace" => Extensions::FRAMEBUFFER_SRGB,
-"WGL_EXT_create_context_es2_profile"
-| "WGL_EXT_create_context_es_profile" => Extensions::ES_CONTEXT,
-"WGL_EXT_swap_control" => Extensions::SWAP_CONTROL,
-"WGL_ARB_create_context" => Extensions::CREATE_CONTEXT,
-"WGL_ARB_pixel_format" => Extensions::PIXEL_FORMAT,
-_ => continue, */
-
 fn create_context_arb(hdc: HDC, config: &crate::GlConfig, ext: &WglExtensions) -> Option<HGLRC> {
     unsafe {
         let create_context_attribs = ext.create_context_attribs?;

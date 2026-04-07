@@ -70,6 +70,9 @@ unsafe impl Send for WindowWakerImpl {}
 unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
+    // TODO: instead of doing this, we should have a set of registered windows for
+    // the keyboard hook this implementation does not allow for subclassing (for
+    // example, accesskit)
     pub unsafe fn is_our_window(hwnd: HWND) -> bool {
         unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as *const () as isize }
     }
@@ -83,8 +86,7 @@ impl WindowImpl {
             };
 
             if let OpenMode::Blocking = mode {
-                let com_init = CoInitialize(null());
-                check_error(com_init == 0, "com sta init")?;
+                CoInitialize(null());
             }
 
             try_set_thread_dpi_awareness_monitor_aware();
@@ -104,7 +106,7 @@ impl WindowImpl {
                 lpszClassName: class_name.as_ptr(),
             });
 
-            check_error(window_class != 0, "main window class")?;
+            check_error(window_class != 0, "RegisterClassW")?;
 
             let dwstyle = {
                 let mut dwstyle = 0;
@@ -167,7 +169,7 @@ impl WindowImpl {
                 null(),
             );
 
-            check_error(!hwnd.is_null(), "main window create")?;
+            check_error(!hwnd.is_null(), "CreateWindowExW")?;
 
             if options.transparent {
                 let region = CreateRectRgn(0, 0, -1, -1);
