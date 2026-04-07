@@ -39,7 +39,7 @@ jobs:
     - name: Run Tests (TSAN)
       run: RUSTFLAGS="-Zsanitizer=thread" cargo test -Zbuild-std --workspace --all-targets --all-features --target x86_64-unknown-linux-gnu 
 
-  build-linux:
+  build-macos:
     runs-on: macos-latest
     env:
       RUSTFLAGS: -Dwarnings
