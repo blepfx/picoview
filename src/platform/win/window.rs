@@ -45,8 +45,7 @@ pub struct WindowImpl {
     window_hwnd: HWND,
     window_class: u16,
 
-    // we have to keep it alive so the hook doesnt get uninstalled
-    _keyboard_hook: Rc<KeyboardHook>,
+    keyboard_hook: Rc<KeyboardHook>,
     vsync_callback: VSyncCallback,
 
     is_blocking: bool,
@@ -70,13 +69,6 @@ unsafe impl Send for WindowWakerImpl {}
 unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
-    // TODO: instead of doing this, we should have a set of registered windows for
-    // the keyboard hook this implementation does not allow for subclassing (for
-    // example, accesskit)
-    pub unsafe fn is_our_window(hwnd: HWND) -> bool {
-        unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wnd_proc as *const () as isize }
-    }
-
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
         unsafe {
             let parent = match mode.handle() {
@@ -190,6 +182,9 @@ impl WindowImpl {
             };
 
             let cursor_cache = CursorCache::load();
+            let keyboard_hook = KeyboardHook::install();
+            keyboard_hook.add_window(hwnd);
+
             let window = Box::new(Self {
                 waker: Arc::new(WindowWakerImpl {
                     window_hwnd: hwnd,
@@ -224,7 +219,7 @@ impl WindowImpl {
                 event_handler: RefCell::new(None),
                 event_queue: RefCell::new(VecDeque::new()),
 
-                _keyboard_hook: KeyboardHook::install(),
+                keyboard_hook,
                 vsync_callback: VSyncCallback::new(hwnd, |hwnd| {
                     SendMessageW(hwnd, WM_USER_VSYNC, 0, 0);
                 }),
@@ -292,6 +287,9 @@ impl Drop for WindowImpl {
 
         // drop the handler here, so it could do clean up when the window is still alive
         self.event_handler.take();
+
+        // remove the window from the keyboard hook
+        self.keyboard_hook.remove_window(self.window_hwnd);
 
         unsafe {
             SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);

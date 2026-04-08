@@ -1,13 +1,14 @@
 use super::window::{WM_USER_KEY_DOWN, WindowImpl};
 use crate::platform::win::window::WM_USER_KEY_UP;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
+    collections::HashSet,
     mem::zeroed,
     ptr::null_mut,
     rc::{Rc, Weak},
 };
 use windows_sys::Win32::{
-    Foundation::{LPARAM, LRESULT, WPARAM},
+    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     System::Threading::GetCurrentThreadId,
     UI::WindowsAndMessaging::*,
 };
@@ -18,6 +19,7 @@ thread_local! {
 
 pub struct KeyboardHook {
     hhook: HHOOK,
+    windows: RefCell<HashSet<usize>>,
 }
 
 impl KeyboardHook {
@@ -28,6 +30,7 @@ impl KeyboardHook {
 
             // if we dont have one, create it
             None => Rc::new(Self {
+                windows: RefCell::new(HashSet::new()),
                 hhook: unsafe {
                     SetWindowsHookExW(
                         WH_GETMESSAGE,
@@ -42,6 +45,18 @@ impl KeyboardHook {
         // so new windows get a copy of the hook
         HOOK.set(Rc::downgrade(&hook));
         hook
+    }
+
+    pub fn add_window(&self, hwnd: HWND) {
+        self.windows.borrow_mut().insert(hwnd.addr());
+    }
+
+    pub fn remove_window(&self, hwnd: HWND) {
+        self.windows.borrow_mut().remove(&hwnd.addr());
+    }
+
+    pub fn has_window(&self, hwnd: HWND) -> bool {
+        self.windows.borrow().contains(&hwnd.addr())
     }
 }
 
@@ -60,12 +75,20 @@ unsafe extern "system" fn keyboard_hook_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    fn is_our_window(hwnd: HWND) -> bool {
+        HOOK.with(|hook| {
+            hook.borrow()
+                .upgrade()
+                .map_or(false, |hook| hook.has_window(hwnd))
+        })
+    }
+
     unsafe {
         if n_code == HC_ACTION as i32 && wparam == PM_REMOVE as usize {
             let message = lparam as *mut MSG;
 
             if matches!((*message).message, WM_KEYDOWN | WM_KEYUP) {
-                while WindowImpl::is_our_window((*message).hwnd) {
+                while is_our_window((*message).hwnd) {
                     let capture = SendMessageW(
                         (*message).hwnd,
                         if (*message).message == WM_KEYDOWN {
