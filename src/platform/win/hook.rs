@@ -1,5 +1,4 @@
-use super::window::{WM_USER_KEY_DOWN, WindowImpl};
-use crate::platform::win::window::WM_USER_KEY_UP;
+use super::window::{WM_USER_KEY_DOWN, WM_USER_KEY_UP};
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
@@ -76,11 +75,9 @@ unsafe extern "system" fn keyboard_hook_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     fn is_our_window(hwnd: HWND) -> bool {
-        HOOK.with(|hook| {
-            hook.borrow()
-                .upgrade()
-                .map_or(false, |hook| hook.has_window(hwnd))
-        })
+        HOOK.get()
+            .upgrade()
+            .map_or(false, |hook| hook.has_window(hwnd))
     }
 
     unsafe {
