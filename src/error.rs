@@ -11,6 +11,7 @@ pub struct SwapBuffersError;
 
 /// An error that can occur during the creation or lifetime of a window.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum WindowError {
     /// A platform-specific error occurred.
     Platform(String),

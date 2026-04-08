@@ -259,11 +259,13 @@ impl GlContext {
             })
         }
     }
+}
 
-    pub fn close(self, connection: &Connection) {
+impl Drop for GlContext {
+    fn drop(&mut self) {
         unsafe {
-            glXMakeCurrent(connection.display(), 0, std::ptr::null_mut());
-            glXDestroyContext(connection.display(), self.context);
+            glXMakeCurrent(self.connection.display(), 0, std::ptr::null_mut());
+            glXDestroyContext(self.connection.display(), self.context);
         }
     }
 }

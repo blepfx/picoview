@@ -108,7 +108,7 @@ impl WindowImpl {
                 Ok(WindowWaker::default())
             },
 
-            OpenMode::Transient(parent) => autoreleasepool(|_| unsafe {
+            OpenMode::Transient(parent) => unsafe {
                 let parent_view = match parent {
                     rwh_06::RawWindowHandle::AppKit(window) => {
                         window.ns_view.as_ptr() as *mut NSView
@@ -134,9 +134,9 @@ impl WindowImpl {
                 }
 
                 Ok(view.waker())
-            }),
+            },
 
-            OpenMode::Embedded(parent) => autoreleasepool(|_| unsafe {
+            OpenMode::Embedded(parent) => unsafe {
                 let parent_view = match parent {
                     rwh_06::RawWindowHandle::AppKit(window) => {
                         window.ns_view.as_ptr() as *mut NSView
@@ -147,7 +147,7 @@ impl WindowImpl {
                 let view = Self::create_view(options, None, true, main_thread)?;
                 (*parent_view).addSubview(&view.view);
                 Ok(view.waker())
-            }),
+            },
         }
     }
 

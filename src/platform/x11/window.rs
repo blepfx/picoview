@@ -8,8 +8,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr};
 use std::mem::zeroed;
 use std::os::unix::ffi::OsStrExt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use x11::xinput2::{
@@ -54,11 +53,14 @@ pub struct WindowImpl {
 }
 
 pub struct WindowWakerImpl {
-    active: AtomicBool,
     window_id: c_ulong,
-    display: *mut Display,
+    display: RwLock<*mut Display>,
 }
 
+// while it is not really Send, we promise to only send it to a different thread
+// once after init while the WindowImpl contains Connection which is !Send, as
+// long as we move all instances of Connection to the other thread we should be
+// ok TODO: maybe remove that?
 unsafe impl Send for WindowImpl {}
 unsafe impl Send for WindowWakerImpl {}
 unsafe impl Sync for WindowWakerImpl {}
@@ -275,8 +277,7 @@ impl WindowImpl {
                 window_parent: Cell::new(window_parent),
 
                 waker: Arc::new(WindowWakerImpl {
-                    active: AtomicBool::new(true),
-                    display: connection.display(),
+                    display: RwLock::new(connection.display()),
                     window_id,
                 }),
 
@@ -745,20 +746,18 @@ impl WindowImpl {
         }
     }
 
-    fn destroy(mut self) -> Result<(), WindowError> {
+    fn destroy(self) -> Result<(), WindowError> {
         unsafe {
             // we set active to false before sending the close event, to ensure that any
             // pending wakeups that get triggered by the close event will be ignored,
             // preventing a potential use-after-free in the `WindowWakerImpl::wakeup` method
-            self.waker.active.store(false, Ordering::SeqCst);
+            if let Ok(mut display) = self.waker.display.write() {
+                *display = std::ptr::null_mut();
+            }
 
             // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends
             // on WindowImpl
             self.handler.take();
-
-            if let Some(gl) = self.gl_context.take() {
-                gl.close(&self.connection)
-            }
 
             if !self.is_destroyed.get() {
                 XDestroyWindow(self.connection.display(), self.window_id);
@@ -1031,13 +1030,15 @@ impl PlatformWindow for WindowImpl {
 
 impl PlatformWaker for WindowWakerImpl {
     fn wakeup(&self) -> Result<(), WakeupError> {
-        if !self.active.load(Ordering::SeqCst) {
+        let display = self.display.read().map_err(|_| WakeupError)?;
+
+        if display.is_null() {
             return Err(WakeupError);
         }
 
         unsafe {
             XSendEvent(
-                self.display,
+                *display,
                 self.window_id,
                 1,
                 NoEventMask,
@@ -1046,15 +1047,15 @@ impl PlatformWaker for WindowWakerImpl {
                         type_: ClientMessage,
                         serial: 0,
                         send_event: 1,
-                        display: self.display,
+                        display: *display,
                         window: self.window_id,
-                        message_type: XInternAtom(self.display, ATOM_WAKEUP.as_ptr(), 0),
+                        message_type: XInternAtom(*display, ATOM_WAKEUP.as_ptr(), 0),
                         format: 32,
                         data: ClientMessageData::new(),
                     },
                 },
             );
-            XFlush(self.display);
+            XFlush(*display);
         }
 
         Ok(())

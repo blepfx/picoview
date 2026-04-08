@@ -97,7 +97,7 @@ mod connection {
         ffi::{CStr, c_char, c_ulong},
         ptr::NonNull,
         rc::Rc,
-        sync::{LazyLock, Mutex},
+        sync::{LazyLock, Mutex, OnceLock},
     };
     use x11::xlib::*;
 
@@ -116,12 +116,14 @@ mod connection {
                     return None;
                 }
 
-                XSetErrorHandler(Some(error_handler));
+                ERROR_HANDLER.get_or_init(|| {
+                    XSetErrorHandler(Some(error_handler));
+                });
 
                 ERRORS_FOR_EACH_DISPLAY
                     .lock()
                     .expect("poisoned")
-                    .insert(display as usize, None);
+                    .insert(display.addr(), None);
 
                 Some(Self(Rc::new(ConnectionInner {
                     display,
@@ -165,7 +167,7 @@ mod connection {
                 .0
                 .atoms
                 .borrow_mut()
-                .entry(name.as_ptr() as usize)
+                .entry(name.as_ptr().addr())
                 .or_insert_with(|| unsafe { XInternAtom(self.display(), name.as_ptr(), 0) })
         }
     }
@@ -181,13 +183,14 @@ mod connection {
                 ERRORS_FOR_EACH_DISPLAY
                     .lock()
                     .expect("poisoned")
-                    .remove(&(self.display as usize));
+                    .remove(&self.display.addr());
 
                 XCloseDisplay(self.display);
             }
         }
     }
 
+    static ERROR_HANDLER: OnceLock<()> = OnceLock::new();
     static ERRORS_FOR_EACH_DISPLAY: LazyLock<Mutex<HashMap<usize, Option<String>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 

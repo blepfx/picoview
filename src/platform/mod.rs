@@ -31,6 +31,8 @@ pub enum OpenMode {
     Transient(rwh_06::RawWindowHandle),
 }
 
+unsafe impl Send for OpenMode {}
+
 impl OpenMode {
     #[allow(dead_code)]
     pub fn handle(&self) -> Option<rwh_06::RawWindowHandle> {
