@@ -75,9 +75,7 @@ unsafe extern "system" fn keyboard_hook_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     fn is_our_window(hwnd: HWND) -> bool {
-        HOOK.get()
-            .upgrade()
-            .map_or(false, |hook| hook.has_window(hwnd))
+        KeyboardHook::install().has_window(hwnd)
     }
 
     unsafe {
