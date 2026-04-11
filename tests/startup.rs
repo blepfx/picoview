@@ -108,4 +108,6 @@ fn test_startup_embedded() {
     .with_title("picoview test - embed")
     .open_blocking()
     .unwrap();
+
+    std::thread::sleep(Duration::from_millis(10));
 }
