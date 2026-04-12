@@ -9,6 +9,10 @@ fn main() {
     test_startup_transient();
     sleep(Duration::from_millis(1000));
     test_startup_embedded();
+    sleep(Duration::from_millis(10));
+    // this is a hack because x11 is stupid and dumb (but there is NO
+    // replacement, no, wayland doesnt count unless they give us an alternative
+    // to xembed...)
 }
 
 fn test_startup_blocking() {
@@ -108,6 +112,4 @@ fn test_startup_embedded() {
     .with_title("picoview test - embed")
     .open_blocking()
     .unwrap();
-
-    std::thread::sleep(Duration::from_millis(10));
 }
