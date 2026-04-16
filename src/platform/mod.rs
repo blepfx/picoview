@@ -1,22 +1,24 @@
-#[cfg(target_os = "linux")]
-pub mod x11;
-#[cfg(target_os = "linux")]
-pub use x11::*;
+cfg_select! {
+    target_os = "linux" => {
+        pub mod x11;
+        pub use x11::*;
+    },
 
-#[cfg(target_os = "windows")]
-pub mod win;
-#[cfg(target_os = "windows")]
-pub use win::*;
+    target_os = "windows" => {
+        pub mod win;
+        pub use win::*;
+    },
 
-#[cfg(target_os = "macos")]
-pub mod mac;
-#[cfg(target_os = "macos")]
-pub use mac::*;
+    target_os = "macos" => {
+        pub mod mac;
+        pub use mac::*;
+    },
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-pub mod none;
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-pub use none::*;
+    _ => {
+        pub mod none;
+        pub use none::*;
+    },
+}
 
 use crate::{
     Exchange, MakeCurrentError, MouseCursor, Point, Size, SwapBuffersError, WakeupError,
