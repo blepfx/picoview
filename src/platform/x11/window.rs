@@ -32,8 +32,8 @@ pub struct WindowImpl {
     is_resizable: bool,
 
     last_modifiers: Cell<Modifiers>,
-    last_cursor: Cell<MouseCursor>,
-    last_cursor_in_bounds: Cell<bool>,
+    last_cursor_icon: Cell<MouseCursor>,
+    last_cursor_position: Cell<Option<(Point, Point)>>, // (relative, absolute)
     last_window_position: Cell<Option<Point>>,
     last_window_size: Cell<Option<Size>>,
     last_window_visible: Cell<bool>,
@@ -287,12 +287,12 @@ impl WindowImpl {
                 refresh_interval,
 
                 last_modifiers: Cell::new(Modifiers::empty()),
-                last_cursor: Cell::new(MouseCursor::Default),
+                last_cursor_icon: Cell::new(MouseCursor::Default),
+                last_cursor_position: Cell::new(None),
                 last_window_position: Cell::new(None),
                 last_window_size: Cell::new(None),
                 last_window_visible: Cell::new(options.visible),
                 last_window_focused: Cell::new(false),
-                last_cursor_in_bounds: Cell::new(false),
 
                 exchange_clipboard: RefCell::new(Exchange::Empty),
 
@@ -394,6 +394,13 @@ impl WindowImpl {
                         if event.sourceid != event.deviceid {
                             return; // this is a master device event
                         }
+
+                        self.handle_event_motion(
+                            event.event_x as f32,
+                            event.event_y as f32,
+                            event.root_x as f32,
+                            event.root_y as f32,
+                        );
 
                         let mut scroll_x = 0.0;
                         let mut scroll_y = 0.0;
@@ -525,17 +532,12 @@ impl WindowImpl {
                         _ => return,
                     };
 
-                    self.send_event(Event::MouseMove {
-                        relative: Point {
-                            x: event.x as f32,
-                            y: event.y as f32,
-                        },
-                        absolute: Point {
-                            x: event.x_root as f32,
-                            y: event.y_root as f32,
-                        },
-                    });
-
+                    self.handle_event_motion(
+                        event.x as f32,
+                        event.y as f32,
+                        event.x_root as f32,
+                        event.y_root as f32,
+                    );
                     self.send_event(result);
                 }
                 KeyPress | KeyRelease => {
@@ -582,18 +584,13 @@ impl WindowImpl {
                 }
                 MotionNotify => {
                     let event = event.motion;
-                    self.last_cursor_in_bounds.set(true);
                     self.handle_event_modifiers(keymask_to_mods(event.state));
-                    self.send_event(Event::MouseMove {
-                        relative: Point {
-                            x: event.x as f32,
-                            y: event.y as f32,
-                        },
-                        absolute: Point {
-                            x: event.x_root as f32,
-                            y: event.y_root as f32,
-                        },
-                    });
+                    self.handle_event_motion(
+                        event.x as f32,
+                        event.y as f32,
+                        event.x_root as f32,
+                        event.y_root as f32,
+                    );
                 }
                 LeaveNotify => {
                     const ANY_BUTTON: u32 =
@@ -602,22 +599,18 @@ impl WindowImpl {
                     let event = event.crossing;
 
                     self.handle_event_modifiers(keymask_to_mods(event.state));
+                    self.handle_event_motion(
+                        event.x as f32,
+                        event.y as f32,
+                        event.x_root as f32,
+                        event.y_root as f32,
+                    );
 
                     let grabbed = (event.state & ANY_BUTTON) != 0;
-                    if grabbed || !self.last_cursor_in_bounds.replace(false) {
+                    if grabbed || self.last_cursor_position.replace(None).is_none() {
                         return;
                     }
 
-                    self.send_event(Event::MouseMove {
-                        relative: Point {
-                            x: event.x as f32,
-                            y: event.y as f32,
-                        },
-                        absolute: Point {
-                            x: event.x_root as f32,
-                            y: event.y_root as f32,
-                        },
-                    });
                     self.send_event(Event::MouseLeave);
                 }
                 FocusIn | FocusOut => {
@@ -734,6 +727,22 @@ impl WindowImpl {
         }
     }
 
+    fn handle_event_motion(&self, x: f32, y: f32, x_root: f32, y_root: f32) {
+        let relative = Point { x, y };
+        let absolute = Point {
+            x: x_root,
+            y: y_root,
+        };
+
+        if self
+            .last_cursor_position
+            .replace(Some((relative, absolute)))
+            != Some((relative, absolute))
+        {
+            self.send_event(Event::MouseMove { relative, absolute });
+        }
+    }
+
     fn handle_event_modifiers(&self, modifiers: Modifiers) {
         if self.last_modifiers.replace(modifiers) != modifiers {
             self.send_event(Event::KeyModifiers { modifiers });
@@ -813,7 +822,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_cursor_icon(&self, cursor: MouseCursor) {
-        if self.is_closed.get() || self.last_cursor.replace(cursor) == cursor {
+        if self.is_closed.get() || self.last_cursor_icon.replace(cursor) == cursor {
             return;
         }
 

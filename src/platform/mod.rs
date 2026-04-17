@@ -1,3 +1,9 @@
+use crate::{
+    Exchange, MakeCurrentError, MouseCursor, Point, Size, SwapBuffersError, WakeupError,
+    WindowWaker, rwh_06,
+};
+use std::ffi::{CStr, c_void};
+
 cfg_select! {
     target_os = "linux" => {
         pub mod x11;
@@ -19,12 +25,6 @@ cfg_select! {
         pub use none::*;
     },
 }
-
-use crate::{
-    Exchange, MakeCurrentError, MouseCursor, Point, Size, SwapBuffersError, WakeupError,
-    WindowWaker, rwh_06,
-};
-use std::ffi::{CStr, c_void};
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
