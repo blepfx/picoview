@@ -116,7 +116,7 @@ mod connection {
                     return None;
                 }
 
-                println!("open {:p}", display);
+                XInitThreads();
                 XSetErrorHandler(Some(error_handler));
 
                 ERRORS_FOR_EACH_DISPLAY
@@ -184,7 +184,11 @@ mod connection {
                     .expect("poisoned")
                     .remove(&self.display.addr());
 
-                println!("close {:p}", self.display);
+                // NOTE: this is a stupid workaround for a X11 bug (?) where
+                // libX11 calls XFreeThreads` on dylib dtor
+                // which happens _before_ non-main threads are exited, causing
+                // a use-after-free
+                XInitThreads();
                 XCloseDisplay(self.display);
             }
         }
