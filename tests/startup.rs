@@ -5,9 +5,9 @@ use std::{thread::sleep, time::Duration};
 /// we have to run the tests with `harness = false`.
 fn main() {
     test_startup_blocking();
-    sleep(Duration::from_millis(1000));
+    sleep(Duration::from_millis(100));
     test_startup_transient();
-    sleep(Duration::from_millis(1000));
+    sleep(Duration::from_millis(100));
     test_startup_embedded();
     sleep(Duration::from_millis(10));
     // this is a hack because x11 is stupid and dumb (but there is NO
@@ -32,7 +32,6 @@ fn test_startup_blocking() {
     .unwrap();
 }
 
-// this is buggy on macos currently
 fn test_startup_transient() {
     WindowBuilder::new(|window| {
         let mut frames = 0;
@@ -47,7 +46,7 @@ fn test_startup_transient() {
                         .unwrap();
                 }
 
-                if frames > 100 {
+                if frames > 10 {
                     window.close();
                 }
 
@@ -58,7 +57,7 @@ fn test_startup_transient() {
     .with_size((512, 256))
     .with_position((100, 200))
     .with_visible(true)
-    .with_title("picoview test - embed")
+    .with_title("picoview test - transient")
     .open_blocking()
     .unwrap();
 }
