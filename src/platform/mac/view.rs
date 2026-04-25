@@ -123,14 +123,14 @@ impl WindowImpl {
                 window.makeFirstResponder(Some(&view.view));
 
                 // Set the window delegate to our view
-                // NSWindowDelegate has no required methods, so this is safeWindow
+                // NSWindowDelegate has no required methods, so this is safe
                 window.setDelegate(Some(std::mem::transmute::<
                     &WindowImpl,
                     &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
                 >(&*view)));
 
-                if let Some(window) = (*parent_view).window() {
-                    window.addChildWindow_ordered(&window, NSWindowOrderingMode::Above);
+                if let Some(parent_window) = (*parent_view).window() {
+                    parent_window.addChildWindow_ordered(&window, NSWindowOrderingMode::Above);
                 }
 
                 Ok(view.waker())

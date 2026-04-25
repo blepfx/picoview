@@ -299,7 +299,7 @@ mod clipboard {
 
 mod coords {
     use objc2_app_kit::NSView;
-    use objc2_foundation::NSPoint;
+    use objc2_foundation::{NSPoint};
 
     // NSWindow -> picoview (local)
     pub fn point_window_to_local(point: NSPoint, view: &NSView) -> NSPoint {
