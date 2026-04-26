@@ -19,7 +19,7 @@ use windows_sys::Win32::{
 
 pub struct VSyncCallback {
     inner: Arc<Inner>,
-    thread: JoinHandle<()>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl VSyncCallback {
@@ -35,7 +35,10 @@ impl VSyncCallback {
             move || unsafe { run_vsync_thread(inner, callback) }
         });
 
-        Self { inner, thread }
+        Self {
+            inner,
+            thread: Some(thread),
+        }
     }
 
     pub fn notify_display_change(&self) {
@@ -48,8 +51,11 @@ impl VSyncCallback {
 impl Drop for VSyncCallback {
     fn drop(&mut self) {
         self.inner.active.store(false, Ordering::Relaxed);
-        if let Err(e) = self.thread.join() {
-            std::panic::resume_unwind(e);
+
+        if let Some(thread) = self.thread.take() {
+            if let Err(panic) = thread.join() {
+                std::panic::resume_unwind(panic);
+            }
         }
     }
 }
