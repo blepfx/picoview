@@ -221,7 +221,7 @@ impl WindowImpl {
 
                 keyboard_hook,
                 vsync_callback: VSyncCallback::new(hwnd, |hwnd| {
-                    SendMessageW(hwnd, WM_USER_VSYNC, 0, 0);
+                    PostMessageW(hwnd, WM_USER_VSYNC, 0, 0);
                 }),
             });
 
@@ -627,7 +627,7 @@ unsafe extern "system" fn wnd_proc(
                         wheel_delta
                     },
                     y: if msg == WM_MOUSEWHEEL {
-                        wheel_delta
+                        -wheel_delta
                     } else {
                         0.0
                     },

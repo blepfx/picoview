@@ -52,10 +52,10 @@ impl Drop for VSyncCallback {
     fn drop(&mut self) {
         self.inner.active.store(false, Ordering::Relaxed);
 
-        if let Some(thread) = self.thread.take() {
-            if let Err(panic) = thread.join() {
-                std::panic::resume_unwind(panic);
-            }
+        if let Some(thread) = self.thread.take()
+            && let Err(panic) = thread.join()
+        {
+            std::panic::resume_unwind(panic);
         }
     }
 }
