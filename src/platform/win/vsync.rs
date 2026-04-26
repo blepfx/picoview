@@ -3,7 +3,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread::sleep,
+    thread::{JoinHandle, sleep},
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
@@ -19,6 +19,7 @@ use windows_sys::Win32::{
 
 pub struct VSyncCallback {
     inner: Arc<Inner>,
+    thread: JoinHandle<()>,
 }
 
 impl VSyncCallback {
@@ -29,12 +30,12 @@ impl VSyncCallback {
             notify_display_change: AtomicBool::new(true),
         });
 
-        std::thread::spawn({
+        let thread = std::thread::spawn({
             let inner = inner.clone();
             move || unsafe { run_vsync_thread(inner, callback) }
         });
 
-        Self { inner }
+        Self { inner, thread }
     }
 
     pub fn notify_display_change(&self) {
@@ -47,6 +48,9 @@ impl VSyncCallback {
 impl Drop for VSyncCallback {
     fn drop(&mut self) {
         self.inner.active.store(false, Ordering::Relaxed);
+        if let Err(e) = self.thread.join() {
+            std::panic::resume_unwind(e);
+        }
     }
 }
 
