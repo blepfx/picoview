@@ -433,6 +433,14 @@ pub enum Event<'a> {
         capture: &'a mut bool,
     },
 
+    /// Drag-and-drop data was dragged into the window, the position will be
+    /// reported via [`Event::MouseMove`] events until the drag-and-drop
+    /// operation is completed or cancelled (via [`Event::MouseLeave`]).
+    DragEnter {
+        /// The data being dragged into the window
+        data: Exchange,
+    },
+
     /// Drag-and-drop data was released into the window at the last
     /// [`Event::MouseMove`] position.
     DragDrop {

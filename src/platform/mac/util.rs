@@ -248,12 +248,50 @@ mod keyboard {
 }
 
 mod clipboard {
+    use crate::Exchange;
     use objc2::{ClassType, rc::Retained, runtime::ProtocolObject};
-    use objc2_app_kit::{NSPasteboard, NSPasteboardURLReadingFileURLsOnlyKey, NSPasteboardWriting};
+    use objc2_app_kit::{
+        NSPasteboard, NSPasteboardTypeString, NSPasteboardURLReadingFileURLsOnlyKey,
+        NSPasteboardWriting,
+    };
     use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSURL};
     use std::path::PathBuf;
 
-    pub fn encode_uri_list(
+    pub fn set_pasteboard(pasteboard: &NSPasteboard, data: Exchange) -> bool {
+        pasteboard.clearContents();
+
+        match data {
+            Exchange::Empty => true,
+            Exchange::Text(text) => {
+                let string = ProtocolObject::from_retained(NSString::from_str(&text));
+                pasteboard.writeObjects(&NSArray::from_retained_slice(&[string]))
+            }
+            Exchange::Files(files) => {
+                let uri_list = encode_uri_list(&files);
+                if uri_list.is_empty() {
+                    return false;
+                }
+
+                pasteboard.writeObjects(&NSArray::from_retained_slice(&uri_list))
+            }
+        }
+    }
+
+    pub fn get_pasteboard(pasteboard: &NSPasteboard) -> Exchange {
+        unsafe {
+            if let Some(files) = decode_uri_list(pasteboard) {
+                return Exchange::Files(files);
+            }
+
+            if let Some(string) = pasteboard.stringForType(NSPasteboardTypeString) {
+                return Exchange::Text(string.to_string());
+            }
+
+            Exchange::Empty
+        }
+    }
+
+    fn encode_uri_list(
         files: &[PathBuf],
     ) -> Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
         files
@@ -269,7 +307,7 @@ mod clipboard {
             .collect::<Vec<_>>()
     }
 
-    pub fn decode_uri_list(pasteboard: &NSPasteboard) -> Option<Vec<PathBuf>> {
+    fn decode_uri_list(pasteboard: &NSPasteboard) -> Option<Vec<PathBuf>> {
         let class_array = NSArray::from_slice(&[NSURL::class()]);
         let options = NSDictionary::from_slices(
             &[unsafe { NSPasteboardURLReadingFileURLsOnlyKey }],
@@ -299,7 +337,7 @@ mod clipboard {
 
 mod coords {
     use objc2_app_kit::NSView;
-    use objc2_foundation::{NSPoint};
+    use objc2_foundation::NSPoint;
 
     // NSWindow -> picoview (local)
     pub fn point_window_to_local(point: NSPoint, view: &NSView) -> NSPoint {

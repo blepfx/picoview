@@ -30,9 +30,9 @@
 |  - Copy Files                                         | :ok:     | :x:      | :ok:     | Medium   |
 |  - Paste Files                                        | :ok:     | :x:      | :ok:     | Medium   |
 | Drag&Drop                                             |          |          |          |          |
-|  - Text                                               | :x:      | :x:      | :x:      | Low      |
-|  - Files                                              | :ok:     | :x:      | :x:      | Medium   |
-|  - Enter/Leave/Hover events                           | :x:      | :x:      | :x:      | Low      |
+|  - Text                                               | :x:      | :ok:     | :x:      | Low      |
+|  - Files                                              | :ok:     | :ok:     | :x:      | Medium   |
+|  - Enter/Leave/Hover events                           | :x:      | :ok:     | :x:      | Low      |
 | Event loop wakeup                                     | :ok:     | :ok:     | :ok:     | High     |
 | Vertical blank synchronization                        | :ok:[^2] | :ok:     | :o:[^3]  | High     |
 | OpenGL context creation                               | :ok:     | :ok:     | :ok:     | High     |

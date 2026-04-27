@@ -4,7 +4,7 @@ use crate::platform::mac::util::*;
 use crate::platform::{OpenMode, PlatformOpenGl, PlatformWaker, PlatformWindow};
 use crate::*;
 use block2::RcBlock;
-use objc2::rc::{Allocated, Retained, Weak, autoreleasepool};
+use objc2::rc::{Allocated, Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2::{
@@ -18,9 +18,9 @@ use objc2::{
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
     NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
-    NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
-    NSWindowDidResignKeyNotification, NSWindowOrderingMode, NSWindowStyleMask,
+    NSPasteboard, NSPasteboardTypeFileURL, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSViewFrameDidChangeNotification, NSWindow, NSWindowDidResignKeyNotification,
+    NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_core_graphics::CGWarpMouseCursorPosition;
@@ -608,23 +608,28 @@ impl WindowImpl {
 
     // NSDraggingDestination
     unsafe extern "C" fn wants_periodic_dragging_updates(&self, _cmd: Sel) -> Bool {
-        Bool::NO
+        Bool::YES
     }
 
     unsafe extern "C" fn dragging_entered(
         &self,
         _cmd: Sel,
-        _sender: &ProtocolObject<dyn NSDraggingInfo>,
+        info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
-        NSDragOperation::empty()
+        self.send_event_defer(Event::DragEnter {
+            data: get_pasteboard(&info.draggingPasteboard()),
+        });
+        self.send_event_mouse_move(info.draggingLocation());
+        NSDragOperation::Generic
     }
 
     unsafe extern "C" fn dragging_updated(
         &self,
         _cmd: Sel,
-        _sender: &ProtocolObject<dyn NSDraggingInfo>,
+        info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
-        NSDragOperation::empty()
+        self.send_event_mouse_move(info.draggingLocation());
+        NSDragOperation::Generic
     }
 
     unsafe extern "C" fn dragging_exited(
@@ -645,9 +650,14 @@ impl WindowImpl {
     unsafe extern "C" fn perform_drag_operation(
         &self,
         _cmd: Sel,
-        _sender: &ProtocolObject<dyn NSDraggingInfo>,
+        info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> Bool {
-        Bool::NO
+        self.send_event_mouse_move(info.draggingLocation());
+        self.send_event_defer(Event::DragDrop {
+            data: get_pasteboard(&info.draggingPasteboard()),
+        });
+
+        Bool::YES
     }
 
     fn register_class() -> Result<&'static AnyClass, WindowError> {
@@ -929,52 +939,22 @@ impl PlatformWindow for WindowImpl {
             let pasteboard: Option<Retained<NSPasteboard>> =
                 msg_send![NSPasteboard::class(), generalPasteboard];
 
-            let pasteboard = match pasteboard {
-                Some(pb) => pb,
-                None => return false,
-            };
-
-            pasteboard.clearContents();
-
-            match data {
-                Exchange::Empty => true,
-                Exchange::Text(text) => {
-                    let string = ProtocolObject::from_retained(NSString::from_str(&text));
-                    pasteboard.writeObjects(&NSArray::from_retained_slice(&[string]))
-                }
-                Exchange::Files(files) => {
-                    let uri_list = encode_uri_list(&files);
-                    if uri_list.is_empty() {
-                        return false;
-                    }
-
-                    pasteboard.writeObjects(&NSArray::from_retained_slice(&uri_list))
-                }
+            match pasteboard {
+                Some(pasteboard) => set_pasteboard(&pasteboard, data),
+                None => false,
             }
         }
     }
 
     fn get_clipboard(&self) -> Exchange {
         unsafe {
-            autoreleasepool(|_| {
-                let pasteboard: Option<Retained<NSPasteboard>> =
-                    msg_send![NSPasteboard::class(), generalPasteboard];
+            let pasteboard: Option<Retained<NSPasteboard>> =
+                msg_send![NSPasteboard::class(), generalPasteboard];
 
-                let pasteboard = match pasteboard {
-                    Some(pb) => pb,
-                    None => return Exchange::Empty,
-                };
-
-                if let Some(files) = decode_uri_list(&pasteboard) {
-                    return Exchange::Files(files);
-                }
-
-                if let Some(string) = pasteboard.stringForType(NSPasteboardTypeString) {
-                    return Exchange::Text(string.to_string());
-                }
-
-                Exchange::Empty
-            })
+            match pasteboard {
+                Some(pasteboard) => get_pasteboard(&pasteboard),
+                None => Exchange::Empty,
+            }
         }
     }
 
