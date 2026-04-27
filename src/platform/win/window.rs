@@ -688,33 +688,23 @@ unsafe extern "system" fn wnd_proc(
             // ideally we should use IDropTarget instead for window enter/window hover while
             // dragging support.
             WM_DROPFILES => {
-                let mut relative = POINT { ..zeroed() };
-                if DragQueryPoint(wparam as _, &mut relative) != 0 {
-                    let mut absolute = POINT {
-                        x: relative.x as i32,
-                        y: relative.y as i32,
-                    };
-
-                    ClientToScreen(hwnd, &mut absolute);
-                    window.send_event_defer(Event::MouseMove {
-                        relative: Point {
-                            x: relative.x as f32,
-                            y: relative.y as f32,
-                        },
-                        absolute: Point {
-                            x: absolute.x as f32,
-                            y: absolute.y as f32,
-                        },
-                    });
-                }
-
                 let files = decode_hdrop(wparam as _);
-                if !files.is_empty() {
-                    window.send_event_defer(Event::DragDrop {
-                        data: Exchange::Files(files),
+
+                window.send_event_defer(Event::DragEnter {
+                    data: Exchange::Files(files),
+                });
+
+                let mut point = POINT { ..zeroed() };
+                if DragQueryPoint(wparam as _, &mut point) != 0 {
+                    window.send_event_defer(Event::DragMove {
+                        point: Point {
+                            x: point.x as f32,
+                            y: point.y as f32,
+                        },
                     });
                 }
 
+                window.send_event_defer(Event::DragAccept);
                 DragFinish(wparam as _);
                 0
             }

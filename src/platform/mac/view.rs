@@ -616,10 +616,10 @@ impl WindowImpl {
         _cmd: Sel,
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
-        self.send_event_defer(Event::DragEnter {
-            data: get_pasteboard(&info.draggingPasteboard()),
-        });
-        self.send_event_mouse_move(info.draggingLocation());
+        let data = get_pasteboard(&info.draggingPasteboard());
+        let point = point_window_to_local(info.draggingLocation(), &self.view);
+        self.send_event_defer(Event::DragEnter { data });
+        self.send_event_defer(Event::DragMove { point });
         NSDragOperation::Generic
     }
 
@@ -628,7 +628,8 @@ impl WindowImpl {
         _cmd: Sel,
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
-        self.send_event_mouse_move(info.draggingLocation());
+        let point = point_window_to_local(info.draggingLocation(), &self.view);
+        self.send_event_defer(Event::DragMove { point });
         NSDragOperation::Generic
     }
 
@@ -637,6 +638,7 @@ impl WindowImpl {
         _cmd: Sel,
         _sender: &ProtocolObject<dyn NSDraggingInfo>,
     ) {
+        self.send_event_defer(Event::DragLeave);
     }
 
     unsafe extern "C" fn prepare_for_drag_operation(
@@ -652,11 +654,9 @@ impl WindowImpl {
         _cmd: Sel,
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> Bool {
-        self.send_event_mouse_move(info.draggingLocation());
-        self.send_event_defer(Event::DragDrop {
-            data: get_pasteboard(&info.draggingPasteboard()),
-        });
-
+        let point = point_window_to_local(info.draggingLocation(), &self.view);
+        self.send_event_defer(Event::DragMove { point });
+        self.send_event_defer(Event::DragAccept);
         Bool::YES
     }
 
