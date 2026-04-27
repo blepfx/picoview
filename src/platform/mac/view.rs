@@ -617,9 +617,16 @@ impl WindowImpl {
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
         let data = get_pasteboard(&info.draggingPasteboard());
-        let point = point_window_to_local(info.draggingLocation(), &self.view);
         self.send_event_defer(Event::DragEnter { data });
-        self.send_event_defer(Event::DragMove { point });
+
+        let point = point_window_to_local(info.draggingLocation(), &self.view);
+        self.send_event_defer(Event::DragMove {
+            point: Point {
+                x: point.x as f32,
+                y: point.y as f32,
+            },
+        });
+
         NSDragOperation::Generic
     }
 
@@ -629,7 +636,13 @@ impl WindowImpl {
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
         let point = point_window_to_local(info.draggingLocation(), &self.view);
-        self.send_event_defer(Event::DragMove { point });
+        self.send_event_defer(Event::DragMove {
+            point: Point {
+                x: point.x as f32,
+                y: point.y as f32,
+            },
+        });
+
         NSDragOperation::Generic
     }
 
@@ -655,8 +668,14 @@ impl WindowImpl {
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> Bool {
         let point = point_window_to_local(info.draggingLocation(), &self.view);
-        self.send_event_defer(Event::DragMove { point });
+        self.send_event_defer(Event::DragMove {
+            point: Point {
+                x: point.x as f32,
+                y: point.y as f32,
+            },
+        });
         self.send_event_defer(Event::DragAccept);
+
         Bool::YES
     }
 
