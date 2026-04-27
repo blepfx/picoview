@@ -23,7 +23,9 @@ use windows_sys::Win32::{
         Ole::{CF_HDROP, CF_UNICODETEXT},
     },
     UI::{
-        Controls::WM_MOUSELEAVE, Input::KeyboardAndMouse::*, Shell::ShellExecuteW,
+        Controls::WM_MOUSELEAVE,
+        Input::KeyboardAndMouse::*,
+        Shell::{DragAcceptFiles, DragFinish, DragQueryPoint, ShellExecuteW},
         WindowsAndMessaging::*,
     },
 };
@@ -163,6 +165,7 @@ impl WindowImpl {
 
             check_error(!hwnd.is_null(), "CreateWindowExW")?;
 
+            // enable transparency if requested
             if options.transparent {
                 let region = CreateRectRgn(0, 0, -1, -1);
                 let bb = DWM_BLURBEHIND {
@@ -176,12 +179,21 @@ impl WindowImpl {
                 DeleteObject(region);
             }
 
+            // accept drag and drop
+            DragAcceptFiles(hwnd, 1);
+
+            // new gl context if requested
             let gl_context = match options.opengl {
                 Some(config) => GlContext::new(hwnd, config).ok(),
                 None => None,
             };
 
             let cursor_cache = CursorCache::load();
+
+            // install the keyboard hook and register our window to it, so we could capture
+            // key events even when the window is not focused. keyboard hooks are shared on
+            // a per-thread basis and gets deregistered when all [`KeyboardHook`] instances
+            // gets dropped
             let keyboard_hook = KeyboardHook::install();
             keyboard_hook.add_window(hwnd);
 
@@ -668,6 +680,42 @@ unsafe extern "system" fn wnd_proc(
                         y: relative_y as f32,
                     },
                 });
+                0
+            }
+
+            // currently we use WM_DROPFILES for simplicity
+            //
+            // ideally we should use IDropTarget instead for window enter/window hover while
+            // dragging support.
+            WM_DROPFILES => {
+                let mut relative = POINT { ..zeroed() };
+                if DragQueryPoint(wparam as _, &mut relative) != 0 {
+                    let mut absolute = POINT {
+                        x: relative.x as i32,
+                        y: relative.y as i32,
+                    };
+
+                    ClientToScreen(hwnd, &mut absolute);
+                    window.send_event_defer(Event::MouseMove {
+                        relative: Point {
+                            x: relative.x as f32,
+                            y: relative.y as f32,
+                        },
+                        absolute: Point {
+                            x: absolute.x as f32,
+                            y: absolute.y as f32,
+                        },
+                    });
+                }
+
+                let files = decode_hdrop(wparam as _);
+                if !files.is_empty() {
+                    window.send_event_defer(Event::DragDrop {
+                        data: Exchange::Files(files),
+                    });
+                }
+
+                DragFinish(wparam as _);
                 0
             }
 

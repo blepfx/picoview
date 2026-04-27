@@ -24,11 +24,15 @@
 |  - `WindowResize`                                     | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowFrame`                                      | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowDamage`                                     | :ok:     | :ok:     | :ok:     | Medium   |
-|  - `DragHover`                                        | :x:      | :x:      | :x:      | Low      |
-|  - `DragDrop`                                         | :x:      | :x:      | :x:      | Low      |
 | Clipboard                                             |          |          |          |          |
-|  - Text                                               | :ok:     | :ok:     | :ok:     | High     |
-|  - Files                                              | :ok:     | :x:      | :ok:     | Medium   |
+|  - Copy Text                                          | :ok:     | :ok:     | :ok:     | High     |
+|  - Paste Text                                         | :ok:     | :ok:     | :ok:     | High     |
+|  - Copy Files                                         | :ok:     | :x:      | :ok:     | Medium   |
+|  - Paste Files                                        | :ok:     | :x:      | :ok:     | Medium   |
+| Drag&Drop                                             |          |          |          |          |
+|  - Text                                               | :x:      | :x:      | :x:      | Low      |
+|  - Files                                              | :ok:     | :x:      | :x:      | Medium   |
+|  - Enter/Leave/Hover events                           | :x:      | :x:      | :x:      | Low      |
 | Event loop wakeup                                     | :ok:     | :ok:     | :ok:     | High     |
 | Vertical blank synchronization                        | :ok:[^2] | :ok:     | :o:[^3]  | High     |
 | OpenGL context creation                               | :ok:     | :ok:     | :ok:     | High     |

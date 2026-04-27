@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+
 fn main() {
     WindowBuilder::new(|window| {
         let start = Instant::now();

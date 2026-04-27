@@ -433,21 +433,10 @@ pub enum Event<'a> {
         capture: &'a mut bool,
     },
 
-    /// Drag-and-drop data was dragged into/out of the window but not yet
-    /// released.
-    ///
-    /// If it gets released, you will receive a [`Event::DragDrop`],
-    /// if instead it gets dragged out, you will receive a [`Event::DragHover`]
-    /// event with [`Exchange::Empty`] data.
-    DragHover {
+    /// Drag-and-drop data was released into the window at the last
+    /// [`Event::MouseMove`] position.
+    DragDrop {
         /// The data being dragged into the window
         data: Exchange,
     },
-
-    /// Drag-and-drop data was released into the window.
-    ///
-    /// The data being dropped can be accessed through the last
-    /// [`Event::DragHover`] event, which is guaranteed to be sent before
-    /// this event.
-    DragDrop,
 }
