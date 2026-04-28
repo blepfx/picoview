@@ -54,6 +54,8 @@ pub fn open_url(path: &str) -> bool {
     false
 }
 
+/// Returns the position of the given window's client area relative to the root
+/// window (the screen), or `None` if the position could not be determined.
 pub fn window_position(conn: &Connection, window_id: c_ulong) -> Option<Point> {
     let mut x = 0;
     let mut y = 0;
@@ -179,16 +181,20 @@ mod connection {
     impl Drop for ConnectionInner {
         fn drop(&mut self) {
             unsafe {
-                ERRORS_FOR_EACH_DISPLAY
-                    .lock()
-                    .expect("poisoned")
-                    .remove(&self.display.addr());
+                let mut errors = ERRORS_FOR_EACH_DISPLAY.lock().expect("poisoned");
+                errors.remove(&self.display.addr());
+
+                // we do this so we deallocate the memory when we close the last display,
+                // preventing a potential memory leak if used in a dylib (destructors for
+                // statics do not get run)
+                if errors.is_empty() {
+                    *errors = HashMap::new(); // does not allocate until inserted into
+                }
 
                 // NOTE: this is a stupid workaround for a X11 bug (?) where
                 // libX11 calls XFreeThreads` on dylib dtor
                 // which happens _before_ non-main threads are exited, causing
                 // a use-after-free
-                XInitThreads();
                 XCloseDisplay(self.display);
             }
         }
@@ -375,6 +381,39 @@ mod selection {
             let result = f(std::slice::from_raw_parts(data as *const u8, size as usize));
             XFree(data as *mut _);
             Ok(result)
+        }
+    }
+
+    pub fn send_xdnd_feedback(conn: &Connection, target: c_ulong, source: c_ulong, finished: bool) {
+        unsafe {
+            XSendEvent(
+                conn.display(),
+                source,
+                0,
+                0,
+                &mut XEvent {
+                    client_message: XClientMessageEvent {
+                        type_: ClientMessage,
+                        serial: 0,
+                        send_event: 1,
+                        display: conn.display(),
+                        window: source,
+                        message_type: if finished {
+                            conn.atom(c"XdndFinished")
+                        } else {
+                            conn.atom(c"XdndStatus")
+                        },
+                        format: 32,
+                        data: {
+                            let mut data = ClientMessageData::default();
+                            data.set_long(0, target as _);
+                            data.set_long(1, 1); // success
+                            data.set_long(2, conn.atom(c"XdndActionPrivate") as _);
+                            data
+                        },
+                    },
+                },
+            );
         }
     }
 }
@@ -906,12 +945,9 @@ mod events {
     use std::{ptr::null, time::Duration};
     use x11::xlib::*;
 
-    /// Wait for events with an optional timeout and return an iterator over all
-    /// pending events.
-    pub fn wait_for_events(
-        conn: &Connection,
-        timeout: Option<Duration>,
-    ) -> Result<impl ExactSizeIterator<Item = XEvent>, String> {
+    /// Wait for events with an optional timeout and return the number of
+    /// pending events after the wait.
+    pub fn wait_for_events(conn: &Connection, timeout: Option<Duration>) -> Result<u32, String> {
         unsafe {
             let timespec = timeout.map(|timeout| libc::timespec {
                 tv_sec: timeout.as_secs() as _,
@@ -933,12 +969,7 @@ mod events {
                 return Err(std::io::Error::last_os_error().to_string());
             }
 
-            let pending = XPending(conn.display());
-            Ok((0..pending).map(|_| {
-                let mut event = XEvent { type_: 0 };
-                XNextEvent(conn.display(), &mut event);
-                event
-            }))
+            Ok(XPending(conn.display()) as u32)
         }
     }
 }

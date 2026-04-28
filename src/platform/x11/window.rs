@@ -133,10 +133,12 @@ impl WindowImpl {
                 },
             );
 
+            // transient hint (its not really a "parent" in the traditional sense)
             if let OpenMode::Transient(..) = mode {
                 XSetTransientForHint(connection.display(), window_id, window_parent);
             }
 
+            // ask for delete window messages
             XSetWMProtocols(
                 connection.display(),
                 window_id,
@@ -167,6 +169,21 @@ impl WindowImpl {
 
                 None => (None, Vec::new()),
             };
+
+            // drag n drop stuff
+            {
+                let data = [5u32];
+                XChangeProperty(
+                    connection.display(),
+                    window_id,
+                    connection.atom(c"XdndAware"),
+                    connection.atom(c"ATOM"),
+                    32,
+                    PropModeReplace,
+                    data.as_ptr() as *mut _,
+                    data.len() as _,
+                );
+            }
 
             // resize stuff
             {
@@ -346,8 +363,8 @@ impl WindowImpl {
                 let wait_time = match next_frame.checked_duration_since(curr_frame) {
                     Some(wait_time) => wait_time,
                     None => {
-                        next_frame = (next_frame + self.refresh_interval).max(curr_frame);
                         self.send_event(Event::WindowFrame);
+                        next_frame = (next_frame + self.refresh_interval).max(curr_frame);
                         Duration::ZERO
                     }
                 };
@@ -358,10 +375,15 @@ impl WindowImpl {
                     .last_error()
                     .map_err(WindowError::Platform)?;
 
-                for event in wait_for_events(&self.connection, Some(wait_time))
-                    .map_err(WindowError::Platform)?
-                {
-                    self.handle_event(event);
+                let num_events = wait_for_events(&self.connection, Some(wait_time))
+                    .map_err(WindowError::Platform)?;
+
+                for _ in 0..num_events {
+                    let mut event = XEvent { type_: 0 };
+
+                    if XNextEvent(self.connection.display(), &mut event) == 0 {
+                        self.handle_event(event);
+                    }
                 }
             }
 
@@ -460,6 +482,60 @@ impl WindowImpl {
                     {
                         self.send_event(Event::Wakeup);
                     }
+
+                    if event.format == 32
+                        && event.message_type == self.connection.atom(c"XdndEnter") as _
+                    {
+                        self.send_event(Event::DragEnter {
+                            data: Exchange::Empty,
+                        });
+                    }
+
+                    if event.format == 32
+                        && event.message_type == self.connection.atom(c"XdndPosition") as _
+                    {
+                        let (x, y) = {
+                            let packed = event.data.get_long(2);
+                            ((packed >> 16) as i16, (packed & 0xFFFF) as i16)
+                        };
+
+                        let Some(origin) = window_position(&self.connection, self.window_id) else {
+                            return;
+                        };
+
+                        self.send_event(Event::DragMove {
+                            point: Point {
+                                x: x as f32 - origin.x,
+                                y: y as f32 - origin.y,
+                            },
+                        });
+
+                        send_xdnd_feedback(
+                            &self.connection,
+                            self.window_id,
+                            event.data.get_long(0) as c_ulong,
+                            false,
+                        );
+                    }
+
+                    if event.format == 32
+                        && event.message_type == self.connection.atom(c"XdndLeave") as _
+                    {
+                        self.send_event(Event::DragLeave);
+                    }
+
+                    if event.format == 32
+                        && event.message_type == self.connection.atom(c"XdndDrop") as _
+                    {
+                        self.send_event(Event::DragAccept);
+
+                        send_xdnd_feedback(
+                            &self.connection,
+                            self.window_id,
+                            event.data.get_long(0) as c_ulong,
+                            true,
+                        );
+                    }
                 }
 
                 ReparentNotify => {
@@ -469,13 +545,12 @@ impl WindowImpl {
 
                 ConfigureNotify => {
                     let event = event.configure;
-                    let point = window_position(&self.connection, self.window_id);
                     let size = Size {
                         width: event.width as u32,
                         height: event.height as u32,
                     };
 
-                    if let Some(point) = point
+                    if let Some(point) = window_position(&self.connection, self.window_id)
                         && self.last_window_position.replace(Some(point)) != Some(point)
                     {
                         self.send_event(Event::WindowMove { point });
@@ -488,17 +563,6 @@ impl WindowImpl {
 
                 ButtonPress | ButtonRelease => {
                     let event = event.button;
-                    if event.type_ == ButtonPress {
-                        XSetInputFocus(
-                            self.connection.display(),
-                            self.window_id,
-                            RevertToParent,
-                            CurrentTime,
-                        );
-                    }
-
-                    self.handle_event_modifiers(keymask_to_mods(event.state));
-
                     let result = match event.button {
                         1 | 2 | 3 | 8 | 9 => {
                             let button = match event.button {
@@ -532,6 +596,16 @@ impl WindowImpl {
                         _ => return,
                     };
 
+                    if event.type_ == ButtonPress {
+                        XSetInputFocus(
+                            self.connection.display(),
+                            self.window_id,
+                            RevertToParent,
+                            CurrentTime,
+                        );
+                    }
+
+                    self.handle_event_modifiers(keymask_to_mods(event.state));
                     self.handle_event_motion(
                         event.x as f32,
                         event.y as f32,
@@ -597,7 +671,6 @@ impl WindowImpl {
                         Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask;
 
                     let event = event.crossing;
-
                     self.handle_event_modifiers(keymask_to_mods(event.state));
                     self.handle_event_motion(
                         event.x as f32,
@@ -625,10 +698,12 @@ impl WindowImpl {
                         self.send_event(Event::WindowFocus { focus });
                     }
                 }
+
                 DestroyNotify => {
                     self.is_closed.set(true);
                     self.is_destroyed.set(true);
                 }
+
                 Expose => {
                     let event = event.expose;
                     self.send_event(Event::WindowDamage {
@@ -757,9 +832,10 @@ impl WindowImpl {
 
     fn destroy(self) -> Result<(), WindowError> {
         unsafe {
-            // we set active to false before sending the close event, to ensure that any
-            // pending wakeups that get triggered by the close event will be ignored,
-            // preventing a potential use-after-free in the `WindowWakerImpl::wakeup` method
+            // we set waker display to null before sending the close event, to ensure that
+            // any pending wakeups that get triggered by the close event will be
+            // ignored, preventing a potential use-after-free in the
+            // `WindowWakerImpl::wakeup` method
             if let Ok(mut display) = self.waker.display.write() {
                 *display = std::ptr::null_mut();
             }
@@ -768,10 +844,12 @@ impl WindowImpl {
             // on WindowImpl
             self.handler.take();
 
+            // kill the window itself
             if !self.is_destroyed.get() {
                 XDestroyWindow(self.connection.display(), self.window_id);
             }
 
+            // sync & error check
             XSync(self.connection.display(), 0);
             self.connection
                 .last_error()
