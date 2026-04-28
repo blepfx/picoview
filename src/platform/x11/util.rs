@@ -230,6 +230,8 @@ mod connection {
 }
 
 mod selection {
+    use crate::Exchange;
+
     use super::Connection;
     use std::{
         array::from_fn,
@@ -310,6 +312,7 @@ mod selection {
         selection: c_ulong,
         property: c_ulong,
         target: c_ulong,
+        timestamp: c_ulong,
         f: impl FnOnce(&[u8]) -> R,
     ) -> Result<R, SelectionError> {
         unsafe extern "C" fn event_filter(
@@ -334,7 +337,7 @@ mod selection {
                 target,
                 property,
                 window,
-                CurrentTime,
+                timestamp,
             );
 
             if result == 0 {
@@ -384,6 +387,49 @@ mod selection {
         }
     }
 
+    /// Read a selection via [`request_selection`] and decode it into an
+    /// [`Exchange`] value.
+    pub fn parse_selection(
+        conn: &Connection,
+        window: c_ulong,
+        selection: c_ulong,
+        property: c_ulong,
+        timestamp: c_ulong,
+    ) -> Result<Exchange, SelectionError> {
+        let a_utf8_string = conn.atom(c"UTF8_STRING");
+        let a_text_uri_list = conn.atom(c"text/uri-list");
+        let a_text_plain = conn.atom(c"text/plain");
+
+        for atom in [a_text_uri_list, a_text_plain, a_utf8_string, XA_STRING] {
+            let result = request_selection(
+                conn,
+                window,
+                selection,
+                property,
+                atom,
+                timestamp,
+                |slice| {
+                    if atom == a_text_uri_list {
+                        Exchange::Files(decode_uri_list(OsStr::from_bytes(slice)))
+                    } else {
+                        Exchange::Text(String::from_utf8_lossy(slice).to_string())
+                    }
+                },
+            );
+
+            match result {
+                Ok(Exchange::Empty) => continue,
+                Ok(exchange) => return Ok(exchange),
+                Err(SelectionError::Empty) => continue,
+                Err(SelectionError::Recursive) => {
+                    return Err(SelectionError::Recursive);
+                }
+            }
+        }
+
+        Err(SelectionError::Empty)
+    }
+
     pub fn send_xdnd_feedback(conn: &Connection, target: c_ulong, source: c_ulong, finished: bool) {
         unsafe {
             XSendEvent(
@@ -414,6 +460,9 @@ mod selection {
                     },
                 },
             );
+
+            // just in case
+            XFlush(conn.display());
         }
     }
 }

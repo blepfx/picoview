@@ -5,7 +5,7 @@ use crate::*;
 use libc::c_ulong;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::{CStr, CString, OsStr};
+use std::ffi::{CStr, CString};
 use std::mem::zeroed;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::{Arc, RwLock};
@@ -21,7 +21,7 @@ pub const ATOM_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
 
 pub struct WindowImpl {
     window_id: c_ulong,
-    window_parent: Cell<c_ulong>,
+    window_parent: c_ulong,
 
     connection: Connection,
     waker: Arc<WindowWakerImpl>,
@@ -38,8 +38,10 @@ pub struct WindowImpl {
     last_window_size: Cell<Option<Size>>,
     last_window_visible: Cell<bool>,
     last_window_focused: Cell<bool>,
+    last_dragdrop_state: Cell<bool>,
 
     exchange_clipboard: RefCell<Exchange>,
+    exchange_dragndrop: RefCell<Exchange>,
 
     cursor_empty: EmptyCursor,
     cursor_cache: RefCell<HashMap<MouseCursor, c_ulong>>,
@@ -291,7 +293,7 @@ impl WindowImpl {
 
             let window = Box::new(Self {
                 window_id,
-                window_parent: Cell::new(window_parent),
+                window_parent,
 
                 waker: Arc::new(WindowWakerImpl {
                     display: RwLock::new(connection.display()),
@@ -310,8 +312,10 @@ impl WindowImpl {
                 last_window_size: Cell::new(None),
                 last_window_visible: Cell::new(options.visible),
                 last_window_focused: Cell::new(false),
+                last_dragdrop_state: Cell::new(false),
 
                 exchange_clipboard: RefCell::new(Exchange::Empty),
+                exchange_dragndrop: RefCell::new(Exchange::Empty),
 
                 xi2_info,
                 xi2_axes: RefCell::new(xi2_axes),
@@ -484,24 +488,35 @@ impl WindowImpl {
                     }
 
                     if event.format == 32
-                        && event.message_type == self.connection.atom(c"XdndEnter") as _
-                    {
-                        self.send_event(Event::DragEnter {
-                            data: Exchange::Empty,
-                        });
-                    }
-
-                    if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndPosition") as _
                     {
+                        let Some(origin) = self.last_window_position.get() else {
+                            return;
+                        };
+
                         let (x, y) = {
                             let packed = event.data.get_long(2);
                             ((packed >> 16) as i16, (packed & 0xFFFF) as i16)
                         };
 
-                        let Some(origin) = window_position(&self.connection, self.window_id) else {
-                            return;
-                        };
+                        if !self.last_dragdrop_state.replace(true) {
+                            let timestamp = event.data.get_long(3) as c_ulong;
+                            let data = match parse_selection(
+                                &self.connection,
+                                self.window_id,
+                                self.connection.atom(c"XdndSelection"),
+                                self.connection.atom(c"XdndSelection"),
+                                timestamp,
+                            ) {
+                                Ok(exchange) => exchange,
+                                Err(SelectionError::Empty) => Exchange::Empty,
+                                Err(SelectionError::Recursive) => {
+                                    self.exchange_dragndrop.borrow().clone()
+                                }
+                            };
+
+                            self.send_event(Event::DragEnter { data });
+                        }
 
                         self.send_event(Event::DragMove {
                             point: Point {
@@ -522,12 +537,14 @@ impl WindowImpl {
                         && event.message_type == self.connection.atom(c"XdndLeave") as _
                     {
                         self.send_event(Event::DragLeave);
+                        self.last_dragdrop_state.set(false);
                     }
 
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndDrop") as _
                     {
                         self.send_event(Event::DragAccept);
+                        self.last_dragdrop_state.set(false);
 
                         send_xdnd_feedback(
                             &self.connection,
@@ -536,11 +553,6 @@ impl WindowImpl {
                             true,
                         );
                     }
-                }
-
-                ReparentNotify => {
-                    let event = event.reparent;
-                    self.window_parent.set(event.parent);
                 }
 
                 ConfigureNotify => {
@@ -614,6 +626,7 @@ impl WindowImpl {
                     );
                     self.send_event(result);
                 }
+
                 KeyPress | KeyRelease => {
                     let event = event.key;
 
@@ -640,7 +653,7 @@ impl WindowImpl {
                         if !capture {
                             XSendEvent(
                                 self.connection.display(),
-                                self.window_parent.get(),
+                                self.window_parent,
                                 1,
                                 match event.type_ {
                                     KeyPress => KeyPressMask,
@@ -648,7 +661,7 @@ impl WindowImpl {
                                 },
                                 &mut XEvent {
                                     key: XKeyEvent {
-                                        window: self.window_parent.get(),
+                                        window: self.window_parent,
                                         ..event
                                     },
                                 },
@@ -656,6 +669,7 @@ impl WindowImpl {
                         }
                     }
                 }
+
                 MotionNotify => {
                     let event = event.motion;
                     self.handle_event_modifiers(keymask_to_mods(event.state));
@@ -666,6 +680,7 @@ impl WindowImpl {
                         event.y_root as f32,
                     );
                 }
+
                 LeaveNotify => {
                     const ANY_BUTTON: u32 =
                         Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask;
@@ -686,6 +701,7 @@ impl WindowImpl {
 
                     self.send_event(Event::MouseLeave);
                 }
+
                 FocusIn | FocusOut => {
                     let event = event.focus_change;
                     let focus = event.type_ == FocusIn;
@@ -795,6 +811,9 @@ impl WindowImpl {
                             },
                         },
                     );
+
+                    // just in case
+                    XFlush(self.connection.display());
                 }
 
                 _ => {}
@@ -1066,35 +1085,18 @@ impl PlatformWindow for WindowImpl {
     fn get_clipboard(&self) -> Exchange {
         let a_clipboard = self.connection.atom(c"CLIPBOARD");
         let a_xsel_data = self.connection.atom(c"XSEL_DATA");
-        let a_utf8_string = self.connection.atom(c"UTF8_STRING");
-        let a_text_uri_list = self.connection.atom(c"text/uri-list");
-        let a_text_plain = self.connection.atom(c"text/plain");
 
-        for atom in [a_text_uri_list, a_text_plain, a_utf8_string, XA_STRING] {
-            let result = request_selection(
-                &self.connection,
-                self.window_id,
-                a_clipboard,
-                a_xsel_data,
-                atom,
-                |slice| {
-                    if atom == a_text_uri_list {
-                        Exchange::Files(decode_uri_list(OsStr::from_bytes(slice)))
-                    } else {
-                        Exchange::Text(String::from_utf8_lossy(slice).to_string())
-                    }
-                },
-            );
-
-            match result {
-                Ok(Exchange::Empty) => continue,
-                Ok(exchange) => return exchange,
-                Err(SelectionError::Empty) => continue,
-                Err(SelectionError::Recursive) => return self.exchange_clipboard.borrow().clone(),
-            }
+        match parse_selection(
+            &self.connection,
+            self.window_id,
+            a_clipboard,
+            a_xsel_data,
+            CurrentTime,
+        ) {
+            Ok(exchange) => exchange,
+            Err(SelectionError::Empty) => Exchange::Empty,
+            Err(SelectionError::Recursive) => self.exchange_clipboard.borrow().clone(),
         }
-
-        Exchange::Empty
     }
 
     fn set_clipboard(&self, data: Exchange) -> bool {
