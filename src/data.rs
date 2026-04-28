@@ -440,6 +440,8 @@ pub enum Event<'a> {
     DragEnter {
         /// The data being dragged into the window
         data: Exchange,
+        /// The position of the cursor relative to the window's client area.
+        point: Point,
     },
 
     /// Drag-and-drop data was dragged within the window

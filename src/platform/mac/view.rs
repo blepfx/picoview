@@ -619,10 +619,9 @@ impl WindowImpl {
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
         let data = get_pasteboard(&info.draggingPasteboard());
-        self.send_event_defer(Event::DragEnter { data });
-
         let point = point_window_to_local(info.draggingLocation(), &self.view);
-        self.send_event_defer(Event::DragMove {
+        self.send_event_defer(Event::DragEnter {
+            data,
             point: Point {
                 x: point.x as f32,
                 y: point.y as f32,

@@ -1,5 +1,8 @@
 use super::{gl::GlContext, hook::KeyboardHook, util::*, vsync::VSyncCallback};
-use crate::{platform::*, *};
+use crate::{
+    platform::{win::dnd::DropTargetImpl, *},
+    *,
+};
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
@@ -13,28 +16,44 @@ use std::{
     },
 };
 use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Foundation::{
+        HWND, LPARAM, LRESULT, OLE_E_WRONGCOMPOBJ, POINT, RECT, RPC_E_CHANGED_MODE, WPARAM,
+    },
     Graphics::{
         Dwm::{DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow},
-        Gdi::{ClientToScreen, CreateRectRgn, DeleteObject, GetUpdateRect, ValidateRgn},
+        Gdi::{
+            ClientToScreen, CreateRectRgn, DeleteObject, GetUpdateRect, ScreenToClient, ValidateRgn,
+        },
     },
-    System::{
-        Com::CoInitialize,
-        Ole::{CF_HDROP, CF_UNICODETEXT},
-    },
+    System::Ole::{CF_HDROP, CF_UNICODETEXT, OleInitialize, RegisterDragDrop, RevokeDragDrop},
     UI::{
-        Controls::WM_MOUSELEAVE,
-        Input::KeyboardAndMouse::*,
-        Shell::{DragAcceptFiles, DragFinish, DragQueryPoint, ShellExecuteW},
+        Controls::WM_MOUSELEAVE, Input::KeyboardAndMouse::*, Shell::ShellExecuteW,
         WindowsAndMessaging::*,
     },
 };
 
+/// Sent by Vsync thread, triggers [`Event::WindowFrame`] event
 pub const WM_USER_VSYNC: u32 = WM_USER + 1;
+/// Sent by [`PlatformWindow::close`] and received in the event loop, closes the
+/// window
 pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
+/// Sent by the [`KeyboardHook`] when a key event is captured
+/// Same wParam/lParam data as in native WM_KEYDOWN/WM_KEYUP messages
 pub const WM_USER_KEY_DOWN: u32 = WM_USER + 3;
+/// See [`WM_USER_KEY_DOWN`]
 pub const WM_USER_KEY_UP: u32 = WM_USER + 4;
+/// Sent by [`WindowWakerImpl::wakeup`] to wake up the event loop
 pub const WM_USER_WAKEUP: u32 = WM_USER + 5;
+pub const WM_USER_DND_ENTER: u32 = WM_USER + 6;
+/// Sent by [`DropTargetImpl`] when a drop hovers over the window, triggers
+/// [`Event::DragMove`] event.
+pub const WM_USER_DND_HOVER: u32 = WM_USER + 7;
+/// Sent by [`DropTargetImpl`] when a drop leaves the window, triggers
+/// [`Event::DragLeave`] event.
+pub const WM_USER_DND_LEAVE: u32 = WM_USER + 8;
+/// Sent by [`DropTargetImpl`] when a drop is performed, triggers
+/// [`Event::DragAccept`] event.
+pub const WM_USER_DND_ACCEPT: u32 = WM_USER + 9;
 
 pub struct WindowImpl {
     gl_context: Option<GlContext>,
@@ -47,6 +66,7 @@ pub struct WindowImpl {
     window_hwnd: HWND,
     window_class: u16,
 
+    _drop_target: Arc<DropTargetImpl>,
     keyboard_hook: Rc<KeyboardHook>,
     vsync_callback: VSyncCallback,
 
@@ -79,9 +99,10 @@ impl WindowImpl {
                 Some(_) => return Err(WindowError::InvalidParent),
             };
 
-            if let OpenMode::Blocking = mode {
-                CoInitialize(null());
-            }
+            // S_FALSE is okay here if OleInitialize was already called on the current
+            // thread.
+            let ole_result = OleInitialize(null());
+            let ole_success = ole_result != OLE_E_WRONGCOMPOBJ && ole_result != RPC_E_CHANGED_MODE;
 
             try_set_thread_dpi_awareness_monitor_aware();
 
@@ -180,22 +201,25 @@ impl WindowImpl {
             }
 
             // accept drag and drop
-            DragAcceptFiles(hwnd, 1);
+            let drop_target = DropTargetImpl::new(hwnd);
+            if ole_success {
+                let result = RegisterDragDrop(hwnd, DropTargetImpl::as_raw(&drop_target) as _);
+                check_error(result == 0, "RegisterDragDrop")?;
+            }
 
             // new gl context if requested
             let gl_context = match options.opengl {
                 Some(config) => GlContext::new(hwnd, config).ok(),
                 None => None,
             };
-
-            let cursor_cache = CursorCache::load();
-
             // install the keyboard hook and register our window to it, so we could capture
             // key events even when the window is not focused. keyboard hooks are shared on
             // a per-thread basis and gets deregistered when all [`KeyboardHook`] instances
             // gets dropped
             let keyboard_hook = KeyboardHook::install();
             keyboard_hook.add_window(hwnd);
+
+            let cursor_cache = CursorCache::load();
 
             let window = Box::new(Self {
                 waker: Arc::new(WindowWakerImpl {
@@ -231,6 +255,7 @@ impl WindowImpl {
                 event_handler: RefCell::new(None),
                 event_queue: RefCell::new(VecDeque::new()),
 
+                _drop_target: drop_target,
                 keyboard_hook,
                 vsync_callback: VSyncCallback::new(hwnd, |hwnd| {
                     PostMessageW(hwnd, WM_USER_VSYNC, 0, 0);
@@ -249,6 +274,7 @@ impl WindowImpl {
                 .event_handler
                 .replace(Some((options.factory)(Window(&*(&*window as *const Self)))));
 
+            window.send_event(Event::WindowFocus { focus: true });
             window.send_event(Event::WindowScale {
                 scale: try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
             });
@@ -259,8 +285,8 @@ impl WindowImpl {
             if let OpenMode::Blocking = mode {
                 // our favorite - win32 event pump
                 let mut msg: MSG = std::mem::zeroed();
-                while GetMessageW(&mut msg, hwnd, 0, 0) > 0 {
-                    let _ = TranslateMessage(&msg);
+                while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+                    TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
             }
@@ -304,6 +330,7 @@ impl Drop for WindowImpl {
         self.keyboard_hook.remove_window(self.window_hwnd);
 
         unsafe {
+            RevokeDragDrop(self.window_hwnd);
             SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
             UnregisterClassW(self.window_class as _, hinstance());
         }
@@ -660,14 +687,12 @@ unsafe extern "system" fn wnd_proc(
                     dwHoverTime: 0,
                 });
 
-                let relative_x = (lparam & 0xFFFF) as i16;
-                let relative_y = ((lparam >> 16) & 0xFFFF) as i16;
+                let (x, y) = (
+                    (lparam & 0xFFFF) as i16 as i32,
+                    ((lparam >> 16) & 0xFFFF) as i16 as i32,
+                );
 
-                let mut absolute = POINT {
-                    x: relative_x as i32,
-                    y: relative_y as i32,
-                };
-
+                let mut absolute = POINT { x, y };
                 ClientToScreen(hwnd, &mut absolute);
 
                 window.send_event_defer(Event::MouseMove {
@@ -676,36 +701,10 @@ unsafe extern "system" fn wnd_proc(
                         y: absolute.y as f32,
                     },
                     relative: Point {
-                        x: relative_x as f32,
-                        y: relative_y as f32,
+                        x: x as f32,
+                        y: y as f32,
                     },
                 });
-                0
-            }
-
-            // currently we use WM_DROPFILES for simplicity
-            //
-            // ideally we should use IDropTarget instead for window enter/window hover while
-            // dragging support.
-            WM_DROPFILES => {
-                let files = decode_hdrop(wparam as _);
-
-                window.send_event_defer(Event::DragEnter {
-                    data: Exchange::Files(files),
-                });
-
-                let mut point = POINT { ..zeroed() };
-                if DragQueryPoint(wparam as _, &mut point) != 0 {
-                    window.send_event_defer(Event::DragMove {
-                        point: Point {
-                            x: point.x as f32,
-                            y: point.y as f32,
-                        },
-                    });
-                }
-
-                window.send_event_defer(Event::DragAccept);
-                DragFinish(wparam as _);
                 0
             }
 
@@ -763,6 +762,48 @@ unsafe extern "system" fn wnd_proc(
                     ValidateRgn(hwnd, null_mut());
                 }
 
+                0
+            }
+
+            WM_USER_DND_ENTER => {
+                let mut point = (lparam as *const POINT).read();
+                if ScreenToClient(hwnd, &mut point) == 0 {
+                    return 0;
+                }
+
+                window.send_event_defer(Event::DragEnter {
+                    data: DropTargetImpl::decode_data_object(wparam as _),
+                    point: Point {
+                        x: point.x as f32,
+                        y: point.y as f32,
+                    },
+                });
+                0
+            }
+
+            WM_USER_DND_HOVER => {
+                let mut point = (lparam as *const POINT).read();
+                if ScreenToClient(hwnd, &mut point) == 0 {
+                    return 0;
+                }
+
+                window.send_event_defer(Event::DragMove {
+                    point: Point {
+                        x: point.x as f32,
+                        y: point.y as f32,
+                    },
+                });
+
+                0
+            }
+
+            WM_USER_DND_ACCEPT => {
+                window.send_event_defer(Event::DragAccept);
+                0
+            }
+
+            WM_USER_DND_LEAVE => {
+                window.send_event_defer(Event::DragLeave);
                 0
             }
 

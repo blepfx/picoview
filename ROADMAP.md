@@ -27,12 +27,12 @@
 | Clipboard                                             |          |          |          |          |
 |  - Copy Text                                          | :ok:     | :ok:     | :ok:     | High     |
 |  - Paste Text                                         | :ok:     | :ok:     | :ok:     | High     |
-|  - Copy Files                                         | :ok:     | :x:      | :ok:     | Medium   |
-|  - Paste Files                                        | :ok:     | :x:      | :ok:     | Medium   |
+|  - Copy Files                                         | :ok:     | :ok:     | :ok:     | Medium   |
+|  - Paste Files                                        | :ok:     | :ok:     | :ok:     | Medium   |
 | Drag&Drop                                             |          |          |          |          |
-|  - Text                                               | :x:      | :ok:     | :ok:     | Low      |
+|  - Text                                               | :ok:     | :ok:     | :ok:     | Low      |
 |  - Files                                              | :ok:     | :ok:     | :ok:     | Medium   |
-|  - Enter/Leave/Hover events                           | :x:      | :ok:     | :ok:     | Low      |
+|  - Enter/Leave/Hover events                           | :ok:     | :ok:     | :ok:     | Low      |
 |  - Drag Source                                        | :x:      | :x:      | :x:      | Low      |
 | Event loop wakeup                                     | :ok:     | :ok:     | :ok:     | High     |
 | Vertical blank synchronization                        | :ok:[^2] | :ok:     | :o:[^3]  | High     |

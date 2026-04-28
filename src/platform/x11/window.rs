@@ -499,6 +499,11 @@ impl WindowImpl {
                             ((packed >> 16) as u16 as i16, packed as u16 as i16)
                         };
 
+                        let point = Point {
+                            x: x as f32 - origin.x,
+                            y: y as f32 - origin.y,
+                        };
+
                         if !self.last_dragdrop_state.replace(true) {
                             let timestamp = event.data.get_long(3) as c_ulong;
                             let data = match parse_selection(
@@ -515,15 +520,10 @@ impl WindowImpl {
                                 }
                             };
 
-                            self.send_event(Event::DragEnter { data });
+                            self.send_event(Event::DragEnter { data, point });
+                        } else {
+                            self.send_event(Event::DragMove { point });
                         }
-
-                        self.send_event(Event::DragMove {
-                            point: Point {
-                                x: x as f32 - origin.x,
-                                y: y as f32 - origin.y,
-                            },
-                        });
 
                         send_xdnd_feedback(
                             &self.connection,

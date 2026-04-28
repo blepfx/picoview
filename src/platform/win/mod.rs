@@ -1,3 +1,4 @@
+mod dnd;
 mod gl;
 mod hook;
 mod util;
