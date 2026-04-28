@@ -496,7 +496,7 @@ impl WindowImpl {
 
                         let (x, y) = {
                             let packed = event.data.get_long(2);
-                            ((packed >> 16) as i16, (packed & 0xFFFF) as i16)
+                            ((packed >> 16) as u16 as i16, packed as u16 as i16)
                         };
 
                         if !self.last_dragdrop_state.replace(true) {
