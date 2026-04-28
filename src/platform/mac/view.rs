@@ -18,9 +18,9 @@ use objc2::{
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
     NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
-    NSPasteboard, NSPasteboardTypeFileURL, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSViewFrameDidChangeNotification, NSWindow, NSWindowDidResignKeyNotification,
-    NSWindowOrderingMode, NSWindowStyleMask,
+    NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
+    NSWindowDidResignKeyNotification, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_core_graphics::CGWarpMouseCursorPosition;
@@ -240,7 +240,9 @@ impl WindowImpl {
                 None,
             );
 
-            let dragged_types = NSArray::arrayWithObject(NSPasteboardTypeFileURL);
+            let dragged_types = NSArray::arrayWithObject(NSPasteboardTypeFileURL)
+                .arrayByAddingObject(NSPasteboardTypeString);
+
             view.view.addTrackingArea(&tracking_area);
             view.view.registerForDraggedTypes(&dragged_types);
             view.view.setPostsFrameChangedNotifications(true);
