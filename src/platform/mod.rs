@@ -21,8 +21,14 @@ cfg_select! {
     },
 
     _ => {
-        pub mod none;
-        pub use none::*;
+        pub unsafe fn open_window(
+            _: crate::WindowBuilder,
+            _: OpenMode,
+        ) -> Result<crate::WindowWaker, crate::WindowError> {
+            Err(crate::WindowError::Platform(
+                "unsupported platform".to_string(),
+            ))
+        }
     },
 }
 

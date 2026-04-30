@@ -516,41 +516,35 @@ impl WindowImpl {
     }
 
     unsafe extern "C" fn mouse_down(&self, _cmd: Sel, event: &NSEvent) {
-        let button = match (*event).buttonNumber() {
-            0 => Some(MouseButton::Left),
-            1 => Some(MouseButton::Right),
-            2 => Some(MouseButton::Middle),
-            3 => Some(MouseButton::Back),
-            4 => Some(MouseButton::Forward),
-            _ => None,
-        };
-
-        self.send_event_mouse_move(event.locationInWindow());
-
-        if let Some(button) = button {
-            self.send_event_defer(Event::MouseDown { button });
-        }
-
         if let Some(window) = self.view.window() {
             window.makeFirstResponder(Some(&self.view));
         }
+
+        self.send_event_mouse_move(event.locationInWindow());
+        self.send_event_defer(Event::MouseDown {
+            button: match (*event).buttonNumber() {
+                0 => MouseButton::Left,
+                1 => MouseButton::Right,
+                2 => MouseButton::Middle,
+                3 => MouseButton::Back,
+                4 => MouseButton::Forward,
+                _ => return,
+            },
+        });
     }
 
     unsafe extern "C" fn mouse_up(&self, _cmd: Sel, event: &NSEvent) {
-        let button = match (*event).buttonNumber() {
-            0 => Some(MouseButton::Left),
-            1 => Some(MouseButton::Right),
-            2 => Some(MouseButton::Middle),
-            3 => Some(MouseButton::Back),
-            4 => Some(MouseButton::Forward),
-            _ => None,
-        };
-
         self.send_event_mouse_move(event.locationInWindow());
-
-        if let Some(button) = button {
-            self.send_event_defer(Event::MouseUp { button });
-        }
+        self.send_event_defer(Event::MouseUp {
+            button: match (*event).buttonNumber() {
+                0 => MouseButton::Left,
+                1 => MouseButton::Right,
+                2 => MouseButton::Middle,
+                3 => MouseButton::Back,
+                4 => MouseButton::Forward,
+                _ => return,
+            },
+        });
     }
 
     unsafe extern "C" fn mouse_exited(&self, _cmd: Sel, event: &NSEvent) {
