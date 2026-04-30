@@ -118,8 +118,22 @@ mod connection {
                     return None;
                 }
 
-                XInitThreads();
-                XSetErrorHandler(Some(error_handler));
+                // NOTE: this is a stupid workaround for an Xlib bug (?) where
+                // libX11 calls XFreeThreads on dtor
+                // which happens _before_ non-main threads are exited, causing
+                // a use-after-free
+                {
+                    let mut lock = INIT_STATE.lock().expect("poisoned");
+                    if *lock == InitState::Uninitialized {
+                        extern "C" fn atexit() {
+                            *INIT_STATE.lock().expect("poisoned") = InitState::Closed;
+                        }
+
+                        *lock = InitState::Initialized;
+                        XSetErrorHandler(Some(error_handler));
+                        libc::atexit(atexit);
+                    }
+                }
 
                 ERRORS_FOR_EACH_DISPLAY
                     .lock()
@@ -191,17 +205,24 @@ mod connection {
                     *errors = HashMap::new(); // does not allocate until inserted into
                 }
 
-                // NOTE: this is a stupid workaround for a X11 bug (?) where
-                // libX11 calls XFreeThreads` on dylib dtor
-                // which happens _before_ non-main threads are exited, causing
-                // a use-after-free
-                XCloseDisplay(self.display);
+                let lock = INIT_STATE.lock().expect("poisoned");
+                if *lock != InitState::Closed {
+                    XCloseDisplay(self.display);
+                }
             }
         }
     }
 
+    static INIT_STATE: Mutex<InitState> = Mutex::new(InitState::Uninitialized);
     static ERRORS_FOR_EACH_DISPLAY: LazyLock<Mutex<HashMap<usize, Option<String>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    #[derive(PartialEq)]
+    enum InitState {
+        Uninitialized,
+        Initialized,
+        Closed,
+    }
 
     unsafe extern "C" fn error_handler(dpy: *mut Display, err: *mut XErrorEvent) -> i32 {
         let mut map = ERRORS_FOR_EACH_DISPLAY.lock().expect("poisoned");

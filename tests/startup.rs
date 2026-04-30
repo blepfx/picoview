@@ -11,7 +11,6 @@ fn main() {
     test_startup_transient();
     sleep(Duration::from_millis(100));
     test_startup_embedded();
-    sleep(Duration::from_millis(10)); // needed because xlib stupid
 }
 
 fn test_startup_blocking() {
