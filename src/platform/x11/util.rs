@@ -99,7 +99,7 @@ mod connection {
         ffi::{CStr, c_char, c_ulong},
         ptr::NonNull,
         rc::Rc,
-        sync::{LazyLock, Mutex},
+        sync::Mutex,
     };
     use x11::xlib::*;
 
@@ -118,27 +118,11 @@ mod connection {
                     return None;
                 }
 
-                // NOTE: this is a stupid workaround for an Xlib bug (?) where
-                // libX11 calls XFreeThreads on dtor
-                // which happens _before_ non-main threads are exited, causing
-                // a use-after-free
-                {
-                    let mut lock = INIT_STATE.lock().expect("poisoned");
-                    if *lock == InitState::Uninitialized {
-                        extern "C" fn atexit() {
-                            *INIT_STATE.lock().expect("poisoned") = InitState::Closed;
-                        }
-
-                        *lock = InitState::Initialized;
-                        XSetErrorHandler(Some(error_handler));
-                        libc::atexit(atexit);
+                GlobalState::with(|global| {
+                    if !global.closed {
+                        global.errors.insert(display.addr(), None);
                     }
-                }
-
-                ERRORS_FOR_EACH_DISPLAY
-                    .lock()
-                    .expect("poisoned")
-                    .insert(display.addr(), None);
+                });
 
                 Some(Self(Rc::new(ConnectionInner {
                     display,
@@ -149,14 +133,15 @@ mod connection {
 
         /// Get the last error that occurred on this display connection.
         pub fn last_error(&self) -> Result<(), String> {
-            let err = ERRORS_FOR_EACH_DISPLAY
-                .lock()
-                .expect("poisoned")
-                .get_mut(&(self.0.display as usize))
-                .and_then(|x| x.take());
+            let error = GlobalState::with(|global| {
+                global
+                    .errors
+                    .get_mut(&(self.0.display.addr()))
+                    .and_then(|x| x.take())
+            });
 
-            match err {
-                Some(err) => Err(err),
+            match error {
+                Some(error) => Err(error),
                 None => Ok(()),
             }
         }
@@ -194,59 +179,83 @@ mod connection {
 
     impl Drop for ConnectionInner {
         fn drop(&mut self) {
-            unsafe {
-                let mut errors = ERRORS_FOR_EACH_DISPLAY.lock().expect("poisoned");
-                errors.remove(&self.display.addr());
-
-                // we do this so we deallocate the memory when we close the last display,
-                // preventing a potential memory leak if used in a dylib (destructors for
-                // statics do not get run)
-                if errors.is_empty() {
-                    *errors = HashMap::new(); // does not allocate until inserted into
+            GlobalState::with(|global| {
+                if global.closed {
+                    return;
                 }
 
-                let lock = INIT_STATE.lock().expect("poisoned");
-                if *lock != InitState::Closed {
+                global.errors.remove(&self.display.addr());
+                unsafe {
                     XCloseDisplay(self.display);
                 }
-            }
+            });
         }
     }
 
-    static INIT_STATE: Mutex<InitState> = Mutex::new(InitState::Uninitialized);
-    static ERRORS_FOR_EACH_DISPLAY: LazyLock<Mutex<HashMap<usize, Option<String>>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
+    /// Global Xlib state, used for global error handling (because error handler
+    /// is global for some reason) and a use-after-free workaround (see
+    /// [`Self::closed`] field)
+    struct GlobalState {
+        errors: HashMap<usize, Option<String>>,
 
-    #[derive(PartialEq)]
-    enum InitState {
-        Uninitialized,
-        Initialized,
-        Closed,
+        // NOTE: this is a stupid workaround for an Xlib bug (?) where
+        // libX11 calls XFreeThreads on dtor
+        // which happens _before_ non-main threads are exited, causing
+        // a use-after-free
+        closed: bool,
+    }
+
+    impl GlobalState {
+        fn with<R>(f: impl FnOnce(&mut Self) -> R) -> R {
+            static GLOBAL: Mutex<Option<GlobalState>> = Mutex::new(None);
+            f(GLOBAL.lock().expect("poisoned").get_or_insert_with(|| {
+                unsafe {
+                    XSetErrorHandler(Some(error_handler));
+                    libc::atexit(exit_handler);
+                }
+
+                Self {
+                    errors: HashMap::new(),
+                    closed: false,
+                }
+            }))
+        }
+    }
+
+    extern "C" fn exit_handler() {
+        GlobalState::with(|global| {
+            // we dont want to keep any memory allocated after this point, especially
+            // because when used as a plugin (as a dylib), the static memory will NOT be
+            // unloaded automatically
+            global.errors = HashMap::new();
+            global.closed = true;
+        });
     }
 
     unsafe extern "C" fn error_handler(dpy: *mut Display, err: *mut XErrorEvent) -> i32 {
-        let mut map = ERRORS_FOR_EACH_DISPLAY.lock().expect("poisoned");
-        let Some(conn) = map.get_mut(&(dpy as usize)) else {
-            return 0;
-        };
+        GlobalState::with(|global| {
+            let Some(conn) = global.errors.get_mut(&(dpy as usize)) else {
+                return 0;
+            };
 
-        if conn.is_some() {
-            return 0;
-        }
+            if conn.is_some() {
+                return 0;
+            }
 
-        unsafe {
-            let mut buf = [0 as c_char; 255];
-            XGetErrorText(
-                (*err).display,
-                (*err).error_code.into(),
-                buf.as_mut_ptr(),
-                (buf.len() - 1) as i32,
-            );
-            buf[254] = 0;
-            conn.replace(CStr::from_ptr(buf.as_mut_ptr()).to_string_lossy().into());
-        }
+            unsafe {
+                let mut buf = [0 as c_char; 255];
+                XGetErrorText(
+                    (*err).display,
+                    (*err).error_code.into(),
+                    buf.as_mut_ptr(),
+                    (buf.len() - 1) as i32,
+                );
+                buf[254] = 0;
+                conn.replace(CStr::from_ptr(buf.as_mut_ptr()).to_string_lossy().into());
+            }
 
-        0
+            0
+        })
     }
 }
 
