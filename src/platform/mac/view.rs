@@ -164,9 +164,13 @@ impl WindowImpl {
                 NSSize::new(options.size.width as f64, options.size.height as f64),
             );
 
-            let mut style = NSWindowStyleMask::Titled
-                | NSWindowStyleMask::Closable
-                | NSWindowStyleMask::Miniaturizable;
+            let mut style = NSWindowStyleMask::empty();
+
+            if options.decorations {
+                style |= NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable;
+            }
 
             if options.resizable.is_some() {
                 style |= NSWindowStyleMask::Resizable;

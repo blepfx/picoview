@@ -5,7 +5,7 @@
 | ----------------------------------------------------- | -------- | -------- | -------- | -------- |
 | Window creation                                       | :ok:     |          |          |          |
 |  - Top-level decorated windows                        | :ok:     | :ok:     | :ok:     | High     |
-|  - Top-level undecorated windows                      | :ok:     | :x:      | :ok:     | Medium   |
+|  - Top-level undecorated windows                      | :ok:     | :ok:     | :ok:     | Medium   |
 |  - Embedded parented windows                          | :ok:     | :ok:     | :ok:     | High     |
 |  - Transient parented windows                         | :ok:     | :ok:     | :ok:     | Low      |
 | Window events                                         |          |          |          |          |

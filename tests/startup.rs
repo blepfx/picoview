@@ -6,20 +6,19 @@ use std::{thread::sleep, time::Duration};
 fn main() {
     test_startup_blocking();
     sleep(Duration::from_millis(100));
+    test_startup_blocking_undecorated();
+    sleep(Duration::from_millis(100));
     test_startup_transient();
     sleep(Duration::from_millis(100));
     test_startup_embedded();
-    sleep(Duration::from_millis(10));
-    // this is a hack because x11 is stupid and dumb (but there is NO
-    // replacement, no, wayland doesnt count unless they give us an alternative
-    // to xembed...)
+    sleep(Duration::from_millis(10)); // needed because xlib stupid
 }
 
 fn test_startup_blocking() {
     WindowBuilder::new(|window| {
         Box::new(move |event| {
             if let Event::WindowFrame { .. } = event {
-                sleep(Duration::from_millis(100));
+                sleep(Duration::from_millis(500));
                 window.close();
             }
         })
@@ -27,7 +26,25 @@ fn test_startup_blocking() {
     .with_size((512, 256))
     .with_position((100, 200))
     .with_visible(true)
-    .with_title("picoview test - startup")
+    .with_title("picoview test - blocking")
+    .open_blocking()
+    .unwrap();
+}
+
+fn test_startup_blocking_undecorated() {
+    WindowBuilder::new(|window| {
+        Box::new(move |event| {
+            if let Event::WindowFrame { .. } = event {
+                sleep(Duration::from_millis(500));
+                window.close();
+            }
+        })
+    })
+    .with_size((512, 256))
+    .with_position((100, 200))
+    .with_visible(true)
+    .with_decorations(false)
+    .with_title("picoview test - blocking undecorated")
     .open_blocking()
     .unwrap();
 }
