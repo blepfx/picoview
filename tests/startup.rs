@@ -1,5 +1,6 @@
 use picoview::{Event, WindowBuilder};
-use std::{thread::sleep, time::Duration};
+use std::thread::sleep;
+use std::time::Duration;
 
 /// Because some OSes require the windows to be created on the main-thread
 /// we have to run the tests with `harness = false`.
