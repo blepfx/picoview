@@ -1,12 +1,11 @@
 //! based on clack example gain gui plugin (https://github.com/prokopyl/clack/tree/main/plugin/examples/gain-gui#741e4d223e2d528b150834c8aca296702bd40dfb)
 
-use crate::{gui::GainPluginGui, params::GainParams};
-use clack_extensions::{
-    audio_ports::*,
-    gui::{GuiApiType, GuiConfiguration, PluginGui, PluginGuiImpl},
-    params::*,
-    state::PluginState,
-};
+use crate::gui::GainPluginGui;
+use crate::params::GainParams;
+use clack_extensions::audio_ports::*;
+use clack_extensions::gui::{GuiApiType, GuiConfiguration, PluginGui, PluginGuiImpl};
+use clack_extensions::params::*;
+use clack_extensions::state::PluginState;
 use clack_plugin::prelude::*;
 use std::sync::Arc;
 

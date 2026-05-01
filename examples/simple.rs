@@ -1,8 +1,6 @@
 use picoview::{Event, Exchange, Key, MouseCursor, Point, Size, WindowBuilder};
-use std::{
-    mem::replace,
-    time::{Duration, Instant},
-};
+use std::mem::replace;
+use std::time::{Duration, Instant};
 
 fn main() {
     WindowBuilder::new(|window| {

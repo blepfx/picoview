@@ -1,4 +1,5 @@
-use std::{error::Error, fmt};
+use std::error::Error;
+use std::fmt;
 
 /// An error that can occur when making an OpenGL context current or
 /// not-current.

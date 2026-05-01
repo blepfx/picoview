@@ -96,7 +96,7 @@ mod connection {
     use std::ffi::{CStr, c_char, c_ulong};
     use std::ptr::NonNull;
     use std::rc::Rc;
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::Mutex;
     use x11::xlib::*;
 
     /// A cloneable handle to an X11 display connection. The connection is
@@ -256,9 +256,8 @@ mod connection {
 }
 
 mod selection {
-    use crate::Exchange;
-
     use super::Connection;
+    use crate::Exchange;
     use std::array::from_fn;
     use std::ffi::{OsStr, OsString, c_char, c_int, c_ulong};
     use std::mem::zeroed;

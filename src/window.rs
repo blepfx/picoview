@@ -2,7 +2,9 @@ use crate::{
     Event, Exchange, GlConfig, GlContext, MouseCursor, Point, Size, WakeupError, WindowError,
     platform, rwh_06,
 };
-use std::{fmt::Debug, ops::Range, sync::Arc};
+use std::fmt::Debug;
+use std::ops::Range;
+use std::sync::Arc;
 
 // the reason this is a box is because making this with traits is extremely
 // annoying, especially when closures are involved

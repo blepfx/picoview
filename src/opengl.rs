@@ -1,8 +1,6 @@
 use crate::*;
-use std::{
-    ffi::{CStr, c_void},
-    fmt,
-};
+use std::ffi::{CStr, c_void};
+use std::fmt;
 
 /// A requested OpenGL version
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
