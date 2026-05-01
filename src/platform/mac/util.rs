@@ -106,7 +106,6 @@ pub fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
 }
 
 pub use clipboard::*;
-pub use coords::*;
 pub use keyboard::*;
 
 mod keyboard {
@@ -331,19 +330,5 @@ mod clipboard {
                 })
                 .filter(|files| !files.is_empty())
         }
-    }
-}
-
-mod coords {
-    use crate::Size;
-    use objc2_app_kit::NSScreen;
-    use objc2_foundation::NSSize;
-
-    pub fn size_to_native(size: Size, screen: &NSScreen) -> NSSize {
-        let scale = screen.backingScaleFactor();
-        NSSize::new(
-            (size.width as f64 / scale).round(),
-            (size.height as f64 / scale).round(),
-        )
     }
 }

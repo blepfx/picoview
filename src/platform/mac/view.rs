@@ -39,15 +39,15 @@ pub struct WindowImpl {
 
 pub struct WindowImplInner {
     _display_link: DisplayLink,
-    key_event_monitor: Option<Retained<AnyObject>>,
-
     gl_context: Option<GlContext>,
+    key_event_monitor: Option<Retained<AnyObject>>,
 
     application: RefCell<Option<Retained<NSApplication>>>,
     waker: Arc<WindowWakerImpl>,
 
     event_queue: RefCell<VecDeque<Event<'static>>>,
     current_cursor: Cell<MouseCursor>,
+    current_size: Cell<Size>,
 
     #[allow(clippy::type_complexity)]
     event_handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
@@ -149,11 +149,13 @@ impl WindowImpl {
                     options.position.map(|x| x.x).unwrap_or(0.0) as f64,
                     options.position.map(|x| x.y).unwrap_or(0.0) as f64,
                 ),
-                size_to_native(options.size, &screen),
+                NSSize::new(
+                    options.size.width as f64 / screen.backingScaleFactor(),
+                    options.size.height as f64 / screen.backingScaleFactor(),
+                ),
             );
 
             let mut style = NSWindowStyleMask::empty();
-
             if options.decorations {
                 style |= NSWindowStyleMask::Titled
                     | NSWindowStyleMask::Closable
@@ -212,13 +214,20 @@ impl WindowImpl {
         let screen = NSScreen::mainScreen(main_thread)
             .ok_or_else(|| WindowError::Platform("Failed to get main screen".to_string()))?;
 
-        let rect = NSRect::new(
-            NSPoint {
-                x: options.position.map(|x| x.x).unwrap_or_default() as f64,
-                y: options.position.map(|x| x.y).unwrap_or_default() as f64,
-            },
-            size_to_native(options.size, &screen),
+        let mut rect = NSRect::new(
+            NSPoint::default(),
+            NSSize::new(
+                options.size.width as f64 / screen.backingScaleFactor(),
+                options.size.height as f64 / screen.backingScaleFactor(),
+            ),
         );
+
+        if is_embedded {
+            rect.origin = NSPoint::new(
+                options.position.map(|x| x.x).unwrap_or(0.0) as f64,
+                options.position.map(|x| x.y).unwrap_or(0.0) as f64,
+            );
+        }
 
         let view = unsafe {
             let view: Allocated<WindowImpl> = msg_send![class, alloc];
@@ -324,6 +333,8 @@ impl WindowImpl {
             event_handler: RefCell::new(None),
 
             current_cursor: Cell::new(MouseCursor::Default),
+            current_size: Cell::new(options.size),
+
             is_closed: Cell::new(false),
             is_embedded,
         })));
@@ -489,7 +500,29 @@ impl WindowImpl {
             scale: scale as f32,
         });
 
-        // TODO: fun logical -> physical scaling stuff here
+        // keep physical size
+        self.set_size(self.current_size.replace(Size::default()));
+    }
+
+    unsafe extern "C" fn view_frame_did_change_notification(
+        &self,
+        _cmd: Sel,
+        _notif: &NSNotification,
+    ) {
+        let logical = self.view.frame();
+        if let Some(gl) = &self.gl_context {
+            gl.resize(logical.size.width, logical.size.height);
+        }
+
+        let backing = self.view.convertRectToBacking(logical);
+        self.current_size.replace(Size {
+            width: backing.size.width as u32,
+            height: backing.size.height as u32,
+        });
+
+        self.send_event_defer(Event::WindowResize {
+            size: self.current_size.get(),
+        });
     }
 
     unsafe extern "C" fn window_should_close(&self, _cmd: Sel, _: Option<&AnyObject>) -> Bool {
@@ -601,25 +634,6 @@ impl WindowImpl {
         if let Some(window) = self.view.window() {
             window.makeFirstResponder(None);
         }
-    }
-
-    unsafe extern "C" fn view_frame_did_change_notification(
-        &self,
-        _cmd: Sel,
-        _notif: &NSNotification,
-    ) {
-        let logical = self.view.frame();
-        if let Some(gl) = &self.gl_context {
-            gl.resize(logical.size.width, logical.size.height);
-        }
-
-        let backing = self.view.convertRectToBacking(logical);
-        self.send_event_defer(Event::WindowResize {
-            size: Size {
-                width: backing.size.width as u32,
-                height: backing.size.height as u32,
-            },
-        });
     }
 
     // NSDraggingDestination
@@ -833,6 +847,10 @@ impl WindowImpl {
                 <dyn objc2_app_kit::NSWindowDelegate>::protocol()
                     .expect("unknown protocol: NSWindowDelegate"),
             );
+            builder.add_protocol(
+                <dyn objc2_app_kit::NSDraggingDestination>::protocol()
+                    .expect("unknown protocol: NSDraggingDestination"),
+            );
         }
 
         Ok(builder.register())
@@ -916,17 +934,21 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_size(&self, size: Size) {
+        if self.current_size.replace(size) == size {
+            return;
+        }
+
         let size = self.view.convertSizeFromBacking(CGSize {
             width: size.width as f64,
             height: size.height as f64,
         });
 
-        if let Some(window) = self.own_window() {
-            window.setContentSize(size);
-        }
-
         if let Some(gl) = &self.gl_context {
             gl.resize(size.width, size.height);
+        }
+
+        if let Some(window) = self.own_window() {
+            window.setContentSize(size);
         }
 
         self.view.setFrameSize(size);
