@@ -1,10 +1,7 @@
 use crate::MouseCursor;
-use objc2::sel;
-use objc2::{
-    ClassType,
-    rc::Retained,
-    runtime::{MessageReceiver, Sel},
-};
+use objc2::rc::Retained;
+use objc2::runtime::{MessageReceiver, Sel};
+use objc2::{ClassType, sel};
 use objc2_app_kit::{NSCursor, NSHorizontalDirections, NSVerticalDirections};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -249,7 +246,9 @@ mod keyboard {
 
 mod clipboard {
     use crate::Exchange;
-    use objc2::{ClassType, rc::Retained, runtime::ProtocolObject};
+    use objc2::ClassType;
+    use objc2::rc::Retained;
+    use objc2::runtime::ProtocolObject;
     use objc2_app_kit::{
         NSPasteboard, NSPasteboardTypeString, NSPasteboardURLReadingFileURLsOnlyKey,
         NSPasteboardWriting,
@@ -336,48 +335,15 @@ mod clipboard {
 }
 
 mod coords {
-    use objc2_app_kit::NSView;
-    use objc2_foundation::NSPoint;
+    use crate::Size;
+    use objc2_app_kit::NSScreen;
+    use objc2_foundation::NSSize;
 
-    // NSWindow -> picoview (local)
-    pub fn point_window_to_local(point: NSPoint, view: &NSView) -> NSPoint {
-        let scale = view.window().map(|w| w.backingScaleFactor()).unwrap_or(1.0);
-        view.convertPoint_fromView(NSPoint::new(point.x * scale, point.y * scale), None)
-    }
-
-    // NSWindow -> picoview (global)
-    pub fn point_window_to_global(point: NSPoint, view: &NSView) -> NSPoint {
-        view.window()
-            .map(|window| {
-                let frame = window.screen().map(|s| s.frame()).unwrap_or_default();
-                let scale = window.backingScaleFactor();
-                let point = NSPoint::new(point.x * scale, point.y * scale);
-                let point = window.convertPointToScreen(point);
-
-                NSPoint::new(
-                    point.x - frame.origin.x,
-                    frame.size.height - (point.y - frame.origin.y),
-                )
-            })
-            .unwrap_or(point)
-    }
-
-    // picoview (local) -> NSScreen
-    pub fn point_local_to_screen(point: NSPoint, view: &NSView) -> NSPoint {
-        view.window()
-            .map(|window| {
-                let frame = window.screen().map(|s| s.frame()).unwrap_or_default();
-                let scale = window.backingScaleFactor();
-
-                let point = NSPoint::new(point.x / scale, point.y / scale);
-                let point = view.convertPoint_toView(point, None);
-                let point = window.convertPointToScreen(point);
-
-                NSPoint::new(
-                    point.x - frame.origin.x,
-                    frame.size.height - (point.y - frame.origin.y),
-                )
-            })
-            .unwrap_or(point)
+    pub fn size_to_native(size: Size, screen: &NSScreen) -> NSSize {
+        let scale = screen.backingScaleFactor();
+        NSSize::new(
+            (size.width as f64 / scale).round(),
+            (size.height as f64 / scale).round(),
+        )
     }
 }

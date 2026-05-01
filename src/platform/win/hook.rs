@@ -1,16 +1,12 @@
 use super::window::{WM_USER_KEY_DOWN, WM_USER_KEY_UP};
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashSet,
-    mem::zeroed,
-    ptr::null_mut,
-    rc::{Rc, Weak},
-};
-use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    System::Threading::GetCurrentThreadId,
-    UI::WindowsAndMessaging::*,
-};
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
+use std::mem::zeroed;
+use std::ptr::null_mut;
+use std::rc::{Rc, Weak};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 thread_local! {
     static HOOK: Cell<Weak<KeyboardHook>> = const { Cell::new(Weak::new()) };

@@ -1,36 +1,34 @@
-use super::{gl::GlContext, hook::KeyboardHook, util::*, vsync::VSyncCallback};
-use crate::{
-    platform::{win::dnd::DropTargetImpl, *},
-    *,
+use super::gl::GlContext;
+use super::hook::KeyboardHook;
+use super::util::*;
+use super::vsync::VSyncCallback;
+use crate::platform::win::dnd::DropTargetImpl;
+use crate::platform::*;
+use crate::*;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::mem::{size_of, zeroed};
+use std::num::NonZeroIsize;
+use std::ptr::{null, null_mut};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use windows_sys::Win32::Foundation::{
+    HWND, LPARAM, LRESULT, OLE_E_WRONGCOMPOBJ, POINT, RECT, RPC_E_CHANGED_MODE, WPARAM,
 };
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    mem::{size_of, zeroed},
-    num::NonZeroIsize,
-    ptr::{null, null_mut},
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use windows_sys::Win32::Graphics::Dwm::{
+    DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow,
 };
-use windows_sys::Win32::{
-    Foundation::{
-        HWND, LPARAM, LRESULT, OLE_E_WRONGCOMPOBJ, POINT, RECT, RPC_E_CHANGED_MODE, WPARAM,
-    },
-    Graphics::{
-        Dwm::{DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow},
-        Gdi::{
-            ClientToScreen, CreateRectRgn, DeleteObject, GetUpdateRect, ScreenToClient, ValidateRgn,
-        },
-    },
-    System::Ole::{CF_HDROP, CF_UNICODETEXT, OleInitialize, RegisterDragDrop, RevokeDragDrop},
-    UI::{
-        Controls::WM_MOUSELEAVE, Input::KeyboardAndMouse::*, Shell::ShellExecuteW,
-        WindowsAndMessaging::*,
-    },
+use windows_sys::Win32::Graphics::Gdi::{
+    ClientToScreen, CreateRectRgn, DeleteObject, GetUpdateRect, ScreenToClient, ValidateRgn,
 };
+use windows_sys::Win32::System::Ole::{
+    CF_HDROP, CF_UNICODETEXT, OleInitialize, RegisterDragDrop, RevokeDragDrop,
+};
+use windows_sys::Win32::UI::Controls::WM_MOUSELEAVE;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
+use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 /// Sent by Vsync thread, triggers [`Event::WindowFrame`] event
 pub const WM_USER_VSYNC: u32 = WM_USER + 1;

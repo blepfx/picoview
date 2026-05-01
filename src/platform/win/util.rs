@@ -1,13 +1,10 @@
 use crate::Size;
-use std::{ffi::OsString, os::windows::ffi::OsStrExt};
-use windows_sys::{
-    Win32::{
-        Foundation::{POINT, RECT},
-        System::Com::CoCreateGuid,
-        UI::WindowsAndMessaging::{AdjustWindowRectEx, WINDOW_STYLE},
-    },
-    core::GUID,
-};
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStrExt;
+use windows_sys::Win32::Foundation::{POINT, RECT};
+use windows_sys::Win32::System::Com::CoCreateGuid;
+use windows_sys::Win32::UI::WindowsAndMessaging::{AdjustWindowRectEx, WINDOW_STYLE};
+use windows_sys::core::GUID;
 
 pub fn generate_guid() -> String {
     unsafe {
@@ -226,18 +223,15 @@ mod keyboard {
 }
 
 mod clipboard {
-    use std::{
-        ffi::{OsString, c_void},
-        marker::PhantomData,
-        os::windows::ffi::{OsStrExt, OsStringExt},
-        path::PathBuf,
-        ptr::{copy_nonoverlapping, null_mut},
-    };
-    use windows_sys::Win32::{
-        Foundation::{HWND, POINT},
-        System::{DataExchange::*, Memory::*},
-        UI::Shell::*,
-    };
+    use std::ffi::{OsString, c_void};
+    use std::marker::PhantomData;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::PathBuf;
+    use std::ptr::{copy_nonoverlapping, null_mut};
+    use windows_sys::Win32::Foundation::{HWND, POINT};
+    use windows_sys::Win32::System::DataExchange::*;
+    use windows_sys::Win32::System::Memory::*;
+    use windows_sys::Win32::UI::Shell::*;
 
     pub unsafe fn decode_hdrop(hdrop: *mut c_void) -> Vec<PathBuf> {
         unsafe {
@@ -340,7 +334,8 @@ mod clipboard {
 mod cursor {
     use crate::MouseCursor;
     use std::ptr::null_mut;
-    use windows_sys::{Win32::UI::WindowsAndMessaging::*, core::PCWSTR};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    use windows_sys::core::PCWSTR;
 
     pub struct CursorCache {
         pub arrow: HCURSOR,
@@ -436,11 +431,9 @@ mod cursor {
 
 mod dpi {
     use std::ffi::CStr;
-    use windows_sys::Win32::{
-        Foundation::HWND,
-        System::LibraryLoader::{GetProcAddress, LoadLibraryA},
-        UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI,
-    };
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+    use windows_sys::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 
     unsafe fn proc_address<A, R>(module: &CStr, function: &CStr) -> Option<unsafe fn(A) -> R> {
         unsafe {
@@ -479,13 +472,10 @@ mod dpi {
 mod win32_bullshit {
     use crate::WindowError;
     use std::ptr::null_mut;
-    use windows_sys::{
-        Win32::{
-            Foundation::{GetLastError, HINSTANCE},
-            System::{Diagnostics::Debug::*, SystemServices::IMAGE_DOS_HEADER},
-        },
-        core::PWSTR,
-    };
+    use windows_sys::Win32::Foundation::{GetLastError, HINSTANCE};
+    use windows_sys::Win32::System::Diagnostics::Debug::*;
+    use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
+    use windows_sys::core::PWSTR;
 
     pub fn hinstance() -> HINSTANCE {
         unsafe extern "C" {

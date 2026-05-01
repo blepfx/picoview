@@ -1,20 +1,12 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread::{JoinHandle, sleep},
-    time::{Duration, Instant},
-};
-use windows_sys::Win32::{
-    Foundation::HWND,
-    Graphics::{
-        Dwm::{DwmFlush, DwmIsCompositionEnabled},
-        Gdi::{
-            DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR,
-            MONITOR_DEFAULTTOPRIMARY, MONITORINFOEXW, MonitorFromWindow,
-        },
-    },
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{JoinHandle, sleep};
+use std::time::{Duration, Instant};
+use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Graphics::Dwm::{DwmFlush, DwmIsCompositionEnabled};
+use windows_sys::Win32::Graphics::Gdi::{
+    DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR,
+    MONITOR_DEFAULTTOPRIMARY, MONITORINFOEXW, MonitorFromWindow,
 };
 
 pub struct VSyncCallback {

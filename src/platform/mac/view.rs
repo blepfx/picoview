@@ -4,22 +4,19 @@ use crate::platform::mac::util::*;
 use crate::platform::{OpenMode, PlatformOpenGl, PlatformWaker, PlatformWindow};
 use crate::*;
 use block2::RcBlock;
+use objc2::declare::ClassBuilder;
+use objc2::ffi::objc_disposeClassPair;
 use objc2::rc::{Allocated, Retained, Weak};
-use objc2::runtime::{AnyObject, ProtocolObject, Sel};
-use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
+use objc2::runtime::{AnyClass, AnyObject, Bool, ProtocolObject, Sel};
 use objc2::{
-    ClassType, Encoding, Message, RefEncode,
-    declare::ClassBuilder,
-    ffi::objc_disposeClassPair,
-    msg_send,
-    runtime::{AnyClass, Bool},
-    sel,
+    AllocAnyThread, ClassType, Encoding, MainThreadMarker, MainThreadOnly, Message, ProtocolType,
+    RefEncode, msg_send, sel,
 };
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
     NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
-    NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow,
+    NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSScreen, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowDelegate,
     NSWindowDidResignKeyNotification, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
@@ -96,13 +93,7 @@ impl WindowImpl {
                 window.setContentView(Some(&view.view));
                 window.makeFirstResponder(Some(&view.view));
                 window.setReleasedWhenClosed(true);
-
-                // Set the window delegate to our view
-                // NSWindowDelegate has no required methods, so this is safe
-                window.setDelegate(Some(std::mem::transmute::<
-                    &WindowImpl,
-                    &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
-                >(&*view)));
+                window.setDelegate(Some(view.as_ns_window_delegate()));
 
                 app.run();
                 Ok(WindowWaker::default())
@@ -121,13 +112,7 @@ impl WindowImpl {
 
                 window.setContentView(Some(&view.view));
                 window.makeFirstResponder(Some(&view.view));
-
-                // Set the window delegate to our view
-                // NSWindowDelegate has no required methods, so this is safe
-                window.setDelegate(Some(std::mem::transmute::<
-                    &WindowImpl,
-                    &objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSWindowDelegate>,
-                >(&*view)));
+                window.setDelegate(Some(view.as_ns_window_delegate()));
 
                 if let Some(parent_window) = (*parent_view).window() {
                     parent_window.addChildWindow_ordered(&window, NSWindowOrderingMode::Above);
@@ -156,17 +141,24 @@ impl WindowImpl {
         main_thread: MainThreadMarker,
     ) -> Result<Retained<NSWindow>, WindowError> {
         unsafe {
+            let screen = NSScreen::mainScreen(main_thread)
+                .ok_or_else(|| WindowError::Platform("Failed to get main screen".to_string()))?;
+
             let rect = NSRect::new(
                 NSPoint::new(
                     options.position.map(|x| x.x).unwrap_or(0.0) as f64,
                     options.position.map(|x| x.y).unwrap_or(0.0) as f64,
                 ),
-                NSSize::new(options.size.width as f64, options.size.height as f64),
+                size_to_native(options.size, &screen),
             );
 
-            let mut style = NSWindowStyleMask::Titled
-                | NSWindowStyleMask::Closable
-                | NSWindowStyleMask::Miniaturizable;
+            let mut style = NSWindowStyleMask::empty();
+
+            if options.decorations {
+                style |= NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable;
+            }
 
             if options.resizable.is_some() {
                 style |= NSWindowStyleMask::Resizable;
@@ -190,14 +182,18 @@ impl WindowImpl {
             }
 
             if let Some(range) = options.resizable.clone() {
-                window.setContentMinSize(NSSize::new(
-                    range.start.width as f64,
-                    range.start.height as f64,
+                let min_size = window.convertRectFromBacking(NSRect::new(
+                    NSPoint::default(),
+                    NSSize::new(range.start.width as f64, range.start.height as f64),
                 ));
-                window.setContentMaxSize(NSSize::new(
-                    range.end.width as f64,
-                    range.end.height as f64,
+
+                let max_size = window.convertRectFromBacking(NSRect::new(
+                    NSPoint::default(),
+                    NSSize::new(range.end.width as f64, range.end.height as f64),
                 ));
+
+                window.setContentMinSize(min_size.size);
+                window.setContentMaxSize(max_size.size);
             }
 
             window.setTitle(&NSString::from_str(&options.title));
@@ -213,16 +209,15 @@ impl WindowImpl {
         main_thread: MainThreadMarker,
     ) -> Result<Retained<Self>, WindowError> {
         let class = Self::register_class()?;
+        let screen = NSScreen::mainScreen(main_thread)
+            .ok_or_else(|| WindowError::Platform("Failed to get main screen".to_string()))?;
 
         let rect = NSRect::new(
             NSPoint {
                 x: options.position.map(|x| x.x).unwrap_or_default() as f64,
                 y: options.position.map(|x| x.y).unwrap_or_default() as f64,
             },
-            NSSize {
-                width: options.size.width.max(1) as f64,
-                height: options.size.height.max(1) as f64,
-            },
+            size_to_native(options.size, &screen),
         );
 
         let view = unsafe {
@@ -264,12 +259,14 @@ impl WindowImpl {
             view
         };
 
+        // opengl context if requested
         let gl_context = if let Some(config) = options.opengl {
             GlContext::new(&view.view, config, main_thread).ok()
         } else {
             None
         };
 
+        // vsync synced [`WindowFrame`] events
         let display_link = {
             let view = Weak::from_retained(&view);
             DisplayLink::new(Box::new(move || {
@@ -370,15 +367,17 @@ impl WindowImpl {
         }
     }
 
+    // `position` is in NSView coordinate space
     fn send_event_mouse_move(&self, position: CGPoint) {
-        let absolute = point_window_to_global(position, &self.view);
-        let relative = point_window_to_local(position, &self.view);
+        let relative = self.convert_point_to_picoview(position);
+        let absolute = self
+            .view
+            .window()
+            .map(|w| w.convertPointToBacking(position))
+            .unwrap_or(position);
 
         self.send_event_defer(Event::MouseMove {
-            relative: Point {
-                x: relative.x as f32,
-                y: relative.y as f32,
-            },
+            relative,
             absolute: Point {
                 x: absolute.x as f32,
                 y: absolute.y as f32,
@@ -423,6 +422,25 @@ impl WindowImpl {
         } else {
             self.view.window()
         }
+    }
+
+    fn convert_point_to_picoview(&self, point: NSPoint) -> Point {
+        let backing = self.view.convertPointToBacking(NSPoint {
+            x: point.x,
+            y: point.y - self.view.frame().size.height,
+        });
+
+        Point {
+            x: backing.x as f32,
+            y: backing.y as f32,
+        }
+    }
+
+    fn as_ns_window_delegate(&self) -> &ProtocolObject<dyn NSWindowDelegate> {
+        // SAFETY: this is safe, this is the same thing as [`ProtocolObject::from_ref`],
+        // and we ensure that we implement the NSWindowDelegate protocol (see
+        // [`Self::register_class`])
+        unsafe { std::mem::transmute::<&Self, &ProtocolObject<dyn NSWindowDelegate>>(self) }
     }
 }
 
@@ -512,41 +530,35 @@ impl WindowImpl {
     }
 
     unsafe extern "C" fn mouse_down(&self, _cmd: Sel, event: &NSEvent) {
-        let button = match (*event).buttonNumber() {
-            0 => Some(MouseButton::Left),
-            1 => Some(MouseButton::Right),
-            2 => Some(MouseButton::Middle),
-            3 => Some(MouseButton::Back),
-            4 => Some(MouseButton::Forward),
-            _ => None,
-        };
-
-        self.send_event_mouse_move(event.locationInWindow());
-
-        if let Some(button) = button {
-            self.send_event_defer(Event::MouseDown { button });
-        }
-
         if let Some(window) = self.view.window() {
             window.makeFirstResponder(Some(&self.view));
         }
+
+        self.send_event_mouse_move(event.locationInWindow());
+        self.send_event_defer(Event::MouseDown {
+            button: match (*event).buttonNumber() {
+                0 => MouseButton::Left,
+                1 => MouseButton::Right,
+                2 => MouseButton::Middle,
+                3 => MouseButton::Back,
+                4 => MouseButton::Forward,
+                _ => return,
+            },
+        });
     }
 
     unsafe extern "C" fn mouse_up(&self, _cmd: Sel, event: &NSEvent) {
-        let button = match (*event).buttonNumber() {
-            0 => Some(MouseButton::Left),
-            1 => Some(MouseButton::Right),
-            2 => Some(MouseButton::Middle),
-            3 => Some(MouseButton::Back),
-            4 => Some(MouseButton::Forward),
-            _ => None,
-        };
-
         self.send_event_mouse_move(event.locationInWindow());
-
-        if let Some(button) = button {
-            self.send_event_defer(Event::MouseUp { button });
-        }
+        self.send_event_defer(Event::MouseUp {
+            button: match (*event).buttonNumber() {
+                0 => MouseButton::Left,
+                1 => MouseButton::Right,
+                2 => MouseButton::Middle,
+                3 => MouseButton::Back,
+                4 => MouseButton::Forward,
+                _ => return,
+            },
+        });
     }
 
     unsafe extern "C" fn mouse_exited(&self, _cmd: Sel, event: &NSEvent) {
@@ -568,11 +580,12 @@ impl WindowImpl {
     }
 
     unsafe extern "C" fn draw_rect(&self, _cmd: Sel, rect: NSRect) {
+        let frame = self.view.convertRectToBacking(rect);
         self.send_event_defer(Event::WindowDamage {
-            x: rect.origin.x as u32,
-            y: rect.origin.y as u32,
-            w: rect.size.width as u32,
-            h: rect.size.height as u32,
+            x: frame.origin.x.floor() as u32,
+            y: frame.origin.y.floor() as u32,
+            w: frame.size.width.ceil() as u32,
+            h: frame.size.height.ceil() as u32,
         });
     }
 
@@ -595,17 +608,18 @@ impl WindowImpl {
         _cmd: Sel,
         _notif: &NSNotification,
     ) {
-        let frame = self.view.frame();
+        let logical = self.view.frame();
+        if let Some(gl) = &self.gl_context {
+            gl.resize(logical.size.width, logical.size.height);
+        }
+
+        let backing = self.view.convertRectToBacking(logical);
         self.send_event_defer(Event::WindowResize {
             size: Size {
-                width: frame.size.width as u32,
-                height: frame.size.height as u32,
+                width: backing.size.width as u32,
+                height: backing.size.height as u32,
             },
         });
-
-        if let Some(gl) = &self.gl_context {
-            gl.resize(frame.size.width as u32, frame.size.height as u32);
-        }
     }
 
     // NSDraggingDestination
@@ -619,15 +633,8 @@ impl WindowImpl {
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
         let data = get_pasteboard(&info.draggingPasteboard());
-        let point = point_window_to_local(info.draggingLocation(), &self.view);
-        self.send_event_defer(Event::DragEnter {
-            data,
-            point: Point {
-                x: point.x as f32,
-                y: point.y as f32,
-            },
-        });
-
+        let point = self.convert_point_to_picoview(info.draggingLocation());
+        self.send_event_defer(Event::DragEnter { data, point });
         NSDragOperation::Generic
     }
 
@@ -636,14 +643,8 @@ impl WindowImpl {
         _cmd: Sel,
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
-        let point = point_window_to_local(info.draggingLocation(), &self.view);
-        self.send_event_defer(Event::DragMove {
-            point: Point {
-                x: point.x as f32,
-                y: point.y as f32,
-            },
-        });
-
+        let point = self.convert_point_to_picoview(info.draggingLocation());
+        self.send_event_defer(Event::DragMove { point });
         NSDragOperation::Generic
     }
 
@@ -668,15 +669,9 @@ impl WindowImpl {
         _cmd: Sel,
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> Bool {
-        let point = point_window_to_local(info.draggingLocation(), &self.view);
-        self.send_event_defer(Event::DragMove {
-            point: Point {
-                x: point.x as f32,
-                y: point.y as f32,
-            },
-        });
+        let point = self.convert_point_to_picoview(info.draggingLocation());
+        self.send_event_defer(Event::DragMove { point });
         self.send_event_defer(Event::DragAccept);
-
         Bool::YES
     }
 
@@ -833,6 +828,11 @@ impl WindowImpl {
                 sel!(performDragOperation:),
                 Self::perform_drag_operation as unsafe extern "C" fn(_, _, _) -> _,
             );
+
+            builder.add_protocol(
+                <dyn objc2_app_kit::NSWindowDelegate>::protocol()
+                    .expect("unknown protocol: NSWindowDelegate"),
+            );
         }
 
         Ok(builder.register())
@@ -904,24 +904,32 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_cursor_position(&self, point: Point) {
-        CGWarpMouseCursorPosition(point_local_to_screen(
-            NSPoint::new(point.x as _, point.y as _),
-            &self.view,
-        ));
+        let point = self
+            .view
+            .convertPointFromBacking(NSPoint::new(point.x as _, point.y as _));
+        let point = self.view.convertPoint_toView(point, None);
+        let point = self.view.window().map(|w| w.convertPointToScreen(point));
+
+        if let Some(point) = point {
+            CGWarpMouseCursorPosition(point);
+        }
     }
 
     fn set_size(&self, size: Size) {
+        let size = self.view.convertSizeFromBacking(CGSize {
+            width: size.width as f64,
+            height: size.height as f64,
+        });
+
         if let Some(window) = self.own_window() {
-            window.setContentSize(CGSize {
-                width: size.width as _,
-                height: size.height as _,
-            });
+            window.setContentSize(size);
         }
 
-        self.view.setFrameSize(NSSize {
-            width: size.width as _,
-            height: size.height as _,
-        });
+        if let Some(gl) = &self.gl_context {
+            gl.resize(size.width, size.height);
+        }
+
+        self.view.setFrameSize(size);
     }
 
     fn set_position(&self, point: Point) {

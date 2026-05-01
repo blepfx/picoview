@@ -1,9 +1,9 @@
 #![allow(deprecated)] // i love you apple <3
 
-use crate::{
-    GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError, platform::PlatformOpenGl,
-};
-use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, rc::Retained};
+use crate::platform::PlatformOpenGl;
+use crate::{GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError};
+use objc2::rc::Retained;
+use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSOpenGLContext, NSOpenGLPixelFormat, NSOpenGLView, NSView};
 use objc2_core_foundation::{CFBundle, CFRetained, CFString};
 use objc2_foundation::NSSize;
@@ -123,12 +123,9 @@ impl GlContext {
         })
     }
 
-    pub fn resize(&self, width: u32, height: u32) {
-        self.view.setFrameSize(NSSize {
-            width: width as f64,
-            height: height as f64,
-        });
-
+    /// in logical pixels, not backing pixels
+    pub fn resize(&self, width: f64, height: f64) {
+        self.view.setFrameSize(NSSize { width, height });
         self.view.setNeedsDisplay(true);
     }
 }

@@ -1,9 +1,7 @@
 use crate::{MouseCursor, Point};
-use std::{
-    ffi::c_ulong,
-    os::unix::process::CommandExt,
-    process::{Command, Stdio},
-};
+use std::ffi::c_ulong;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 use x11::xlib::*;
 
 /// Open the given URL with the default system handler. Returns `true` if we
@@ -93,14 +91,12 @@ pub use visual::*;
 
 mod connection {
     use raw_window_handle::XlibDisplayHandle;
-    use std::{
-        cell::RefCell,
-        collections::HashMap,
-        ffi::{CStr, c_char, c_ulong},
-        ptr::NonNull,
-        rc::Rc,
-        sync::{LazyLock, Mutex},
-    };
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::ffi::{CStr, c_char, c_ulong};
+    use std::ptr::NonNull;
+    use std::rc::Rc;
+    use std::sync::{LazyLock, Mutex};
     use x11::xlib::*;
 
     /// A cloneable handle to an X11 display connection. The connection is
@@ -233,14 +229,12 @@ mod selection {
     use crate::Exchange;
 
     use super::Connection;
-    use std::{
-        array::from_fn,
-        ffi::{OsStr, OsString, c_char, c_int, c_ulong},
-        mem::zeroed,
-        os::unix::ffi::OsStrExt,
-        path::PathBuf,
-        ptr::null_mut,
-    };
+    use std::array::from_fn;
+    use std::ffi::{OsStr, OsString, c_char, c_int, c_ulong};
+    use std::mem::zeroed;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
+    use std::ptr::null_mut;
     use x11::xlib::*;
 
     /// An error that can occur when requesting a selection value.
@@ -469,8 +463,11 @@ mod selection {
 
 mod visual {
     use super::Connection;
-    use std::{ffi::c_int, mem::zeroed, ptr::null_mut};
-    use x11::{glx::GLXFBConfig, xlib::*};
+    use std::ffi::c_int;
+    use std::mem::zeroed;
+    use std::ptr::null_mut;
+    use x11::glx::GLXFBConfig;
+    use x11::xlib::*;
 
     /// A visual config is used for creating a backing surface for an X window
     /// (and optionally an OpenGl context)
@@ -519,7 +516,8 @@ mod input {
     use super::Connection;
     use crate::{Key, Modifiers};
     use std::ffi::{c_int, c_uint};
-    use x11::{xinput2::*, xlib::*};
+    use x11::xinput2::*;
+    use x11::xlib::*;
 
     /// Convert event key code to a `Key` enum variant, if possible.
     pub fn keycode_to_key(code: c_uint) -> Option<Key> {
@@ -785,8 +783,12 @@ mod input {
 
 mod info {
     use super::Connection;
-    use std::{ffi::CStr, mem::zeroed, ptr::null_mut, str::FromStr};
-    use x11::{xlib::*, xrandr::*};
+    use std::ffi::CStr;
+    use std::mem::zeroed;
+    use std::ptr::null_mut;
+    use std::str::FromStr;
+    use x11::xlib::*;
+    use x11::xrandr::*;
 
     /// Get the DPI scaling factor from X resources, if available.
     pub fn query_scale_dpi(conn: &Connection) -> Option<f32> {
@@ -878,11 +880,10 @@ mod info {
 
 mod cursor {
     use super::Connection;
-    use std::{
-        ffi::{CStr, c_ulong},
-        mem::zeroed,
-    };
-    use x11::{xcursor::XcursorLibraryLoadCursor, xlib::*};
+    use std::ffi::{CStr, c_ulong};
+    use std::mem::zeroed;
+    use x11::xcursor::XcursorLibraryLoadCursor;
+    use x11::xlib::*;
 
     /// Empty cursor that can be used to hide the mouse cursor. It is
     /// implemented by creating a 1x1 transparent pixmap and using it as the
@@ -991,7 +992,8 @@ mod cursor {
 
 mod events {
     use super::Connection;
-    use std::{ptr::null, time::Duration};
+    use std::ptr::null;
+    use std::time::Duration;
     use x11::xlib::*;
 
     /// Wait for events with an optional timeout and return the number of

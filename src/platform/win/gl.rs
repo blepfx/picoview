@@ -1,32 +1,24 @@
 use super::util::{generate_guid, hinstance, to_widestring};
-use crate::{MakeCurrentError, SwapBuffersError, WindowError, platform::PlatformOpenGl};
-use std::{
-    collections::HashSet,
-    ffi::{CStr, c_char, c_void},
-    mem::{size_of, zeroed},
-    ptr::{null, null_mut},
-    sync::OnceLock,
+use crate::platform::PlatformOpenGl;
+use crate::{MakeCurrentError, SwapBuffersError, WindowError};
+use std::collections::HashSet;
+use std::ffi::{CStr, c_char, c_void};
+use std::mem::{size_of, zeroed};
+use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
+use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE, HWND, PROC};
+use windows_sys::Win32::Graphics::Gdi::{GetDC, HDC, ReleaseDC};
+use windows_sys::Win32::Graphics::OpenGL::{
+    ChoosePixelFormat, DescribePixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW,
+    PFD_MAIN_PLANE, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR, SetPixelFormat,
+    SwapBuffers, wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent,
 };
-use windows_sys::{
-    Win32::{
-        Foundation::{FreeLibrary, HMODULE, HWND, PROC},
-        Graphics::{
-            Gdi::{GetDC, HDC, ReleaseDC},
-            OpenGL::{
-                ChoosePixelFormat, DescribePixelFormat, HGLRC, PFD_DOUBLEBUFFER,
-                PFD_DRAW_TO_WINDOW, PFD_MAIN_PLANE, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA,
-                PIXELFORMATDESCRIPTOR, SetPixelFormat, SwapBuffers, wglCreateContext,
-                wglDeleteContext, wglGetProcAddress, wglMakeCurrent,
-            },
-        },
-        System::LibraryLoader::{GetProcAddress, LoadLibraryA},
-        UI::WindowsAndMessaging::{
-            CS_OWNDC, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-            RegisterClassW, UnregisterClassW, WNDCLASSW,
-        },
-    },
-    core::PCWSTR,
+use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CS_OWNDC, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW,
+    UnregisterClassW, WNDCLASSW,
 };
+use windows_sys::core::PCWSTR;
 
 const WGL_CONTEXT_MAJOR_VERSION_ARB: i32 = 0x2091;
 const WGL_CONTEXT_MINOR_VERSION_ARB: i32 = 0x2092;

@@ -1,23 +1,20 @@
-use crate::{
-    Exchange,
-    platform::win::{
-        util::decode_hdrop,
-        window::{WM_USER_DND_ACCEPT, WM_USER_DND_ENTER, WM_USER_DND_HOVER, WM_USER_DND_LEAVE},
-    },
+use crate::Exchange;
+use crate::platform::win::util::decode_hdrop;
+use crate::platform::win::window::{
+    WM_USER_DND_ACCEPT, WM_USER_DND_ENTER, WM_USER_DND_HOVER, WM_USER_DND_LEAVE,
 };
 use com::{IDataObject, IDropTarget, IDropTargetVtbl, IUnknown, IUnknownVtbl};
-use std::{ffi::c_void, mem::zeroed, ptr::null_mut, sync::Arc};
-use windows_sys::{
-    Win32::{
-        Foundation::{E_NOINTERFACE, HWND, POINT, S_OK},
-        System::{
-            Com::{DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL},
-            Ole::{CF_HDROP, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE},
-        },
-        UI::WindowsAndMessaging::{PostMessageW, SendMessageW},
-    },
-    core::{GUID, HRESULT},
+use std::ffi::c_void;
+use std::mem::zeroed;
+use std::ptr::null_mut;
+use std::sync::Arc;
+use windows_sys::Win32::Foundation::{E_NOINTERFACE, HWND, POINT, S_OK};
+use windows_sys::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL};
+use windows_sys::Win32::System::Ole::{
+    CF_HDROP, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, SendMessageW};
+use windows_sys::core::{GUID, HRESULT};
 
 #[repr(C)]
 pub struct DropTargetImpl {
@@ -175,13 +172,9 @@ impl DropTargetImpl {
 
 mod com {
     use std::ffi::c_void;
-    use windows_sys::{
-        Win32::{
-            Foundation::POINT,
-            System::Com::{FORMATETC, STGMEDIUM},
-        },
-        core::{GUID, HRESULT},
-    };
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::System::Com::{FORMATETC, STGMEDIUM};
+    use windows_sys::core::{GUID, HRESULT};
 
     pub type IUnknown = *mut c_void;
 
