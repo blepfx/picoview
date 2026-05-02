@@ -5,79 +5,42 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    name: Build on ${{ matrix.os }}
     env:
       RUSTFLAGS: -Dwarnings
       RUSTDOCFLAGS: -Dwarnings
       RUST_BACKTRACE: 1
       DISPLAY: :99
     steps:
-    - uses: actions/checkout@v6
-    - name: Install X11 and GL dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev libxi-dev xvfb x11-utils
-    - name: Start Xvfb
-      run: |
-        sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
-    - name: Install rust nightly
-      uses: dtolnay/rust-toolchain@nightly
+    - uses: actions/checkout@v6 
+    - uses: actions/cache@v5
       with:
-        toolchain: nightly
-        components: rustfmt, clippy, rust-src
-    - name: Build
-      run: cargo build --workspace --all-targets --all-features
-    - name: Check Docs
-      run: cargo doc --examples --all-features --no-deps
-    - name: Clippy
-      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-    - name: Check Formatting
-      run: cargo fmt --all -- --check
-    - name: Run Tests (ASAN)
-      run: RUSTFLAGS="-Zsanitizer=address" cargo test -p picoview -Zbuild-std --tests --target x86_64-unknown-linux-gnu
-    - name: Run Tests (TSAN)
-      run: RUSTFLAGS="-Zsanitizer=thread" cargo test -p picoview -Zbuild-std --tests --target x86_64-unknown-linux-gnu
-
-  build-macos:
-    runs-on: macos-latest
-    env:
-      RUSTFLAGS: -Dwarnings
-      RUSTDOCFLAGS: -Dwarnings
-      RUST_BACKTRACE: 1
-    steps:
-    - uses: actions/checkout@v6
-    - name: Install rust nightly
-      uses: dtolnay/rust-toolchain@nightly
-      with:
-        toolchain: nightly
-        components: rustfmt, clippy, rust-src
-    - name: Build
-      run: cargo build --workspace --all-targets --all-features
-    - name: Check Docs
-      run: cargo doc --examples --all-features --no-deps
-    - name: Clippy
-      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-    - name: Check Formatting
-      run: cargo fmt --all -- --check
-    - name: Run Tests (ASAN)
-      run: RUSTFLAGS="-Zsanitizer=address" cargo test -p picoview -Zbuild-std --tests --target aarch64-apple-darwin
-    - name: Run Tests (TSAN)
-      run: RUSTFLAGS="-Zsanitizer=thread" cargo test -p picoview -Zbuild-std --tests --target aarch64-apple-darwin
-
-  build-windows:
-    runs-on: windows-latest
-    env:
-      RUSTFLAGS: -Dwarnings # TODO: asan for windows
-      RUSTDOCFLAGS: -Dwarnings
-      RUST_BACKTRACE: 1
-    steps:
-    - uses: actions/checkout@v4
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     - name: Install rust nightly
       uses: dtolnay/rust-toolchain@nightly
       with:
         toolchain: nightly
         components: rustfmt, clippy
+    - name: Install X11 and GL dependencies
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev libxi-dev xvfb x11-utils
+    - name: Start Xvfb
+      if: runner.os == 'Linux'
+      run: |
+        sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
     - name: Build
       run: cargo build --workspace --all-targets --all-features
     - name: Run Tests
@@ -88,3 +51,9 @@ jobs:
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
     - name: Check Formatting
       run: cargo fmt --all -- --check
+    - name: Run Tests (ASAN)
+      if: runner.os != 'Windows'
+      run: RUSTFLAGS="-Zsanitizer=address" cargo test -p picoview -Zbuild-std --tests --target aarch64-apple-darwin
+    - name: Run Tests (TSAN)
+      if: runner.os != 'Windows'
+      run: RUSTFLAGS="-Zsanitizer=thread" cargo test -p picoview -Zbuild-std --tests --target aarch64-apple-darwin
