@@ -33,12 +33,12 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     - name: Install rust nightly
       uses: dtolnay/rust-toolchain@nightly
       with:
         toolchain: nightly
-        components: rustfmt, clippy
+        components: rustfmt, clippy, rust-src
     - name: Install X11 and GL dependencies
       if: runner.os == 'Linux'
       run: |
