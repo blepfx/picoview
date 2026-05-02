@@ -338,8 +338,7 @@ pub enum Event<'a> {
     /// This event may be sent multiple times before the next `WindowFrame`
     /// event.
     ///
-    /// This is a hint, you can safely ignore it and redraw the whole window if
-    /// you want.
+    /// You can ignore this event if you redraw the window continuously.
     WindowDamage {
         /// The `x` coordinate of the top-left corner of the damaged area.
         x: u32,
@@ -412,20 +411,6 @@ pub enum Event<'a> {
     KeyUp {
         /// Which key was released
         key: Key,
-
-        /// Set to `true` to indicate that the event has been handled and should
-        /// not be propagated to the parent (if this window is embedded in
-        /// another window)
-        capture: &'a mut bool,
-    },
-
-    /// The user typed a character. This takes precendence over
-    /// [`Event::KeyDown`] and [`Event::KeyUp`] events, if the event handler
-    /// does not "capture" the text event, a [`Event::KeyDown`] event will be
-    /// dispatched.
-    KeyText {
-        /// The text that was typed. This may contain multiple characters.
-        text: &'a str,
 
         /// Set to `true` to indicate that the event has been handled and should
         /// not be propagated to the parent (if this window is embedded in

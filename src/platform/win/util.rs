@@ -435,6 +435,8 @@ mod dpi {
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
     use windows_sys::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 
+    pub const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE: isize = -3;
+
     unsafe fn proc_address<A, R>(module: &CStr, function: &CStr) -> Option<unsafe fn(A) -> R> {
         unsafe {
             let lib = LoadLibraryA(module.as_ptr() as *const _);
@@ -447,24 +449,21 @@ mod dpi {
         }
     }
 
-    pub unsafe fn try_set_thread_dpi_awareness_monitor_aware() -> bool {
+    pub unsafe fn try_set_thread_dpi_awareness(awareness: isize) -> Option<isize> {
         unsafe {
-            match proc_address::<usize, usize>(c"user32.dll", c"SetThreadDpiAwarenessContext") {
-                Some(set_thread_dpi_awareness_context) => {
-                    set_thread_dpi_awareness_context(-3i32 as _); /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE */
-                    true
-                }
-                None => false,
-            }
+            Some((proc_address::<isize, isize>(
+                c"user32.dll",
+                c"SetThreadDpiAwarenessContext",
+            )?)(awareness))
         }
     }
 
-    pub unsafe fn try_get_dpi_for_window(window: HWND) -> u32 {
+    pub unsafe fn try_get_dpi_for_window(window: HWND) -> Option<u32> {
         unsafe {
-            match proc_address::<HWND, u32>(c"user32.dll", c"GetDpiForWindow") {
-                Some(get_dpi_for_window) => get_dpi_for_window(window),
-                None => USER_DEFAULT_SCREEN_DPI,
-            }
+            Some((proc_address::<HWND, u32>(
+                c"user32.dll",
+                c"GetDpiForWindow",
+            )?)(window))
         }
     }
 }

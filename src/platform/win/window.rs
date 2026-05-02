@@ -102,8 +102,6 @@ impl WindowImpl {
             let ole_result = OleInitialize(null());
             let ole_success = ole_result != OLE_E_WRONGCOMPOBJ && ole_result != RPC_E_CHANGED_MODE;
 
-            try_set_thread_dpi_awareness_monitor_aware();
-
             let class_name = to_widestring(&format!("picoview-{}", generate_guid()));
             let window_title = to_widestring(&options.title);
             let window_class = RegisterClassW(&WNDCLASSW {
@@ -167,6 +165,10 @@ impl WindowImpl {
                 }
             };
 
+            // set dpi awareness for the window (well restore it later)
+            let prev_dpi_awareness =
+                try_set_thread_dpi_awareness(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+
             let hwnd = CreateWindowExW(
                 0,
                 window_class as _,
@@ -181,6 +183,11 @@ impl WindowImpl {
                 hinstance(),
                 null(),
             );
+
+            // restore previous dpi awareness
+            if let Some(prev_dpi_awareness) = prev_dpi_awareness {
+                try_set_thread_dpi_awareness(prev_dpi_awareness);
+            }
 
             check_error(!hwnd.is_null(), "CreateWindowExW")?;
 
@@ -210,6 +217,7 @@ impl WindowImpl {
                 Some(config) => GlContext::new(hwnd, config).ok(),
                 None => None,
             };
+
             // install the keyboard hook and register our window to it, so we could capture
             // key events even when the window is not focused. keyboard hooks are shared on
             // a per-thread basis and gets deregistered when all [`KeyboardHook`] instances
@@ -274,7 +282,8 @@ impl WindowImpl {
 
             window.send_event(Event::WindowFocus { focus: true });
             window.send_event(Event::WindowScale {
-                scale: try_get_dpi_for_window(hwnd) as f32 / USER_DEFAULT_SCREEN_DPI as f32,
+                scale: try_get_dpi_for_window(hwnd)
+                    .map_or(1.0, |dpi| dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32),
             });
 
             let waker = window.waker();
@@ -580,18 +589,10 @@ unsafe extern "system" fn wnd_proc(
             WM_DPICHANGED => {
                 let dpi = (wparam & 0xFFFF) as u16 as u32;
                 let scale = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
-                let rect = &*(lparam as *const RECT);
 
-                SetWindowPos(
-                    hwnd,
-                    null_mut(),
-                    rect.left,
-                    rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-
+                // we do not resize the window here because we want to keep the _physical_ size
+                // of the window unchanged, and let the application decide how to handle DPI
+                // changes.
                 window.send_event_defer(Event::WindowScale { scale });
                 0
             }
