@@ -66,7 +66,7 @@ pub struct WindowImpl {
 
     _drop_target: Arc<DropTargetImpl>,
     keyboard_hook: Rc<KeyboardHook>,
-    vsync_callback: VSyncCallback,
+    vsync_callback: Option<VSyncCallback>,
 
     is_blocking: bool,
     is_resizable: bool,
@@ -263,9 +263,9 @@ impl WindowImpl {
 
                 _drop_target: drop_target,
                 keyboard_hook,
-                vsync_callback: VSyncCallback::new(hwnd, |hwnd| {
-                    PostMessageW(hwnd, WM_USER_VSYNC, 0, 0);
-                }),
+                vsync_callback: Some(VSyncCallback::new(hwnd, |hwnd| {
+                    SendMessageW(hwnd, WM_USER_VSYNC, 0, 0);
+                })),
             });
 
             // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so
@@ -329,6 +329,9 @@ impl Drop for WindowImpl {
     fn drop(&mut self) {
         // subsequent wakeups should fail
         self.waker.window_open.store(false, Ordering::Release);
+
+        // stop vsync thread
+        self.vsync_callback.take();
 
         // drop the handler here, so it could do clean up when the window is still alive
         self.event_handler.take();
@@ -566,12 +569,18 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_SHOWWINDOW => {
-                window.vsync_callback.notify_display_change();
+                if let Some(vsync_callback) = &window.vsync_callback {
+                    vsync_callback.notify_display_change();
+                }
+
                 0
             }
 
             WM_DISPLAYCHANGE => {
-                window.vsync_callback.notify_display_change();
+                if let Some(vsync_callback) = &window.vsync_callback {
+                    vsync_callback.notify_display_change();
+                }
+
                 0
             }
 
@@ -582,7 +591,6 @@ unsafe extern "system" fn wnd_proc(
                     size: Size { width, height },
                 });
 
-                window.vsync_callback.notify_display_change();
                 0
             }
 
