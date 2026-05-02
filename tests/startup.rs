@@ -35,7 +35,7 @@ fn test_startup_blocking_undecorated() {
     WindowBuilder::new(|window| {
         Box::new(move |event| {
             if let Event::WindowFrame { .. } = event {
-                sleep(Duration::from_millis(500));
+                sleep(Duration::from_millis(1000));
                 window.close();
             }
         })

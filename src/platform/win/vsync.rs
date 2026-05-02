@@ -1,3 +1,4 @@
+use crate::platform::win::window::WM_USER_VSYNC;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{JoinHandle, sleep};
@@ -8,23 +9,25 @@ use windows_sys::Win32::Graphics::Gdi::{
     DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR,
     MONITOR_DEFAULTTOPRIMARY, MONITORINFOEXW, MonitorFromWindow,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::SendNotifyMessageW;
 
-pub struct VSyncCallback {
+pub struct VSyncThread {
     inner: Arc<Inner>,
     thread: Option<JoinHandle<()>>,
 }
 
-impl VSyncCallback {
-    pub unsafe fn new<F: FnMut(HWND) + Send + 'static>(hwnd: HWND, callback: F) -> Self {
+impl VSyncThread {
+    pub unsafe fn new(hwnd: HWND) -> Self {
         let inner = Arc::new(Inner {
             hwnd: hwnd as usize,
             active: AtomicBool::new(true),
             notify_display_change: AtomicBool::new(true),
+            notify_frame_finished: AtomicBool::new(true),
         });
 
         let thread = std::thread::spawn({
             let inner = inner.clone();
-            move || unsafe { run_vsync_thread(inner, callback) }
+            move || unsafe { run_vsync_thread(inner) }
         });
 
         Self {
@@ -38,9 +41,15 @@ impl VSyncCallback {
             .notify_display_change
             .store(true, Ordering::Relaxed);
     }
+
+    pub fn notify_frame_finished(&self) {
+        self.inner
+            .notify_frame_finished
+            .store(true, Ordering::Relaxed);
+    }
 }
 
-impl Drop for VSyncCallback {
+impl Drop for VSyncThread {
     fn drop(&mut self) {
         self.inner.active.store(false, Ordering::Relaxed);
 
@@ -56,9 +65,10 @@ struct Inner {
     hwnd: usize,
     active: AtomicBool,
     notify_display_change: AtomicBool,
+    notify_frame_finished: AtomicBool,
 }
 
-unsafe fn run_vsync_thread<F: FnMut(HWND)>(sync: Arc<Inner>, mut callback: F) {
+unsafe fn run_vsync_thread(sync: Arc<Inner>) {
     unsafe {
         let hwnd = sync.hwnd as HWND;
         let mut fallback_next_frame = Instant::now();
@@ -76,7 +86,15 @@ unsafe fn run_vsync_thread<F: FnMut(HWND)>(sync: Arc<Inner>, mut callback: F) {
                 wait_fallback(&mut fallback_next_frame, fallback_interval);
             }
 
-            callback(hwnd);
+            // this is so we do not get overlapping messages if the window is too slow to
+            // process them (otherwise we would enter a death spiral of sending more
+            // messages than we can process)
+            if sync.notify_frame_finished.swap(false, Ordering::Relaxed) {
+                // same as SendMessage but does not block the thread
+                //
+                // does not clog the main-thread message queue
+                SendNotifyMessageW(hwnd, WM_USER_VSYNC, 0, 0);
+            }
         }
     }
 }
