@@ -433,7 +433,6 @@ mod dpi {
     use std::ffi::CStr;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
-    use windows_sys::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 
     pub const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE: isize = -3;
 
