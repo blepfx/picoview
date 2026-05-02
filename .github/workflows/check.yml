@@ -9,6 +9,13 @@ jobs:
     strategy:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     name: Build on ${{ matrix.os }}
     env:
@@ -53,7 +60,7 @@ jobs:
       run: cargo fmt --all -- --check
     - name: Run Tests (ASAN)
       if: runner.os != 'Windows'
-      run: RUSTFLAGS="-Zsanitizer=address" cargo test -p picoview -Zbuild-std --tests --target aarch64-apple-darwin
+      run: RUSTFLAGS="-Zsanitizer=address" cargo test -p picoview -Zbuild-std --tests --target ${{ matrix.target }}
     - name: Run Tests (TSAN)
       if: runner.os != 'Windows'
-      run: RUSTFLAGS="-Zsanitizer=thread" cargo test -p picoview -Zbuild-std --tests --target aarch64-apple-darwin
+      run: RUSTFLAGS="-Zsanitizer=thread" cargo test -p picoview -Zbuild-std --tests --target ${{ matrix.target }}
