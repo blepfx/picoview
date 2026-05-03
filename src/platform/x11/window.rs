@@ -425,6 +425,10 @@ impl WindowImpl {
                                 );
 
                                 if event.sourceid == event.deviceid {
+                                    self.handle_event_modifiers(keymask_to_mods(
+                                        event.mods.effective as _,
+                                    ));
+
                                     self.handle_event_motion(
                                         event.event_x as f32,
                                         event.event_y as f32,
