@@ -669,10 +669,7 @@ impl WindowImpl {
                 KeyPress | KeyRelease => {
                     let event = event.key;
 
-                    self.handle_event_modifiers(match event.type_ {
-                        KeyPress => keymask_to_mods(event.state) | keycode_to_mods(event.keycode),
-                        _ => keymask_to_mods(event.state) - keycode_to_mods(event.keycode),
-                    });
+                    self.handle_event_modifiers(keymask_to_mods(event.state));
 
                     if let Some(key) = keycode_to_key(event.keycode) {
                         let mut capture = false;

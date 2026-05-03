@@ -660,17 +660,6 @@ mod input {
         })
     }
 
-    /// Convert event key code to a set of `Modifiers` flags, if possible.
-    pub fn keycode_to_mods(code: c_uint) -> Modifiers {
-        match code {
-            0x25 | 0x69 => Modifiers::CTRL,
-            0x32 | 0x3E => Modifiers::SHIFT,
-            0x85 | 0x86 => Modifiers::META,
-            0x40 | 0x6C => Modifiers::ALT,
-            _ => Modifiers::empty(),
-        }
-    }
-
     /// Convert modifier mask to a set of `Modifiers` flags, if possible.
     pub fn keymask_to_mods(mods: c_uint) -> Modifiers {
         const MAP: &[(c_uint, Modifiers)] = &[
