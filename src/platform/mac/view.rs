@@ -612,6 +612,14 @@ impl WindowImpl {
         self.send_event_defer(Event::MouseScroll { x, y });
     }
 
+    unsafe extern "C" fn magnify_with_event(&self, _cmd: Sel, event: &NSEvent) {
+        println!("magnify: {}", event.magnification());
+    }
+
+    unsafe extern "C" fn rotate_with_event(&self, _cmd: Sel, event: &NSEvent) {
+        println!("rotate: {}", event.rotation());
+    }
+
     unsafe extern "C" fn draw_rect(&self, _cmd: Sel, rect: NSRect) {
         let frame = self.view.convertRectToBacking(rect);
         self.send_event_defer(Event::WindowDamage {
@@ -789,6 +797,14 @@ impl WindowImpl {
             builder.add_method(
                 sel!(scrollWheel:),
                 Self::scroll_wheel as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(magnifyWithEvent:),
+                Self::magnify_with_event as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(rotateWithEvent:),
+                Self::rotate_with_event as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
                 sel!(drawRect:),
