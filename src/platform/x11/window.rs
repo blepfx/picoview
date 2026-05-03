@@ -718,17 +718,11 @@ impl WindowImpl {
                 }
 
                 LeaveNotify => {
-                    const ANY_BUTTON: u32 =
-                        Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask;
-
                     let event = event.crossing;
                     self.handle_event_modifiers(keymask_to_mods(event.state));
-                    self.handle_event_motion(
-                        event.x as f32,
-                        event.y as f32,
-                        event.x_root as f32,
-                        event.y_root as f32,
-                    );
+
+                    const ANY_BUTTON: u32 =
+                        Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask;
 
                     let grabbed = (event.state & ANY_BUTTON) != 0;
                     if grabbed || self.last_cursor_position.replace(None).is_none() {
