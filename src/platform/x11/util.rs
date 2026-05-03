@@ -691,6 +691,42 @@ mod input {
         ret
     }
 
+    /// https://codebrowser.dev/gtk/include/X11/extensions/XI2.h.html
+    /// Valid only for XInput 2.4+
+    #[allow(non_upper_case_globals)]
+    pub const XI_GesturePinchBegin: i32 = 27;
+    #[allow(non_upper_case_globals)]
+    pub const XI_GesturePinchUpdate: i32 = 28;
+    #[allow(non_upper_case_globals)]
+    pub const XI_GesturePinchEnd: i32 = 29;
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct XIGesturePinchEvent {
+        pub header: XIEvent,
+
+        pub deviceid: i32,
+        pub sourceid: i32,
+        pub detail: i32,
+        pub root: Window,
+        pub event: Window,
+        pub child: Window,
+        pub root_x: f64,
+        pub root_y: f64,
+        pub event_x: f64,
+        pub event_y: f64,
+
+        pub delta_x: f64,
+        pub delta_y: f64,
+        pub delta_unaccel_x: f64,
+        pub delta_unaccel_y: f64,
+        pub scale: f64,
+        pub delta_angle: f64,
+
+        pub mods: XIModifierState,
+        pub group: XIGroupState,
+    }
+
     /// Information about the XInput2 extension.
     pub struct XI2Info {
         pub ext_opcode: c_int,
@@ -721,6 +757,8 @@ mod input {
                 {
                     None
                 } else {
+                    // announce that we support xinput 2.4
+                    XIQueryVersion(conn.display(), &mut 2, &mut 4);
                     Some(Self { ext_opcode })
                 }
             }

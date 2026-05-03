@@ -39,6 +39,7 @@ pub struct WindowImpl {
     last_window_visible: Cell<bool>,
     last_window_focused: Cell<bool>,
     last_dragdrop_state: Cell<bool>,
+    last_gesture_zoom: Cell<f32>,
 
     exchange_clipboard: RefCell<Exchange>,
     exchange_dragndrop: RefCell<Exchange>,
@@ -155,6 +156,9 @@ impl WindowImpl {
                     XISetMask(&mut mask, XI_Enter);
                     XISetMask(&mut mask, XI_Motion);
                     XISetMask(&mut mask, XI_HierarchyChanged);
+                    XISetMask(&mut mask, XI_GesturePinchBegin);
+                    XISetMask(&mut mask, XI_GesturePinchUpdate);
+                    XISetMask(&mut mask, XI_GesturePinchEnd);
                     XISelectEvents(
                         connection.display(),
                         window_id,
@@ -313,6 +317,7 @@ impl WindowImpl {
                 last_window_visible: Cell::new(options.visible),
                 last_window_focused: Cell::new(false),
                 last_dragdrop_state: Cell::new(false),
+                last_gesture_zoom: Cell::new(1.0),
 
                 exchange_clipboard: RefCell::new(Exchange::Empty),
                 exchange_dragndrop: RefCell::new(Exchange::Empty),
@@ -406,69 +411,103 @@ impl WindowImpl {
                         .as_ref()
                         .is_some_and(|info| event.extension == info.ext_opcode);
 
-                    if event.evtype == XI_Motion && is_xi2 {
+                    if is_xi2 {
                         if XGetEventData(self.connection.display(), &mut event) == 0 {
                             return;
                         }
 
-                        let event = &*(event.data as *const XIDeviceEvent);
-                        let mask = std::slice::from_raw_parts(
-                            event.valuators.mask,
-                            event.valuators.mask_len as usize,
-                        );
+                        match event.evtype {
+                            XI_Motion => {
+                                let event = &*(event.data as *const XIDeviceEvent);
+                                let mask = std::slice::from_raw_parts(
+                                    event.valuators.mask,
+                                    event.valuators.mask_len as usize,
+                                );
 
-                        if event.sourceid != event.deviceid {
-                            return; // this is a master device event
-                        }
+                                if event.sourceid == event.deviceid {
+                                    self.handle_event_motion(
+                                        event.event_x as f32,
+                                        event.event_y as f32,
+                                        event.root_x as f32,
+                                        event.root_y as f32,
+                                    );
 
-                        self.handle_event_motion(
-                            event.event_x as f32,
-                            event.event_y as f32,
-                            event.root_x as f32,
-                            event.root_y as f32,
-                        );
+                                    let mut scroll_x = 0.0;
+                                    let mut scroll_y = 0.0;
 
-                        let mut scroll_x = 0.0;
-                        let mut scroll_y = 0.0;
+                                    let mut values = event.valuators.values;
+                                    for i in 0..event.valuators.mask_len * 8 {
+                                        if !XIMaskIsSet(mask, i) {
+                                            continue;
+                                        }
 
-                        let mut values = event.valuators.values;
-                        for i in 0..event.valuators.mask_len * 8 {
-                            if !XIMaskIsSet(mask, i) {
-                                continue;
-                            }
+                                        let value = {
+                                            let value = *values;
+                                            values = values.offset(1);
+                                            value
+                                        };
 
-                            let value = {
-                                let value = *values;
-                                values = values.offset(1);
-                                value
-                            };
+                                        if let Some(axis) =
+                                            self.xi2_axes.borrow_mut().iter_mut().find(|axis| {
+                                                axis.source_id == event.sourceid
+                                                    && axis.valuator == i
+                                            })
+                                        {
+                                            let delta = axis.track_position(value);
+                                            if axis.is_horizontal {
+                                                scroll_x += delta;
+                                            } else {
+                                                scroll_y += delta;
+                                            }
+                                        }
+                                    }
 
-                            if let Some(axis) =
-                                self.xi2_axes.borrow_mut().iter_mut().find(|axis| {
-                                    axis.source_id == event.sourceid && axis.valuator == i
-                                })
-                            {
-                                let delta = axis.track_position(value);
-                                if axis.is_horizontal {
-                                    scroll_x += delta;
-                                } else {
-                                    scroll_y += delta;
+                                    if scroll_x != 0.0 || scroll_y != 0.0 {
+                                        self.send_event(Event::MouseScroll {
+                                            x: scroll_x as f32,
+                                            y: scroll_y as f32,
+                                        });
+                                    }
                                 }
                             }
+
+                            XI_Enter => {
+                                for device in self.xi2_axes.borrow_mut().iter_mut() {
+                                    device.reset_position(&self.connection);
+                                }
+                            }
+
+                            XI_HierarchyChanged => {
+                                self.xi2_axes.replace(XI2DeviceAxis::list(&self.connection));
+                            }
+
+                            XI_GesturePinchBegin | XI_GesturePinchUpdate | XI_GesturePinchEnd => {
+                                let event = &*(event.data as *const XIGesturePinchEvent);
+
+                                if event.header.evtype == XI_GesturePinchBegin {
+                                    self.last_gesture_zoom.set(1.0);
+                                }
+
+                                let new_zoom = event.scale as f32;
+                                let old_zoom = self.last_gesture_zoom.replace(new_zoom);
+
+                                if new_zoom != old_zoom {
+                                    self.send_event(Event::GestureZoom {
+                                        scale: new_zoom / old_zoom,
+                                    });
+                                }
+
+                                if event.delta_angle != 0.0 {
+                                    self.send_event(Event::GestureRotate {
+                                        angle: event.delta_angle as f32,
+                                    });
+                                }
+                            }
+
+                            _ => {}
                         }
 
-                        if scroll_x != 0.0 || scroll_y != 0.0 {
-                            self.send_event(Event::MouseScroll {
-                                x: scroll_x as f32,
-                                y: scroll_y as f32,
-                            });
-                        }
-                    } else if event.evtype == XI_Enter {
-                        for device in self.xi2_axes.borrow_mut().iter_mut() {
-                            device.reset_position(&self.connection);
-                        }
-                    } else if event.evtype == XI_HierarchyChanged {
-                        self.xi2_axes.replace(XI2DeviceAxis::list(&self.connection));
+                        XFreeEventData(self.connection.display(), &mut event);
                     }
                 }
 

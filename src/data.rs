@@ -396,6 +396,21 @@ pub enum Event<'a> {
         modifiers: Modifiers,
     },
 
+    /// A rotation gesture was performed (for example, a two-finger rotation on
+    /// a touchpad).
+    GestureRotate {
+        /// The rotation angle delta in degrees (positive clockwise)
+        angle: f32,
+    },
+
+    /// A zoom gesture was performed (for example, a two-finger pinch on a
+    /// touchpad).
+    GestureZoom {
+        /// The zoom scale multiplicative delta (>1 means zooming in, <1 means
+        /// zooming out)
+        scale: f32,
+    },
+
     /// A key was pressed.
     KeyDown {
         /// Which key was pressed
