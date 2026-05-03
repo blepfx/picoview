@@ -1,5 +1,5 @@
 use crate::Exchange;
-use crate::platform::win::util::decode_hdrop;
+use crate::platform::win::util::{decode_hdrop, from_widestring};
 use crate::platform::win::window::{
     WM_USER_DND_ACCEPT, WM_USER_DND_ENTER, WM_USER_DND_HOVER, WM_USER_DND_LEAVE,
 };
@@ -10,8 +10,9 @@ use std::ptr::null_mut;
 use std::sync::Arc;
 use windows_sys::Win32::Foundation::{E_NOINTERFACE, HWND, POINT, S_OK};
 use windows_sys::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL};
+use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Ole::{
-    CF_HDROP, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE,
+    CF_HDROP, CF_UNICODETEXT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, ReleaseStgMedium,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, SendMessageW};
 use windows_sys::core::{GUID, HRESULT};
@@ -151,18 +152,42 @@ impl DropTargetImpl {
 
     pub unsafe fn decode_data_object(data: *mut IDataObject) -> Exchange {
         unsafe {
-            let mut medium = STGMEDIUM { ..zeroed() };
-            let format = FORMATETC {
-                cfFormat: CF_HDROP,
-                dwAspect: DVASPECT_CONTENT,
-                tymed: TYMED_HGLOBAL as _,
-                ptd: null_mut(),
-                lindex: -1,
-            };
+            // check if the data object is an HDROP (list of files)
+            {
+                let mut medium = STGMEDIUM { ..zeroed() };
+                let format = FORMATETC {
+                    cfFormat: CF_HDROP,
+                    dwAspect: DVASPECT_CONTENT,
+                    tymed: TYMED_HGLOBAL as _,
+                    ptd: null_mut(),
+                    lindex: -1,
+                };
 
-            if ((*(*data).vtbl).get_data)(data, &format, &mut medium) == S_OK {
-                let files = decode_hdrop(medium.u.hGlobal);
-                return Exchange::Files(files);
+                if ((*(*data).vtbl).get_data)(data, &format, &mut medium) == S_OK {
+                    let files = decode_hdrop(medium.u.hGlobal);
+
+                    return Exchange::Files(files);
+                }
+            }
+
+            // check if the data object is text
+            {
+                let mut medium = STGMEDIUM { ..zeroed() };
+                let format = FORMATETC {
+                    cfFormat: CF_UNICODETEXT,
+                    dwAspect: DVASPECT_CONTENT,
+                    tymed: TYMED_HGLOBAL as _,
+                    ptd: null_mut(),
+                    lindex: -1,
+                };
+
+                if ((*(*data).vtbl).get_data)(data, &format, &mut medium) == S_OK {
+                    let text = GlobalLock(medium.u.hGlobal);
+                    let text = from_widestring(text as *const u16);
+                    GlobalUnlock(medium.u.hGlobal);
+                    ReleaseStgMedium(&mut medium);
+                    return Exchange::Text(text);
+                }
             }
 
             Exchange::Empty

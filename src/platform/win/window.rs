@@ -32,7 +32,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 /// Sent by Vsync thread, triggers [`Event::WindowFrame`] event
 pub const WM_USER_VSYNC: u32 = WM_USER + 1;
-/// Sent by [`PlatformWindow::close`] and received in the event loop, closes the
+/// Sent by [`PlatformWindow::close`] and received in the wnd_proc, closes the
 /// window
 pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
 /// Sent by the [`KeyboardHook`] when a key event is captured
@@ -42,6 +42,8 @@ pub const WM_USER_KEY_DOWN: u32 = WM_USER + 3;
 pub const WM_USER_KEY_UP: u32 = WM_USER + 4;
 /// Sent by [`WindowWakerImpl::wakeup`] to wake up the event loop
 pub const WM_USER_WAKEUP: u32 = WM_USER + 5;
+/// Sent by [`DropTargetImpl`] when a drop enters the window, triggers
+/// [`Event::DragEnter`] event.
 pub const WM_USER_DND_ENTER: u32 = WM_USER + 6;
 /// Sent by [`DropTargetImpl`] when a drop hovers over the window, triggers
 /// [`Event::DragMove`] event.
