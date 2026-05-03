@@ -17,7 +17,8 @@ use objc2_app_kit::{
     NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
     NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSScreen, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowDelegate,
-    NSWindowDidResignKeyNotification, NSWindowOrderingMode, NSWindowStyleMask,
+    NSWindowDidChangeOcclusionStateNotification, NSWindowDidResignKeyNotification,
+    NSWindowOcclusionState, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_core_graphics::CGWarpMouseCursorPosition;
@@ -251,16 +252,25 @@ impl WindowImpl {
             view.view.registerForDraggedTypes(&dragged_types);
             view.view.setPostsFrameChangedNotifications(true);
 
-            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
-                &view.view,
-                sel!(windowDidResignKeyNotification:),
-                Some(NSWindowDidResignKeyNotification),
-                None,
-            );
+            if is_embedded {
+                NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                    &view.view,
+                    sel!(windowDidResignKey:),
+                    Some(NSWindowDidResignKeyNotification),
+                    None,
+                );
+
+                NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                    &view.view,
+                    sel!(windowDidChangeOcclusionState:),
+                    Some(NSWindowDidChangeOcclusionStateNotification),
+                    None,
+                );
+            }
 
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
                 &view.view,
-                sel!(viewFrameDidChangeNotification:),
+                sel!(viewFrameDidChange:),
                 Some(NSViewFrameDidChangeNotification),
                 None,
             );
@@ -458,11 +468,11 @@ impl WindowImpl {
 // objective c class stuff
 impl WindowImpl {
     // NSView
-    unsafe extern "C" fn init_with_frame(&self, _cmd: Sel, rect: NSRect) -> Option<&Self> {
+    unsafe extern "C" fn init_with_frame(&self, _: Sel, rect: NSRect) -> Option<&Self> {
         unsafe { msg_send![super(self, NSView::class()), initWithFrame: rect] }
     }
 
-    unsafe extern "C" fn dealloc(&self, _cmd: Sel) {
+    unsafe extern "C" fn dealloc(&self, _: Sel) {
         unsafe {
             let class = self.view.class();
 
@@ -504,9 +514,42 @@ impl WindowImpl {
         self.set_size(self.current_size.replace(Size::default()));
     }
 
+    unsafe extern "C" fn window_should_close(&self, _: Sel, _: Option<&AnyObject>) -> Bool {
+        self.send_event_defer(Event::WindowClose);
+        Bool::NO
+    }
+
+    unsafe extern "C" fn window_did_move(&self, _: Sel, _: Option<&AnyObject>) {
+        if let Some(window) = self.own_window() {
+            let position = window.frame().origin;
+            self.send_event_defer(Event::WindowMove {
+                point: Point {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                },
+            });
+        }
+    }
+
+    unsafe extern "C" fn window_did_resign_key(&self, _: Sel, _notif: &NSNotification) {
+        if let Some(window) = self.view.window() {
+            window.makeFirstResponder(None);
+        }
+    }
+
+    unsafe extern "C" fn window_did_change_occlusion_state(&self, _: Sel, _: &NSNotification) {
+        if let Some(window) = self.view.window() {
+            let occluded = !window
+                .occlusionState()
+                .contains(NSWindowOcclusionState::Visible);
+
+            self.send_event_defer(Event::WindowOccluded { occluded });
+        }
+    }
+
     unsafe extern "C" fn view_frame_did_change_notification(
         &self,
-        _cmd: Sel,
+        _: Sel,
         _notif: &NSNotification,
     ) {
         let logical = self.view.frame();
@@ -525,44 +568,39 @@ impl WindowImpl {
         });
     }
 
-    unsafe extern "C" fn window_should_close(&self, _cmd: Sel, _: Option<&AnyObject>) -> Bool {
-        self.send_event_defer(Event::WindowClose);
-        Bool::NO
-    }
-
-    unsafe extern "C" fn accepts_first_mouse(&self, _cmd: Sel, _event: &NSEvent) -> Bool {
+    unsafe extern "C" fn accepts_first_mouse(&self, _: Sel, _event: &NSEvent) -> Bool {
         Bool::YES
     }
 
-    unsafe extern "C" fn accepts_first_responder(&self, _cmd: Sel) -> Bool {
+    unsafe extern "C" fn accepts_first_responder(&self, _: Sel) -> Bool {
         Bool::YES
     }
 
-    unsafe extern "C" fn become_first_responder(&self, _cmd: Sel) -> Bool {
+    unsafe extern "C" fn become_first_responder(&self, _: Sel) -> Bool {
         self.send_event_defer(Event::WindowFocus { focus: true });
         Bool::YES
     }
 
-    unsafe extern "C" fn resign_first_responder(&self, _cmd: Sel) -> Bool {
+    unsafe extern "C" fn resign_first_responder(&self, _: Sel) -> Bool {
         self.send_event_defer(Event::WindowFocus { focus: false });
         Bool::YES
     }
 
-    unsafe extern "C" fn is_flipped(&self, _cmd: Sel) -> Bool {
+    unsafe extern "C" fn is_flipped(&self, _: Sel) -> Bool {
         Bool::YES
     }
 
-    unsafe extern "C" fn flags_changed(&self, _cmd: Sel, event: &NSEvent) {
+    unsafe extern "C" fn flags_changed(&self, _: Sel, event: &NSEvent) {
         self.send_event_defer(Event::KeyModifiers {
             modifiers: flags_to_modifiers((*event).modifierFlags()),
         });
     }
 
-    unsafe extern "C" fn mouse_moved(&self, _cmd: Sel, event: &NSEvent) {
+    unsafe extern "C" fn mouse_moved(&self, _: Sel, event: &NSEvent) {
         self.send_event_mouse_move(event.locationInWindow());
     }
 
-    unsafe extern "C" fn mouse_down(&self, _cmd: Sel, event: &NSEvent) {
+    unsafe extern "C" fn mouse_down(&self, _: Sel, event: &NSEvent) {
         if let Some(window) = self.view.window() {
             window.makeFirstResponder(Some(&self.view));
         }
@@ -580,7 +618,7 @@ impl WindowImpl {
         });
     }
 
-    unsafe extern "C" fn mouse_up(&self, _cmd: Sel, event: &NSEvent) {
+    unsafe extern "C" fn mouse_up(&self, _: Sel, event: &NSEvent) {
         self.send_event_mouse_move(event.locationInWindow());
         self.send_event_defer(Event::MouseUp {
             button: match (*event).buttonNumber() {
@@ -594,12 +632,12 @@ impl WindowImpl {
         });
     }
 
-    unsafe extern "C" fn mouse_exited(&self, _cmd: Sel, event: &NSEvent) {
+    unsafe extern "C" fn mouse_exited(&self, _: Sel, event: &NSEvent) {
         self.send_event_mouse_move(event.locationInWindow());
         self.send_event_defer(Event::MouseLeave);
     }
 
-    unsafe extern "C" fn scroll_wheel(&self, _cmd: Sel, event: &NSEvent) {
+    unsafe extern "C" fn scroll_wheel(&self, _: Sel, event: &NSEvent) {
         let mut x = -event.scrollingDeltaX() as f32;
         let mut y = event.scrollingDeltaY() as f32;
 
@@ -612,15 +650,15 @@ impl WindowImpl {
         self.send_event_defer(Event::MouseScroll { x, y });
     }
 
-    unsafe extern "C" fn magnify_with_event(&self, _cmd: Sel, event: &NSEvent) {
+    unsafe extern "C" fn magnify_with_event(&self, _: Sel, event: &NSEvent) {
         println!("magnify: {}", event.magnification());
     }
 
-    unsafe extern "C" fn rotate_with_event(&self, _cmd: Sel, event: &NSEvent) {
+    unsafe extern "C" fn rotate_with_event(&self, _: Sel, event: &NSEvent) {
         println!("rotate: {}", event.rotation());
     }
 
-    unsafe extern "C" fn draw_rect(&self, _cmd: Sel, rect: NSRect) {
+    unsafe extern "C" fn draw_rect(&self, _: Sel, rect: NSRect) {
         let frame = self.view.convertRectToBacking(rect);
         self.send_event_defer(Event::WindowDamage {
             x: frame.origin.x.floor() as u32,
@@ -630,28 +668,18 @@ impl WindowImpl {
         });
     }
 
-    unsafe extern "C" fn wakeup(&self, _cmd: Sel) {
+    unsafe extern "C" fn wakeup(&self, _: Sel) {
         self.send_event_defer(Event::Wakeup);
     }
 
-    unsafe extern "C" fn window_did_resign_key_notification(
-        &self,
-        _cmd: Sel,
-        _notif: &NSNotification,
-    ) {
-        if let Some(window) = self.view.window() {
-            window.makeFirstResponder(None);
-        }
-    }
-
     // NSDraggingDestination
-    unsafe extern "C" fn wants_periodic_dragging_updates(&self, _cmd: Sel) -> Bool {
+    unsafe extern "C" fn wants_periodic_dragging_updates(&self, _: Sel) -> Bool {
         Bool::YES
     }
 
     unsafe extern "C" fn dragging_entered(
         &self,
-        _cmd: Sel,
+        _: Sel,
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
         let data = get_pasteboard(&info.draggingPasteboard());
@@ -662,7 +690,7 @@ impl WindowImpl {
 
     unsafe extern "C" fn dragging_updated(
         &self,
-        _cmd: Sel,
+        _: Sel,
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
         let point = self.convert_point_to_picoview(info.draggingLocation());
@@ -672,7 +700,7 @@ impl WindowImpl {
 
     unsafe extern "C" fn dragging_exited(
         &self,
-        _cmd: Sel,
+        _: Sel,
         _sender: &ProtocolObject<dyn NSDraggingInfo>,
     ) {
         self.send_event_defer(Event::DragLeave);
@@ -680,7 +708,7 @@ impl WindowImpl {
 
     unsafe extern "C" fn prepare_for_drag_operation(
         &self,
-        _cmd: Sel,
+        _: Sel,
         _sender: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> Bool {
         Bool::YES
@@ -688,7 +716,7 @@ impl WindowImpl {
 
     unsafe extern "C" fn perform_drag_operation(
         &self,
-        _cmd: Sel,
+        _: Sel,
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> Bool {
         let point = self.convert_point_to_picoview(info.draggingLocation());
@@ -817,19 +845,29 @@ impl WindowImpl {
                 Self::wakeup as unsafe extern "C" fn(_, _) -> _,
             );
 
-            // NSWindowDelegate methods
+            // NSWindowDelegate methods &  NSNotification handlers
             builder.add_method(
                 sel!(windowShouldClose:),
                 Self::window_should_close as unsafe extern "C" fn(_, _, _) -> _,
             );
-
-            // NSNotification handlers
             builder.add_method(
-                sel!(windowDidResignKeyNotification:),
-                Self::window_did_resign_key_notification as unsafe extern "C" fn(_, _, _) -> _,
+                sel!(windowDidResize:),
+                Self::window_did_move as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
-                sel!(viewFrameDidChangeNotification:),
+                sel!(windowDidMove:),
+                Self::window_did_move as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(windowDidResignKey:),
+                Self::window_did_resign_key as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(windowDidChangeOcclusionState:),
+                Self::window_did_change_occlusion_state as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(viewFrameDidChange:),
                 Self::view_frame_did_change_notification as unsafe extern "C" fn(_, _, _) -> _,
             );
 
@@ -880,6 +918,7 @@ impl PlatformWindow for WindowImpl {
         }
 
         if let Some(window) = self.own_window() {
+            window.setDelegate(None);
             window.close();
         }
 

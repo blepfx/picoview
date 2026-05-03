@@ -125,8 +125,11 @@ impl GlContext {
 
     /// in logical pixels, not backing pixels
     pub fn resize(&self, width: f64, height: f64) {
-        self.view.setFrameSize(NSSize { width, height });
         self.view.setNeedsDisplay(true);
+        self.view.setFrameSize(NSSize {
+            width: width.max(1.0),
+            height: height.max(1.0),
+        });
     }
 }
 

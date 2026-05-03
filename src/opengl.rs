@@ -105,6 +105,11 @@ impl<'a> GlContext<'a> {
     }
 
     /// Swap the front and back buffers if double buffering is enabled
+    ///
+    /// # Notes
+    ///
+    /// It might be a good idea to skip drawing if the window has a size of 0
+    /// (some drivers do not handle this well).
     pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         self.0.swap_buffers()
     }

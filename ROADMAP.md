@@ -21,10 +21,11 @@
 |  - `WindowClose`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowFocus`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowScale`                                      | :ok:     | :ok:     | :ok:[^1] | Medium   |
-|  - `WindowMove`                                       | :ok:     | :x:      | :ok:     | Low      |
+|  - `WindowMove`                                       | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowResize`                                     | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowFrame`                                      | :ok:     | :ok:     | :ok:     | High     |
 |  - `WindowDamage`                                     | :ok:     | :ok:     | :ok:     | Medium   |
+|  - `WindowOccluded`                                   | :x:      | :ok:     | :x:      | Low      |
 | Clipboard                                             |          |          |          |          |
 |  - Copy Text                                          | :ok:     | :ok:     | :ok:     | High     |
 |  - Paste Text                                         | :ok:     | :ok:     | :ok:     | High     |
@@ -38,8 +39,8 @@
 | Event loop wakeup                                     | :ok:     | :ok:     | :ok:     | High     |
 | Vertical blank synchronization                        | :ok:[^2] | :ok:     | :o:[^3]  | High     |
 | OpenGL context creation                               | :ok:     | :ok:     | :ok:     | High     |
-| Pixel scaling abstraction                             | :ok:     | :x:      | :ok:     | High     |
-| Set position                                          | :ok:     | :x:      | :ok:     | Medium   |
+| Pixel scaling abstraction                             | :ok:     | :ok:     | :ok:     | High     |
+| Set position                                          | :ok:     | :ok:     | :ok:     | Medium   |
 | Set size                                              | :ok:     | :ok:     | :ok:     | High     |
 | User resizable                                        | :ok:     | :ok:     | :ok:     | High     |
 | Set title                                             | :ok:     | :ok:     | :ok:     | Medium   |

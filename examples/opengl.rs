@@ -3,7 +3,7 @@ use std::mem::transmute;
 
 fn main() {
     WindowBuilder::new(|window| {
-        // we just rawdogging opengl here lol
+        // we just rawdogging opengl here lol           
         let gl = window.opengl().expect("failed to get OpenGL context");
         let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
             unsafe { transmute(gl.get_proc_address(c"glClearColor")) };

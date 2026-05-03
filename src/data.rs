@@ -293,9 +293,20 @@ pub enum Event<'a> {
     WindowClose,
 
     /// The window gained or lost focus.
+    ///
+    /// By default, assume that the window is not focused.
     WindowFocus {
         /// `true` if the window gained focus, `false` if it lost focus
         focus: bool,
+    },
+
+    /// The window was occluded or unoccluded (for example, by another
+    /// window or by minimizing).
+    ///
+    /// By default, assume that the window is not occluded.
+    WindowOccluded {
+        /// `true` if the window is now _fully_ occluded, `false` otherwise
+        occluded: bool,
     },
 
     /// The window scale factor changed (for example, when moved to a different

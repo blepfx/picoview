@@ -2,7 +2,7 @@ use picoview::{Event, Key, MouseCursor, Point, WindowBuilder};
 
 fn main() {
     WindowBuilder::new(|window| {
-        let child = WindowBuilder::new(|window| {
+        WindowBuilder::new(|window| {
             Box::new(move |event| {
                 if let Event::KeyDown { key, capture } = event {
                     if key == Key::Enter {
@@ -12,7 +12,7 @@ fn main() {
                         window.close();
                     }
                 } else if !matches!(event, Event::WindowFrame) {
-                    println!("child {:?}", event);
+                    println!("l {:?}", event);
                 }
             })
         })
@@ -20,14 +20,23 @@ fn main() {
         .open_embedded(window)
         .expect("failed to open a child window");
 
-        child.wakeup().unwrap();
+        WindowBuilder::new(|_| {
+            Box::new(move |event| {
+                if !matches!(event, Event::WindowFrame) {
+                    println!("r {:?}", event);
+                }
+            })
+        })
+        .with_size((200, 200))
+        .with_position((200, 0))
+        .open_embedded(window)
+        .expect("failed to open a child window");
 
         Box::new(move |event| match event {
             Event::WindowFrame => {}
 
             // you have to handle WindowClose explicitly to close the window
             Event::WindowClose => {
-                println!("{:?}", event);
                 window.close();
             }
 
@@ -39,11 +48,11 @@ fn main() {
                     window.set_cursor_icon(MouseCursor::Default);
                 }
 
-                println!("{:?}", event);
+                println!("m {:?}", event);
             }
 
             _ => {
-                println!("{:?}", event);
+                println!("m {:?}", event);
             }
         })
     })
