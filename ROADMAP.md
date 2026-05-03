@@ -16,6 +16,8 @@
 |  - `KeyUp`                                            | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyDown`                                          | :ok:     | :ok:     | :ok:     | High     |
 |  - `KeyModifiers`                                     | :ok:     | :ok:     | :ok:     | High     |
+|  - `GestureZoom`                                      | :x:      | :ok:     | :ok:     | Low      |
+|  - `GestureRotate`                                    | :x:      | :ok:     | :ok:     | Low      |
 |  - `WindowClose`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowFocus`                                      | :ok:     | :ok:     | :ok:     | Low      |
 |  - `WindowScale`                                      | :ok:     | :ok:     | :ok:[^1] | Medium   |
