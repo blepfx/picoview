@@ -57,16 +57,16 @@ bitflags! {
     /// Key modifier flags that are tracked separately from key events
     #[derive(Clone, Copy, Eq, PartialEq, Debug)]
     pub struct Modifiers: u16 {
-        /// Alt key (right or left)
+        /// Alt key (Option key on Mac)
         const ALT = 1 << 0;
 
-        /// Control key (right or left)
+        /// Control key (Command key on Mac)
         const CTRL = 1 << 1;
 
-        /// Meta key (or Windows key)
+        /// Meta key (Control key on Mac)
         const META = 1 << 2;
 
-        /// Shift key (right or left)
+        /// Shift key
         const SHIFT = 1 << 3;
 
         /// Scroll lock active

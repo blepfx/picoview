@@ -1,4 +1,4 @@
-use picoview::{Event, Key, MouseCursor, Point, WindowBuilder};
+use picoview::{Event, Key, MouseButton, MouseCursor, Point, WindowBuilder};
 
 fn main() {
     WindowBuilder::new(|window| {
@@ -18,6 +18,12 @@ fn main() {
                         *capture = true;
                         window.close();
                     }
+                }
+
+                Event::MouseDown {
+                    button: MouseButton::Right,
+                } => {
+                    window.set_position((1000, 200));
                 }
 
                 _ => {

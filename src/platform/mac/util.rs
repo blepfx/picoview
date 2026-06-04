@@ -115,8 +115,8 @@ mod keyboard {
     pub fn flags_to_modifiers(flags: NSEventModifierFlags) -> Modifiers {
         const MODMAP: &[(NSEventModifierFlags, Modifiers)] = &[
             (NSEventModifierFlags::CapsLock, Modifiers::CAPS_LOCK),
-            (NSEventModifierFlags::Command, Modifiers::META),
-            (NSEventModifierFlags::Control, Modifiers::CTRL),
+            (NSEventModifierFlags::Command, Modifiers::CTRL),
+            (NSEventModifierFlags::Control, Modifiers::META),
             (NSEventModifierFlags::Option, Modifiers::ALT),
             (NSEventModifierFlags::Shift, Modifiers::SHIFT),
         ];
