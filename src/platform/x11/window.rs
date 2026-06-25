@@ -272,7 +272,7 @@ impl WindowImpl {
                 refresh_interval,
                 dpi_scale,
 
-                last_modifiers: Cell::new(Modifiers::empty()),
+                last_modifiers: Cell::new(Modifiers::default()),
                 last_cursor_icon: Cell::new(MouseCursor::Default),
                 last_cursor_position: Cell::new(None),
                 last_window_position: Cell::new(None),

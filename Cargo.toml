@@ -9,7 +9,6 @@ keywords = ["windowing"]
 authors = ["blep <blep@amee.ee>", "DRACONIUM <hello@murl.digital>"] # @murl-digital change if needed
 
 [dependencies]
-bitflags = "2"
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os="linux")'.dependencies]

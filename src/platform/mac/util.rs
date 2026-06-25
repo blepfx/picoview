@@ -113,22 +113,15 @@ mod keyboard {
     use objc2_app_kit::NSEventModifierFlags;
 
     pub fn flags_to_modifiers(flags: NSEventModifierFlags) -> Modifiers {
-        const MODMAP: &[(NSEventModifierFlags, Modifiers)] = &[
-            (NSEventModifierFlags::CapsLock, Modifiers::CAPS_LOCK),
-            (NSEventModifierFlags::Command, Modifiers::CTRL),
-            (NSEventModifierFlags::Control, Modifiers::META),
-            (NSEventModifierFlags::Option, Modifiers::ALT),
-            (NSEventModifierFlags::Shift, Modifiers::SHIFT),
-        ];
-
-        let mut modifiers = Modifiers::empty();
-        for (flag, modifier) in MODMAP {
-            if flags.contains(*flag) {
-                modifiers.insert(*modifier);
-            }
+        Modifiers {
+            shift: flags.contains(NSEventModifierFlags::Shift),
+            ctrl: flags.contains(NSEventModifierFlags::Command),
+            alt: flags.contains(NSEventModifierFlags::Option),
+            meta: flags.contains(NSEventModifierFlags::Control),
+            caps_lock: flags.contains(NSEventModifierFlags::CapsLock),
+            num_lock: flags.contains(NSEventModifierFlags::NumericPad),
+            scroll_lock: false,
         }
-
-        modifiers
     }
 
     pub fn keycode_to_key(key: u16) -> Option<Key> {

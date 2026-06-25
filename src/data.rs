@@ -1,4 +1,3 @@
-use bitflags::bitflags;
 use std::path::PathBuf;
 
 #[allow(unused_imports)] // docs
@@ -56,31 +55,23 @@ pub enum MouseCursor {
     RowResize,
 }
 
-bitflags! {
-    /// Key modifier flags that are tracked separately from key events
-    #[derive(Clone, Copy, Eq, PartialEq, Debug)]
-    pub struct Modifiers: u16 {
-        /// Alt key (Option key on Mac)
-        const ALT = 1 << 0;
-
-        /// Control key (Command key on Mac)
-        const CTRL = 1 << 1;
-
-        /// Meta key (Control key on Mac)
-        const META = 1 << 2;
-
-        /// Shift key
-        const SHIFT = 1 << 3;
-
-        /// Scroll lock active
-        const SCROLL_LOCK = 1 << 4;
-
-        /// Num lock active
-        const NUM_LOCK = 1 << 5;
-
-        /// Caps lock active
-        const CAPS_LOCK = 1 << 6;
-    }
+/// Key modifier flags that are tracked separately from key events
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Modifiers {
+    /// Alt key is held down (Option key on Mac)
+    pub alt: bool,
+    /// Control key is held down (Command key on Mac)
+    pub ctrl: bool,
+    /// Meta key is held down (Control key on Mac)
+    pub meta: bool,
+    /// Shift key is held down
+    pub shift: bool,
+    /// Scroll lock is active
+    pub scroll_lock: bool,
+    /// Num lock is active
+    pub num_lock: bool,
+    /// Caps lock is active
+    pub caps_lock: bool,
 }
 
 /// A fractional point in physical pixels with top-left origin

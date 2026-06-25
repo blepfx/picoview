@@ -75,38 +75,26 @@ mod keyboard {
     use crate::{Key, Modifiers};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 
-    const KEY_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
-        (VK_SHIFT, Modifiers::SHIFT),
-        (VK_CONTROL, Modifiers::CTRL),
-        (VK_MENU, Modifiers::ALT),
-        (VK_LWIN, Modifiers::META),
-        (VK_RWIN, Modifiers::META),
-    ];
-
-    const TOGGLE_MODIFIERS: &[(VIRTUAL_KEY, Modifiers)] = &[
-        (VK_CAPITAL, Modifiers::CAPS_LOCK),
-        (VK_NUMLOCK, Modifiers::NUM_LOCK),
-        (VK_SCROLL, Modifiers::SCROLL_LOCK),
-    ];
-
     pub unsafe fn get_modifiers() -> Modifiers {
-        let mut state = Modifiers::empty();
-
-        unsafe {
-            for &(key, mods) in KEY_MODIFIERS {
-                if GetKeyState(key as _) & !0x1 != 0 {
-                    state.insert(mods);
-                }
-            }
-
-            for &(key, mods) in TOGGLE_MODIFIERS {
-                if GetKeyState(key as _) & 0x1 != 0 {
-                    state.insert(mods);
-                }
-            }
+        fn is_held(key: VIRTUAL_KEY) -> bool {
+            unsafe { GetKeyState(key as _) & !0x1 != 0 }
         }
 
-        state
+        fn is_toggled(key: VIRTUAL_KEY) -> bool {
+            unsafe { GetKeyState(key as _) & 0x1 != 0 }
+        }
+
+        unsafe {
+            Modifiers {
+                shift: is_held(VK_SHIFT),
+                ctrl: is_held(VK_CONTROL),
+                alt: is_held(VK_MENU),
+                meta: is_held(VK_LWIN) || is_held(VK_RWIN),
+                caps_lock: is_toggled(VK_CAPITAL),
+                num_lock: is_toggled(VK_NUMLOCK),
+                scroll_lock: is_toggled(VK_SCROLL),
+            }
+        }
     }
 
     pub fn scan_code_to_key(scan_code: u32) -> Option<Key> {

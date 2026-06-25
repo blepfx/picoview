@@ -662,22 +662,15 @@ mod input {
 
     /// Convert modifier mask to a set of `Modifiers` flags, if possible.
     pub fn keymask_to_mods(mods: c_uint) -> Modifiers {
-        const MAP: &[(c_uint, Modifiers)] = &[
-            (ShiftMask, Modifiers::SHIFT),
-            (ControlMask, Modifiers::CTRL),
-            (Mod1Mask, Modifiers::ALT),
-            (Mod4Mask, Modifiers::META),
-            (Mod2Mask, Modifiers::NUM_LOCK),
-            (LockMask, Modifiers::CAPS_LOCK),
-        ];
-
-        let mut ret = Modifiers::empty();
-        for (mask, modifiers) in MAP {
-            if (mods & *mask) != 0 {
-                ret |= *modifiers;
-            }
+        Modifiers {
+            alt: (mods & Mod1Mask) != 0,
+            ctrl: (mods & ControlMask) != 0,
+            shift: (mods & ShiftMask) != 0,
+            meta: (mods & Mod4Mask) != 0,
+            num_lock: (mods & Mod2Mask) != 0,
+            caps_lock: (mods & LockMask) != 0,
+            scroll_lock: (mods & Mod5Mask) != 0,
         }
-        ret
     }
 
     /// https://codebrowser.dev/gtk/include/X11/extensions/XI2.h.html
