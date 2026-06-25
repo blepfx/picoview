@@ -209,7 +209,7 @@ impl WindowImpl {
                 }),
 
                 state_dpi_scale: Cell::new(
-                    try_get_dpi_for_window(hwnd).map_or(USER_DEFAULT_SCREEN_DPI, |dpi| dpi),
+                    try_get_dpi_for_window(hwnd).unwrap_or(USER_DEFAULT_SCREEN_DPI),
                 ),
                 state_mouse_capture: Cell::new(0),
                 state_current_cursor: Cell::new(cursor_cache.get_closest(MouseCursor::Default)),
