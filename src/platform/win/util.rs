@@ -84,16 +84,14 @@ mod keyboard {
             unsafe { GetKeyState(key as _) & 0x1 != 0 }
         }
 
-        unsafe {
-            Modifiers {
-                shift: is_held(VK_SHIFT),
-                ctrl: is_held(VK_CONTROL),
-                alt: is_held(VK_MENU),
-                meta: is_held(VK_LWIN) || is_held(VK_RWIN),
-                caps_lock: is_toggled(VK_CAPITAL),
-                num_lock: is_toggled(VK_NUMLOCK),
-                scroll_lock: is_toggled(VK_SCROLL),
-            }
+        Modifiers {
+            shift: is_held(VK_SHIFT),
+            ctrl: is_held(VK_CONTROL),
+            alt: is_held(VK_MENU),
+            meta: is_held(VK_LWIN) || is_held(VK_RWIN),
+            caps_lock: is_toggled(VK_CAPITAL),
+            num_lock: is_toggled(VK_NUMLOCK),
+            scroll_lock: is_toggled(VK_SCROLL),
         }
     }
 

@@ -213,7 +213,7 @@ impl WindowImpl {
                 ),
                 state_mouse_capture: Cell::new(0),
                 state_current_cursor: Cell::new(cursor_cache.get_closest(MouseCursor::Default)),
-                state_current_modifiers: Cell::new(Modifiers::empty()),
+                state_current_modifiers: Cell::new(Modifiers::default()),
                 state_focused: Cell::new(true),
                 state_min_size: Cell::new(POINT { x: 0, y: 0 }),
                 state_max_size: Cell::new(POINT {
