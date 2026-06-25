@@ -16,6 +16,10 @@ impl GainPluginGui {
         parent: clack_extensions::gui::Window<'_>,
     ) -> Result<(), PluginError> {
         WindowBuilder::new(|window| {
+            window.set_title("Gain Plugin");
+            window.set_size((400, 200));
+            window.set_visible(true);
+
             let gl = window.opengl().expect("failed to get OpenGL context");
             let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
                 unsafe { std::mem::transmute(gl.get_proc_address(c"glClearColor")) };
@@ -49,7 +53,6 @@ impl GainPluginGui {
             })
         })
         .with_opengl(GlConfig::default())
-        .with_size((400, 200))
         .open_embedded(parent)
         .unwrap();
 

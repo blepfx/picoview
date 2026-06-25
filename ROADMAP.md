@@ -60,6 +60,5 @@
 ## Known issues
 - MacOS:
     - Window/event/size positioning is all over the place due to differences in coordinate systems.
-    - Needed an API to create a `Size` from os-dependent units for proper interoperation with VST3/CLAP APIs
 - Windows:
     - Some cursor icons are not supported, fallbacks used.

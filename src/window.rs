@@ -3,7 +3,6 @@ use crate::{
     platform, rwh_06,
 };
 use std::fmt::Debug;
-use std::ops::Range;
 use std::sync::Arc;
 
 // the reason this is a box is because making this with traits is extremely
@@ -21,29 +20,20 @@ pub type WindowFactory =
     Box<dyn for<'a> FnOnce(Window<'a>) -> Box<dyn FnMut(Event) + 'a> + Send + 'static>;
 
 /// A builder for opening new windows.
+///
+/// By default, a window has a size of 0, invisible, resizable, decorated, not
+/// transparent, and has a default position.
+///
+/// To set the size, position, and visibility of the window, you must call the
+/// corresponding methods on the [`Window`] object once the window is created.
 #[non_exhaustive]
 #[must_use = "`WindowBuilder` does nothing until you call one of the open methods"]
 pub struct WindowBuilder {
-    /// Whether the window is initially visible
-    pub visible: bool,
-
     /// Whether the window has decorations (title bar, borders, etc)
     pub decorations: bool,
 
     /// Whether the window client area is transparent (premultiplied alpha)
     pub transparent: bool,
-
-    /// The window title
-    pub title: String,
-
-    /// The initial window size in physical pixels
-    pub size: Size,
-
-    /// The minimum and maximum size of the window if resizable
-    pub resizable: Option<Range<Size>>,
-
-    /// The initial window position in physical pixels
-    pub position: Option<Point>,
 
     /// The requested OpenGL configuration for the window, if any
     pub opengl: Option<GlConfig>,
@@ -98,9 +88,42 @@ impl<'a> Window<'a> {
         self.0.set_cursor_position(pos.into());
     }
 
-    /// Set the window size (size of client area) in physical pixels.
+    /// Get the current scale factor of the window, which is the ratio of
+    /// physical pixels to logical pixels.
+    ///
+    /// For example, a scale factor of 2.0 means that 1 logical pixel is equal
+    /// to 2 physical pixels.
+    ///
+    /// This is a hint, and it is safe to ignore it and use physical pixels
+    /// instead. However, some platforms use logical pixels for everything
+    /// so this might be useful for interfacing with other libraries that expect
+    /// logical pixels.
+    ///
+    /// Another reason to use the provided scale factor is more consistent user
+    /// experience between different platforms/configurations/applications.
+    ///
+    /// If changed, a [`Event::WindowScale`] will be emitted.
+    pub fn get_scale(&self) -> f64 {
+        self.0.get_scale()
+    }
+
+    /// Set the size of the client area in physical pixels.
     pub fn set_size(&self, size: impl Into<Size>) {
         self.0.set_size(size.into());
+    }
+
+    /// Sets the minimum size of the window in physical pixels.
+    ///
+    /// Used to restrict the user from resizing the window below a certain size.
+    pub fn set_min_size(&self, min: impl Into<Size>) {
+        self.0.set_min_size(min.into());
+    }
+
+    /// Sets the maximum size of the window in physical pixels.
+    ///
+    /// Used to restrict the user from resizing the window above a certain size.
+    pub fn set_max_size(&self, max: impl Into<Size>) {
+        self.0.set_max_size(max.into());
     }
 
     /// Set the window position (position of client area) in physical pixels
@@ -166,18 +189,8 @@ impl WindowBuilder {
         factory: impl for<'a> FnOnce(Window<'a>) -> Box<dyn FnMut(Event) + 'a> + Send + 'static,
     ) -> Self {
         Self {
-            visible: true,
             decorations: true,
             transparent: false,
-            title: String::new(),
-
-            resizable: None,
-            size: Size {
-                width: 200,
-                height: 200,
-            },
-
-            position: None,
             opengl: None,
             factory: Box::new(factory),
         }
@@ -203,57 +216,10 @@ impl WindowBuilder {
         }
     }
 
-    /// Set whether the window is visible upon creation
-    ///
-    /// `true` by default
-    pub fn with_visible(self, visible: bool) -> Self {
-        Self { visible, ..self }
-    }
-
-    /// Set the initial window title
-    pub fn with_title(self, title: impl ToString) -> Self {
-        Self {
-            title: title.to_string(),
-            ..self
-        }
-    }
-
-    /// Set the initial window size _in physical pixels_
-    pub fn with_size(self, size: impl Into<Size>) -> Self {
-        Self {
-            size: size.into(),
-            ..self
-        }
-    }
-
     /// Set the OpenGL configuration for the window, if any
     pub fn with_opengl(self, config: GlConfig) -> Self {
         Self {
             opengl: Some(config),
-            ..self
-        }
-    }
-
-    /// Set the initial window position relative to the origin.
-    ///
-    /// If not specified, the window will be centered on the screen or parent
-    /// window (or positioned at 0, 0 if embedded)
-    ///
-    /// See [`Window::set_position`] for details on coordinate system.
-    pub fn with_position(self, position: impl Into<Point>) -> Self {
-        Self {
-            position: Some(position.into()),
-            ..self
-        }
-    }
-
-    /// Set the minimum and maximum resizable size of the window
-    ///
-    /// If not set, the window will not be resizable by the user and can only be
-    /// resized via [`Window::set_size`].
-    pub fn with_resizable(self, min: impl Into<Size>, max: impl Into<Size>) -> Self {
-        Self {
-            resizable: Some(min.into()..max.into()),
             ..self
         }
     }
@@ -337,12 +303,7 @@ impl<'a> Debug for Window<'a> {
 impl Debug for WindowBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowBuilder")
-            .field("visible", &self.visible)
             .field("decorations", &self.decorations)
-            .field("title", &self.title)
-            .field("size", &self.size)
-            .field("resizable", &self.resizable)
-            .field("position", &self.position)
             .field("opengl", &self.opengl)
             .finish_non_exhaustive()
     }

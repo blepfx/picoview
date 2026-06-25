@@ -16,6 +16,11 @@ fn main() {
 
 fn test_startup_blocking() {
     WindowBuilder::new(|window| {
+        window.set_title("picoview test - blocking");
+        window.set_size((512, 256));
+        window.set_position((100, 200));
+        window.set_visible(true);
+
         Box::new(move |event| {
             if let Event::WindowFrame { .. } = event {
                 sleep(Duration::from_millis(500));
@@ -23,16 +28,17 @@ fn test_startup_blocking() {
             }
         })
     })
-    .with_size((512, 256))
-    .with_position((100, 200))
-    .with_visible(true)
-    .with_title("picoview test - blocking")
     .open_blocking()
     .unwrap();
 }
 
 fn test_startup_blocking_undecorated() {
     WindowBuilder::new(|window| {
+        window.set_title("picoview test - blocking undecorated");
+        window.set_size((512, 256));
+        window.set_position((100, 200));
+        window.set_visible(true);
+
         Box::new(move |event| {
             if let Event::WindowFrame { .. } = event {
                 sleep(Duration::from_millis(1000));
@@ -40,27 +46,32 @@ fn test_startup_blocking_undecorated() {
             }
         })
     })
-    .with_size((512, 256))
-    .with_position((100, 200))
-    .with_visible(true)
     .with_decorations(false)
-    .with_title("picoview test - blocking undecorated")
     .open_blocking()
     .unwrap();
 }
 
 fn test_startup_transient() {
     WindowBuilder::new(|window| {
-        let mut frames = 0;
+        window.set_title("picoview test - transient");
+        window.set_size((512, 256));
+        window.set_position((100, 200));
+        window.set_visible(true);
 
+        let mut frames = 0;
         Box::new(move |event| {
             if let Event::WindowFrame { .. } = event {
                 if frames == 0 {
-                    WindowBuilder::new(|_| Box::new(move |_| {}))
-                        .with_position((256, 0))
-                        .with_size((256, 256))
-                        .open_transient(window)
-                        .unwrap();
+                    WindowBuilder::new(|window| {
+                        window.set_title("picoview test - transient child");
+                        window.set_size((256, 256));
+                        window.set_position((256, 0));
+                        window.set_visible(true);
+
+                        Box::new(move |_| {})
+                    })
+                    .open_transient(window)
+                    .unwrap();
                 }
 
                 if frames > 10 {
@@ -71,37 +82,45 @@ fn test_startup_transient() {
             }
         })
     })
-    .with_size((512, 256))
-    .with_position((100, 200))
-    .with_visible(true)
-    .with_title("picoview test - transient")
     .open_blocking()
     .unwrap();
 }
 
 fn test_startup_embedded() {
     WindowBuilder::new(|window| {
-        let mut frames = 0;
+        window.set_title("picoview test - embed");
+        window.set_size((512, 256));
+        window.set_position((100, 200));
+        window.set_visible(true);
 
+        let mut frames = 0;
         Box::new(move |event| {
             if let Event::WindowFrame { .. } = event {
                 if frames == 0 {
                     WindowBuilder::new(|window| {
+                        window.set_title("picoview test - embed child (self close)");
+                        window.set_size((256, 256));
+                        window.set_visible(true);
+
                         Box::new(move |event| {
                             if let Event::WindowFrame { .. } = event {
                                 window.close();
                             }
                         })
                     })
-                    .with_size((256, 256))
                     .open_embedded(window)
                     .unwrap();
 
-                    WindowBuilder::new(|_| Box::new(move |_| {}))
-                        .with_position((256, 0))
-                        .with_size((256, 256))
-                        .open_embedded(window)
-                        .unwrap();
+                    WindowBuilder::new(|window| {
+                        window.set_title("picoview test - embed child (no close)");
+                        window.set_position((256, 0));
+                        window.set_size((256, 256));
+                        window.set_visible(true);
+
+                        Box::new(move |_| {})
+                    })
+                    .open_embedded(window)
+                    .unwrap();
                 }
 
                 if frames > 10 {
@@ -112,10 +131,6 @@ fn test_startup_embedded() {
             }
         })
     })
-    .with_size((512, 256))
-    .with_position((100, 200))
-    .with_visible(true)
-    .with_title("picoview test - embed")
     .open_blocking()
     .unwrap();
 }

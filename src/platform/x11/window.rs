@@ -25,21 +25,24 @@ pub struct WindowImpl {
 
     connection: Connection,
     waker: Arc<WindowWakerImpl>,
+
     refresh_interval: Duration,
+    dpi_scale: f64,
 
     is_closed: Cell<bool>,
     is_destroyed: Cell<bool>,
-    is_resizable: bool,
 
     last_modifiers: Cell<Modifiers>,
     last_cursor_icon: Cell<MouseCursor>,
     last_cursor_position: Cell<Option<(Point, Point)>>, // (relative, absolute)
     last_window_position: Cell<Option<Point>>,
     last_window_size: Cell<Option<Size>>,
+    last_window_min_size: Cell<Size>,
+    last_window_max_size: Cell<Size>,
     last_window_visible: Cell<bool>,
     last_window_focused: Cell<bool>,
     last_dragdrop_state: Cell<bool>,
-    last_gesture_zoom: Cell<f32>,
+    last_gesture_zoom: Cell<f64>,
 
     exchange_clipboard: RefCell<Exchange>,
     exchange_dragndrop: RefCell<Exchange>,
@@ -112,8 +115,8 @@ impl WindowImpl {
                 },
                 0,
                 0,
-                options.size.width as _,
-                options.size.height as _,
+                200,
+                200,
                 0,
                 visual_info.depth,
                 InputOutput as u32,
@@ -191,42 +194,6 @@ impl WindowImpl {
                 );
             }
 
-            // resize stuff
-            {
-                let (min_size, max_size) = match options.resizable.clone() {
-                    None => (options.size, options.size),
-                    Some(range) => (range.start, range.end),
-                };
-
-                XSetWMNormalHints(
-                    connection.display(),
-                    window_id,
-                    &mut XSizeHints {
-                        flags: PMinSize | PMaxSize | PSize,
-                        width: options.size.width.try_into().unwrap_or(i32::MAX),
-                        height: options.size.height.try_into().unwrap_or(i32::MAX),
-                        min_width: min_size.width.try_into().unwrap_or(i32::MAX),
-                        min_height: min_size.height.try_into().unwrap_or(i32::MAX),
-                        max_width: max_size.width.try_into().unwrap_or(i32::MAX),
-                        max_height: max_size.height.try_into().unwrap_or(i32::MAX),
-                        ..zeroed()
-                    },
-                );
-            }
-
-            // window title stuff
-            {
-                let title = CString::new(options.title)
-                    .map_err(|e| WindowError::Platform(e.to_string()))?;
-                let mut text = XTextProperty { ..zeroed() };
-                let status =
-                    XStringListToTextProperty(&mut (title.as_ptr() as *mut _), 1, &mut text);
-                if status != 0 {
-                    XSetWMName(connection.display(), window_id, &mut text);
-                    XFree(text.value as *mut _);
-                }
-            }
-
             // decoration stuff
             {
                 let data: [u32; 1] = [if options.decorations {
@@ -260,23 +227,6 @@ impl WindowImpl {
                 );
             }
 
-            if options.visible {
-                XMapWindow(connection.display(), window_id);
-            }
-
-            if let Some(position) = options.position {
-                XConfigureWindow(
-                    connection.display(),
-                    window_id,
-                    (CWX | CWY) as _,
-                    &mut XWindowChanges {
-                        x: position.x as i32,
-                        y: position.y as i32,
-                        ..zeroed()
-                    },
-                );
-            }
-
             let gl_context = if let Some(config) = options.opengl {
                 GlContext::new(
                     connection.clone(),
@@ -291,6 +241,7 @@ impl WindowImpl {
 
             let refresh_interval =
                 Duration::from_secs_f64(1.0 / query_refresh_rate(&connection).unwrap_or(60.0));
+            let dpi_scale = query_scale_dpi(&connection).unwrap_or(96.0) / 96.0;
 
             XSync(connection.display(), 0);
             connection.last_error().map_err(WindowError::Platform)?;
@@ -306,15 +257,17 @@ impl WindowImpl {
 
                 is_closed: Cell::new(false),
                 is_destroyed: Cell::new(false),
-                is_resizable: options.resizable.is_some(),
                 refresh_interval,
+                dpi_scale,
 
                 last_modifiers: Cell::new(Modifiers::empty()),
                 last_cursor_icon: Cell::new(MouseCursor::Default),
                 last_cursor_position: Cell::new(None),
                 last_window_position: Cell::new(None),
                 last_window_size: Cell::new(None),
-                last_window_visible: Cell::new(options.visible),
+                last_window_min_size: Cell::new(Size::MIN),
+                last_window_max_size: Cell::new(Size::MAX),
+                last_window_visible: Cell::new(false),
                 last_window_focused: Cell::new(false),
                 last_dragdrop_state: Cell::new(false),
                 last_gesture_zoom: Cell::new(1.0),
@@ -360,10 +313,6 @@ impl WindowImpl {
             //    different thread (as that would violate the handler's !Send requirement)
             self.handler
                 .replace(Some((factory)(Window(&*(&*self as *const Self)))));
-
-            if let Some(dpi) = query_scale_dpi(&self.connection) {
-                self.send_event(Event::WindowScale { scale: dpi / 96.0 });
-            }
 
             // main loop
             let mut next_frame = Instant::now();
@@ -430,10 +379,10 @@ impl WindowImpl {
                                     ));
 
                                     self.handle_event_motion(
-                                        event.event_x as f32,
-                                        event.event_y as f32,
-                                        event.root_x as f32,
-                                        event.root_y as f32,
+                                        event.event_x,
+                                        event.event_y,
+                                        event.root_x,
+                                        event.root_y,
                                     );
 
                                     let mut scroll_x = 0.0;
@@ -468,8 +417,8 @@ impl WindowImpl {
 
                                     if scroll_x != 0.0 || scroll_y != 0.0 {
                                         self.send_event(Event::MouseScroll {
-                                            x: scroll_x as f32,
-                                            y: scroll_y as f32,
+                                            x: scroll_x,
+                                            y: scroll_y,
                                         });
                                     }
                                 }
@@ -492,7 +441,7 @@ impl WindowImpl {
                                     self.last_gesture_zoom.set(1.0);
                                 }
 
-                                let new_zoom = event.scale as f32;
+                                let new_zoom = event.scale;
                                 let old_zoom = self.last_gesture_zoom.replace(new_zoom);
 
                                 if new_zoom != old_zoom {
@@ -503,7 +452,7 @@ impl WindowImpl {
 
                                 if event.delta_angle != 0.0 {
                                     self.send_event(Event::GestureRotate {
-                                        angle: event.delta_angle as f32,
+                                        angle: event.delta_angle,
                                     });
                                 }
                             }
@@ -543,8 +492,8 @@ impl WindowImpl {
                         };
 
                         let point = Point {
-                            x: x as f32 - origin.x,
-                            y: y as f32 - origin.y,
+                            x: x as f64 - origin.x,
+                            y: y as f64 - origin.y,
                         };
 
                         if !self.last_dragdrop_state.replace(true) {
@@ -662,10 +611,10 @@ impl WindowImpl {
 
                     self.handle_event_modifiers(keymask_to_mods(event.state));
                     self.handle_event_motion(
-                        event.x as f32,
-                        event.y as f32,
-                        event.x_root as f32,
-                        event.y_root as f32,
+                        event.x as f64,
+                        event.y as f64,
+                        event.x_root as f64,
+                        event.y_root as f64,
                     );
                     self.send_event(result);
                 }
@@ -714,10 +663,10 @@ impl WindowImpl {
                     let event = event.motion;
                     self.handle_event_modifiers(keymask_to_mods(event.state));
                     self.handle_event_motion(
-                        event.x as f32,
-                        event.y as f32,
-                        event.x_root as f32,
-                        event.y_root as f32,
+                        event.x as f64,
+                        event.y as f64,
+                        event.x_root as f64,
+                        event.y_root as f64,
                     );
                 }
 
@@ -855,7 +804,7 @@ impl WindowImpl {
         }
     }
 
-    fn handle_event_motion(&self, x: f32, y: f32, x_root: f32, y_root: f32) {
+    fn handle_event_motion(&self, x: f64, y: f64, x_root: f64, y_root: f64) {
         let relative = Point { x, y };
         let absolute = Point {
             x: x_root,
@@ -1001,6 +950,10 @@ impl PlatformWindow for WindowImpl {
         }
     }
 
+    fn get_scale(&self) -> f64 {
+        self.dpi_scale
+    }
+
     fn set_size(&self, size: Size) {
         if self.is_closed.get() || self.last_window_size.replace(Some(size)) == Some(size) {
             return;
@@ -1012,34 +965,6 @@ impl PlatformWindow for WindowImpl {
         );
 
         unsafe {
-            if self.is_resizable {
-                XSetWMNormalHints(
-                    self.connection.display(),
-                    self.window_id,
-                    &mut XSizeHints {
-                        flags: PSize,
-                        width,
-                        height,
-                        ..zeroed()
-                    },
-                );
-            } else {
-                XSetWMNormalHints(
-                    self.connection.display(),
-                    self.window_id,
-                    &mut XSizeHints {
-                        flags: PSize | PMaxSize | PMinSize,
-                        width,
-                        height,
-                        max_width: width,
-                        max_height: height,
-                        min_width: width,
-                        min_height: height,
-                        ..zeroed()
-                    },
-                );
-            }
-
             XConfigureWindow(
                 self.connection.display(),
                 self.window_id,
@@ -1050,6 +975,50 @@ impl PlatformWindow for WindowImpl {
                     ..zeroed()
                 },
             );
+        }
+    }
+
+    fn set_min_size(&self, size: Size) {
+        if self.is_closed.get() || self.last_window_min_size.replace(size) == size {
+            return;
+        }
+
+        let (min_width, min_height) = (
+            size.width.try_into().unwrap_or(i32::MAX),
+            size.height.try_into().unwrap_or(i32::MAX),
+        );
+
+        unsafe {
+            let mut hints = XSizeHints {
+                flags: PMinSize,
+                min_width,
+                min_height,
+                ..zeroed()
+            };
+
+            XSetWMNormalHints(self.connection.display(), self.window_id, &mut hints);
+        }
+    }
+
+    fn set_max_size(&self, size: Size) {
+        if self.is_closed.get() || self.last_window_max_size.replace(size) == size {
+            return;
+        }
+
+        let (max_width, max_height) = (
+            size.width.try_into().unwrap_or(i32::MAX),
+            size.height.try_into().unwrap_or(i32::MAX),
+        );
+
+        unsafe {
+            let mut hints = XSizeHints {
+                flags: PMaxSize,
+                max_width,
+                max_height,
+                ..zeroed()
+            };
+
+            XSetWMNormalHints(self.connection.display(), self.window_id, &mut hints);
         }
     }
 

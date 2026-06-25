@@ -24,6 +24,11 @@ fn main() {
             height: 200,
         };
 
+        window.set_max_size((1000, 1000));
+        window.set_size(size);
+        window.set_title("OpenGL Example");
+        window.set_visible(true);
+
         Box::new(move |event| match event {
             Event::WindowFrame => unsafe {
                 gl.make_current(true).unwrap();
@@ -83,13 +88,10 @@ fn main() {
             event => println!("{:?}", event),
         })
     })
-    .with_title("OpenGL Example")
     .with_opengl(GlConfig {
         version: GlVersion::Compat(2, 1),
         ..Default::default()
     })
-    .with_size((200, 200))
-    .with_resizable((0, 0), (1000, 1000))
     .with_transparency(true)
     .open_blocking()
     .expect("failed to open a window");

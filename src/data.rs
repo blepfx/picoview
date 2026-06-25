@@ -1,6 +1,9 @@
 use bitflags::bitflags;
 use std::path::PathBuf;
 
+#[allow(unused_imports)] // docs
+use crate::*;
+
 /// A mouse cursor icon that is predefined by the platform.
 ///
 /// Not all platforms support all cursor types, in which case a closest matching
@@ -81,13 +84,13 @@ bitflags! {
 }
 
 /// A fractional point in physical pixels with top-left origin
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub struct Point {
     /// The x coordinate
-    pub x: f32,
+    pub x: f64,
 
     /// The y coordinate
-    pub y: f32,
+    pub y: f64,
 }
 
 /// Integer size in physical pixels
@@ -100,6 +103,28 @@ pub struct Size {
     pub height: u32,
 }
 
+impl Size {
+    /// Minimum possible size (0, 0)
+    pub const MIN: Self = Self {
+        width: 0,
+        height: 0,
+    };
+
+    /// Maximum possible size
+    pub const MAX: Self = Self {
+        width: u32::MAX,
+        height: u32::MAX,
+    };
+
+    /// Create a new [`Size`] from logical pixels and a scale factor.
+    pub fn from_logical(width: f64, height: f64, scale: f64) -> Self {
+        Self {
+            width: (width * scale).round() as u32,
+            height: (height * scale).round() as u32,
+        }
+    }
+}
+
 impl From<(u32, u32)> for Size {
     fn from((width, height): (u32, u32)) -> Self {
         Self { width, height }
@@ -109,16 +134,36 @@ impl From<(u32, u32)> for Size {
 impl From<(u32, u32)> for Point {
     fn from((x, y): (u32, u32)) -> Self {
         Self {
-            x: x as f32,
-            y: y as f32,
+            x: x as f64,
+            y: y as f64,
         }
     }
 }
 
-impl From<(f32, f32)> for Point {
-    fn from((x, y): (f32, f32)) -> Self {
+impl From<(f64, f64)> for Point {
+    fn from((x, y): (f64, f64)) -> Self {
         Self { x, y }
     }
+}
+
+/// A window geometry, including scale factor, size, and position.
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
+pub struct Geometry {
+    /// Logical/physical scale of the operating system.
+    pub scale: f64,
+
+    /// Size of the window's client area in physical pixels.
+    pub inner_size: Size,
+    /// Size of the window's outer area in physical pixels, including title bar
+    /// and borders.
+    pub outer_size: Size,
+
+    /// Position of the window's client area in physical pixels relative to the
+    /// origin of the screen.
+    pub inner_position: Point,
+    /// Position of the window's outer area in physical pixels relative to the
+    /// origin of the screen.
+    pub outer_position: Point,
 }
 
 /// A mouse button.
@@ -282,14 +327,14 @@ pub enum Exchange {
 #[non_exhaustive]
 pub enum Event<'a> {
     /// A wakeup event triggered by a call to
-    /// [`WindowWaker::wakeup`](`crate::WindowWaker::wakeup`)
+    /// [`WindowWaker::wakeup`]
     Wakeup,
 
     /// User requested to close the window (by clicking the close button, or
     /// pressing Alt+F4, etc)
     ///
     /// To actually close the window, you have to call
-    /// [`Window::close`](`crate::Window::close`).
+    /// [`Window::close`].
     WindowClose,
 
     /// The window gained or lost focus.
@@ -318,8 +363,8 @@ pub enum Event<'a> {
     /// Does not affect the coordinate system of positions and sizes, which are
     /// always in physical pixels.
     WindowScale {
-        /// The new scale factor
-        scale: f32,
+        /// The new scale factor of the window
+        scale: f64,
     },
 
     /// The window was resized.
@@ -332,7 +377,7 @@ pub enum Event<'a> {
     WindowMove {
         /// The new position of the window relative to the origin.
         ///
-        /// See [`Window::set_position`](`crate::Window::set_position`) for
+        /// See [`Window::set_position`] for
         /// details on coordinate system.
         point: Point,
     },
@@ -395,10 +440,10 @@ pub enum Event<'a> {
     /// platforms.
     MouseScroll {
         /// The amount scrolled in the horizontal direction (positive right)
-        x: f32,
+        x: f64,
 
         /// The amount scrolled in the vertical direction (positive down)
-        y: f32,
+        y: f64,
     },
 
     /// The state of the modifier keys (Shift, Ctrl, Alt, etc.) changed.
@@ -411,7 +456,7 @@ pub enum Event<'a> {
     /// a touchpad).
     GestureRotate {
         /// The rotation angle delta in degrees (positive clockwise)
-        angle: f32,
+        angle: f64,
     },
 
     /// A zoom gesture was performed (for example, a two-finger pinch on a
@@ -419,7 +464,7 @@ pub enum Event<'a> {
     GestureZoom {
         /// The zoom scale multiplicative delta (>1 means zooming in, <1 means
         /// zooming out)
-        scale: f32,
+        scale: f64,
     },
 
     /// A key was pressed.

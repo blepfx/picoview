@@ -73,8 +73,8 @@ pub fn window_position(conn: &Connection, window_id: c_ulong) -> Option<Point> {
 
     if status != 0 {
         Some(Point {
-            x: x as f32,
-            y: y as f32,
+            x: x as f64,
+            y: y as f64,
         })
     } else {
         None
@@ -847,7 +847,7 @@ mod info {
     use x11::xrandr::*;
 
     /// Get the DPI scaling factor from X resources, if available.
-    pub fn query_scale_dpi(conn: &Connection) -> Option<f32> {
+    pub fn query_scale_dpi(conn: &Connection) -> Option<f64> {
         unsafe {
             let rms = XResourceManagerString(conn.display());
             if rms.is_null() {
@@ -879,7 +879,7 @@ mod info {
             }
 
             let string = CStr::from_ptr(value.addr).to_string_lossy();
-            let Ok(value) = f32::from_str(&string) else {
+            let Ok(value) = f64::from_str(&string) else {
                 XrmDestroyDatabase(db);
                 return None;
             };

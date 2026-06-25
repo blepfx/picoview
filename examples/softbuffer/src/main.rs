@@ -4,6 +4,11 @@ use std::num::NonZero;
 
 fn main() {
     WindowBuilder::new(|window| {
+        window.set_title("Softbuffer Example");
+        window.set_size((600, 600));
+        window.set_max_size((1000, 1000));
+        window.set_visible(true);
+
         let context = Context::new(window).unwrap();
         let mut surface = Surface::new(&context, window).unwrap();
         let mut damage = true;
@@ -63,9 +68,6 @@ fn main() {
             _ => {}
         })
     })
-    .with_title("Softbuffer Example")
-    .with_size((600, 600))
-    .with_resizable((0, 0), (1000, 1000))
     .with_transparency(true)
     .open_blocking()
     .unwrap();

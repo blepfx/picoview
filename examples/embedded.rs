@@ -2,7 +2,15 @@ use picoview::{Event, Key, MouseCursor, Point, WindowBuilder};
 
 fn main() {
     WindowBuilder::new(|window| {
+        window.set_title("picoview test - embed");
+        window.set_size((400, 200));
+        window.set_position((1000, 100));
+        window.set_visible(true);
+
         WindowBuilder::new(|window| {
+            window.set_size((200, 200));
+            window.set_visible(true);
+
             Box::new(move |event| {
                 if let Event::KeyDown { key, capture } = event {
                     if key == Key::Enter {
@@ -16,19 +24,20 @@ fn main() {
                 }
             })
         })
-        .with_size((200, 200))
         .open_embedded(window)
         .expect("failed to open a child window");
 
-        WindowBuilder::new(|_| {
+        WindowBuilder::new(|window| {
+            window.set_size((200, 200));
+            window.set_position((200, 0));
+            window.set_visible(true);
+
             Box::new(move |event| {
                 if !matches!(event, Event::WindowFrame) {
                     println!("r {:?}", event);
                 }
             })
         })
-        .with_size((200, 200))
-        .with_position((200, 0))
         .open_embedded(window)
         .expect("failed to open a child window");
 
@@ -56,9 +65,6 @@ fn main() {
             }
         })
     })
-    .with_title("picoview - embedded")
-    .with_size((400, 200))
-    .with_position((1000, 100))
     .open_blocking()
     .expect("failed to open a window");
 

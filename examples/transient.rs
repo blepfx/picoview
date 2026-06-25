@@ -2,7 +2,15 @@ use picoview::{Event, Key, MouseButton, MouseCursor, Point, WindowBuilder};
 
 fn main() {
     WindowBuilder::new(|window| {
+        window.set_title("picoview test - transient");
+        window.set_size((400, 200));
+        window.set_position((100, 200));
+        window.set_visible(true);
+
         let child = WindowBuilder::new(|window| {
+            window.set_size((200, 200));
+            window.set_visible(true);
+
             Box::new(move |event| match event {
                 Event::WindowFrame => {}
 
@@ -31,7 +39,6 @@ fn main() {
                 }
             })
         })
-        .with_size((200, 200))
         .open_transient(window)
         .expect("failed to open a child window");
 
@@ -62,9 +69,6 @@ fn main() {
             }
         })
     })
-    .with_title("picoview - transient")
-    .with_size((400, 200))
-    .with_position((1000, 100))
     .open_blocking()
     .expect("failed to open a window");
 
