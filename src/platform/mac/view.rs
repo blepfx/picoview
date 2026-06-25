@@ -15,7 +15,7 @@ use objc2::{
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
     NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
-    NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSScreen, NSTrackingArea,
+    NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowDelegate,
     NSWindowDidChangeOcclusionStateNotification, NSWindowDidResignKeyNotification,
     NSWindowOcclusionState, NSWindowOrderingMode, NSWindowStyleMask,
@@ -89,12 +89,14 @@ impl WindowImpl {
                 app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
                 let window = Self::create_window(&options, main_thread)?;
-                let view = Self::create_view(options, Some(app.clone()), false, main_thread)?;
+                let view = Self::create_view(&options, Some(app.clone()), false, main_thread)?;
 
                 window.setContentView(Some(&view.view));
                 window.makeFirstResponder(Some(&view.view));
                 window.setReleasedWhenClosed(true);
                 window.setDelegate(Some(view.as_ns_window_delegate()));
+
+                WindowImpl::init_handler(&view, options.factory);
 
                 app.run();
                 Ok(WindowWaker::default())
@@ -109,11 +111,13 @@ impl WindowImpl {
                 };
 
                 let window = Self::create_window(&options, main_thread)?;
-                let view = Self::create_view(options, None, false, main_thread)?;
+                let view = Self::create_view(&options, None, false, main_thread)?;
 
                 window.setContentView(Some(&view.view));
                 window.makeFirstResponder(Some(&view.view));
                 window.setDelegate(Some(view.as_ns_window_delegate()));
+
+                WindowImpl::init_handler(&view, options.factory);
 
                 if let Some(parent_window) = (*parent_view).window() {
                     parent_window.addChildWindow_ordered(&window, NSWindowOrderingMode::Above);
@@ -125,13 +129,15 @@ impl WindowImpl {
             OpenMode::Embedded(parent) => unsafe {
                 let parent_view = match parent {
                     rwh_06::RawWindowHandle::AppKit(window) => {
-                        window.ns_view.as_ptr() as *mut NSView
+                        &*(window.ns_view.as_ptr() as *mut NSView)
                     }
                     _ => return Err(WindowError::InvalidParent),
                 };
 
-                let view = Self::create_view(options, None, true, main_thread)?;
-                (*parent_view).addSubview(&view.view);
+                let view = Self::create_view(&options, None, true, main_thread)?;
+                WindowImpl::init_handler(&view, options.factory);
+                parent_view.addSubview(&view.view);
+
                 Ok(view.waker())
             },
         }
@@ -142,101 +148,41 @@ impl WindowImpl {
         main_thread: MainThreadMarker,
     ) -> Result<Retained<NSWindow>, WindowError> {
         unsafe {
-            let screen = NSScreen::mainScreen(main_thread)
-                .ok_or_else(|| WindowError::Platform("Failed to get main screen".to_string()))?;
-
-            let rect = NSRect::new(
-                NSPoint::new(
-                    options.position.map(|x| x.x).unwrap_or(0.0) as f64,
-                    options.position.map(|x| x.y).unwrap_or(0.0) as f64,
-                ),
-                NSSize::new(
-                    options.size.width as f64 / screen.backingScaleFactor(),
-                    options.size.height as f64 / screen.backingScaleFactor(),
-                ),
-            );
-
             let mut style = NSWindowStyleMask::empty();
             if options.decorations {
                 style |= NSWindowStyleMask::Titled
                     | NSWindowStyleMask::Closable
-                    | NSWindowStyleMask::Miniaturizable;
-            }
-
-            if options.resizable.is_some() {
-                style |= NSWindowStyleMask::Resizable;
+                    | NSWindowStyleMask::Miniaturizable
+                    | NSWindowStyleMask::Resizable;
             }
 
             let window = NSWindow::alloc(main_thread);
             let window = NSWindow::initWithContentRect_styleMask_backing_defer(
                 window,
-                rect,
+                NSRect::new(CGPoint::default(), NSSize::new(1.0, 1.0)),
                 style,
                 NSBackingStoreType::Buffered,
                 false,
             );
-
-            if options.position.is_none() {
-                window.center();
-            }
-
-            if options.visible {
-                window.makeKeyAndOrderFront(None);
-            }
-
-            if let Some(range) = options.resizable.clone() {
-                let min_size = window.convertRectFromBacking(NSRect::new(
-                    NSPoint::default(),
-                    NSSize::new(range.start.width as f64, range.start.height as f64),
-                ));
-
-                let max_size = window.convertRectFromBacking(NSRect::new(
-                    NSPoint::default(),
-                    NSSize::new(range.end.width as f64, range.end.height as f64),
-                ));
-
-                window.setContentMinSize(min_size.size);
-                window.setContentMaxSize(max_size.size);
-            }
-
-            window.setTitle(&NSString::from_str(&options.title));
 
             Ok(window)
         }
     }
 
     unsafe fn create_view(
-        options: WindowBuilder,
+        options: &WindowBuilder,
         blocking: Option<Retained<NSApplication>>,
         is_embedded: bool,
         main_thread: MainThreadMarker,
     ) -> Result<Retained<Self>, WindowError> {
         let class = Self::register_class()?;
-        let screen = NSScreen::mainScreen(main_thread)
-            .ok_or_else(|| WindowError::Platform("Failed to get main screen".to_string()))?;
-
-        let mut rect = NSRect::new(
-            NSPoint::default(),
-            NSSize::new(
-                options.size.width as f64 / screen.backingScaleFactor(),
-                options.size.height as f64 / screen.backingScaleFactor(),
-            ),
-        );
-
-        if is_embedded {
-            rect.origin = NSPoint::new(
-                options.position.map(|x| x.x).unwrap_or(0.0) as f64,
-                options.position.map(|x| x.y).unwrap_or(0.0) as f64,
-            );
-        }
-
         let view = unsafe {
             let view: Allocated<WindowImpl> = msg_send![class, alloc];
-            let view: Retained<WindowImpl> = msg_send![view, initWithFrame: rect];
+            let view: Retained<WindowImpl> = msg_send![view, initWithFrame: NSRect::default()];
 
             let tracking_area = NSTrackingArea::initWithRect_options_owner_userInfo(
                 NSTrackingArea::alloc(),
-                rect,
+                NSRect::default(),
                 NSTrackingAreaOptions::MouseEnteredAndExited
                     | NSTrackingAreaOptions::MouseMoved
                     | NSTrackingAreaOptions::ActiveAlways
@@ -343,13 +289,17 @@ impl WindowImpl {
             event_handler: RefCell::new(None),
 
             current_cursor: Cell::new(MouseCursor::Default),
-            current_size: Cell::new(options.size),
+            current_size: Cell::new(Size::default()),
 
             is_closed: Cell::new(false),
             is_embedded,
         })));
 
-        // SAFETY: we erase the lifetime of our OsWindowView; it should be safe to do so
+        Ok(view)
+    }
+
+    fn init_handler(this: &Retained<Self>, factory: WindowFactory) {
+        // SAFETY: we erase the lifetime of our WindowImpl; it should be safe to do so
         // because:
         //  - because our window instance has a stable address for the whole lifetime of
         //    the window (due to being stored as Retained)
@@ -359,11 +309,9 @@ impl WindowImpl {
         //    expected to be single threaded (as that would violate the handler's !Send
         //    requirement)
         unsafe {
-            view.event_handler
-                .replace(Some((options.factory)(Window(&*Retained::as_ptr(&view)))));
+            this.event_handler
+                .replace(Some(factory(Window(&*Retained::as_ptr(this)))));
         }
-
-        Ok(view)
     }
 
     fn send_event(&self, event: Event) {
@@ -400,8 +348,8 @@ impl WindowImpl {
         self.send_event_defer(Event::MouseMove {
             relative,
             absolute: Point {
-                x: absolute.x as f32,
-                y: absolute.y as f32,
+                x: absolute.x,
+                y: absolute.y,
             },
         });
     }
@@ -452,8 +400,8 @@ impl WindowImpl {
         });
 
         Point {
-            x: backing.x as f32,
-            y: backing.y as f32,
+            x: backing.x,
+            y: backing.y,
         }
     }
 
@@ -500,18 +448,13 @@ impl WindowImpl {
     }
 
     unsafe extern "C" fn view_did_change_backing_properties(&self, _: Sel, _: Option<&AnyObject>) {
-        let scale = self
-            .view
-            .window()
-            .map(|x| x.backingScaleFactor())
-            .unwrap_or(1.0);
-
-        self.send_event_defer(Event::WindowScale {
-            scale: scale as f32,
-        });
-
         // keep physical size
         self.set_size(self.current_size.replace(Size::default()));
+
+        // let the handler handle it now
+        self.send_event_defer(Event::WindowScale {
+            scale: self.get_scale(),
+        });
     }
 
     unsafe extern "C" fn window_should_close(&self, _: Sel, _: Option<&AnyObject>) -> Bool {
@@ -524,8 +467,8 @@ impl WindowImpl {
             let position = window.frame().origin;
             self.send_event_defer(Event::WindowMove {
                 point: Point {
-                    x: position.x as f32,
-                    y: position.y as f32,
+                    x: position.x,
+                    y: position.y,
                 },
             });
         }
@@ -638,8 +581,8 @@ impl WindowImpl {
     }
 
     unsafe extern "C" fn scroll_wheel(&self, _: Sel, event: &NSEvent) {
-        let mut x = -event.scrollingDeltaX() as f32;
-        let mut y = event.scrollingDeltaY() as f32;
+        let mut x = -event.scrollingDeltaX();
+        let mut y = event.scrollingDeltaY();
 
         if event.hasPreciseScrollingDeltas() {
             x /= 10.0;
@@ -652,13 +595,13 @@ impl WindowImpl {
 
     unsafe extern "C" fn magnify_with_event(&self, _: Sel, event: &NSEvent) {
         self.send_event_defer(Event::GestureZoom {
-            delta: event.magnification() as f32,
+            scale: event.magnification(),
         });
     }
 
     unsafe extern "C" fn rotate_with_event(&self, _: Sel, event: &NSEvent) {
         self.send_event_defer(Event::GestureRotate {
-            delta: event.rotation() as f32,
+            angle: event.rotation() as f64,
         });
     }
 
@@ -1013,6 +956,24 @@ impl PlatformWindow for WindowImpl {
         self.view.setFrameSize(size);
     }
 
+    fn set_min_size(&self, size: Size) {
+        if let Some(window) = self.own_window() {
+            window.setMinSize(CGSize {
+                width: size.width as _,
+                height: size.height as _,
+            });
+        }
+    }
+
+    fn set_max_size(&self, size: Size) {
+        if let Some(window) = self.own_window() {
+            window.setMaxSize(CGSize {
+                width: size.width as _,
+                height: size.height as _,
+            });
+        }
+    }
+
     fn set_position(&self, point: Point) {
         if let Some(window) = self.own_window() {
             window.setFrameOrigin(CGPoint {
@@ -1030,13 +991,20 @@ impl PlatformWindow for WindowImpl {
     fn set_visible(&self, visible: bool) {
         if let Some(window) = self.own_window() {
             if visible {
-                window.orderFront(None);
+                window.makeKeyAndOrderFront(None);
             } else {
                 window.orderOut(None);
             }
         } else {
             self.view.setHidden(!visible);
         }
+    }
+
+    fn get_scale(&self) -> f64 {
+        self.view
+            .window()
+            .map(|w| w.backingScaleFactor())
+            .unwrap_or(1.0)
     }
 
     fn open_url(&self, url: &str) -> bool {
