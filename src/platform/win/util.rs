@@ -1,9 +1,9 @@
 use crate::Size;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
-use windows_sys::Win32::Foundation::{POINT, RECT};
+use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
 use windows_sys::Win32::System::Com::CoCreateGuid;
-use windows_sys::Win32::UI::WindowsAndMessaging::{AdjustWindowRectEx, WINDOW_STYLE};
+use windows_sys::Win32::UI::WindowsAndMessaging::{AdjustWindowRectEx, GWL_STYLE, GetWindowLongW};
 use windows_sys::core::GUID;
 
 pub fn generate_guid() -> String {
@@ -46,15 +46,16 @@ pub unsafe fn from_widestring(wide: *const u16) -> String {
     }
 }
 
-pub fn window_size_from_client_size(size: Size, dwstyle: WINDOW_STYLE) -> POINT {
+pub unsafe fn window_size_from_client_size(size: Size, hwnd: HWND) -> POINT {
     unsafe {
         let mut rect = RECT {
             left: 0,
             top: 0,
-            right: size.width.try_into().unwrap_or(i32::MAX / 2),
-            bottom: size.height.try_into().unwrap_or(i32::MAX / 2),
+            right: size.width.min(i32::MAX as u32 / 2) as i32,
+            bottom: size.height.min(i32::MAX as u32 / 2) as i32,
         };
 
+        let dwstyle = GetWindowLongW(hwnd, GWL_STYLE) as u32;
         AdjustWindowRectEx(&mut rect, dwstyle, 0, 0);
 
         POINT {

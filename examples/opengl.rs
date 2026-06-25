@@ -24,8 +24,11 @@ fn main() {
             height: 200,
         };
 
+        println!("scale: {}", window.get_scale());
+        println!("size: {:?}", size.to_logical(window.get_scale()));
+
         window.set_max_size((1000, 1000));
-        window.set_size(size);
+        window.set_size((200, 200));
         window.set_title("OpenGL Example");
         window.set_visible(true);
 

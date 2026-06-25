@@ -69,15 +69,15 @@ pub struct WindowImpl {
     _drop_target: Arc<DropTargetImpl>,
     keyboard_hook: Rc<KeyboardHook>,
     vsync_thread: VSyncThread,
-
     is_blocking: bool,
-    is_resizable: bool,
-    min_max_window_size: Cell<(POINT, POINT)>,
 
+    state_max_size: Cell<POINT>,
+    state_min_size: Cell<POINT>,
     state_focused: Cell<bool>,
     state_current_modifiers: Cell<Modifiers>,
     state_current_cursor: Cell<HCURSOR>,
     state_mouse_capture: Cell<u32>,
+    state_dpi_scale: Cell<u32>,
 
     cursor_cache: CursorCache,
 }
@@ -100,12 +100,12 @@ impl WindowImpl {
             };
 
             // S_FALSE is okay here if OleInitialize was already called on the current
-            // thread.
+            // thread. OleInitialize is needed for things like Drag and Drop.
             let ole_result = OleInitialize(null());
             let ole_success = ole_result != OLE_E_WRONGCOMPOBJ && ole_result != RPC_E_CHANGED_MODE;
 
+            // register a new window class for our window with unique id
             let class_name = to_widestring(&format!("picoview-{}", generate_guid()));
-            let window_title = to_widestring(&options.title);
             let window_class = RegisterClassW(&WNDCLASSW {
                 style: 0,
                 lpfnWndProc: Some(wnd_proc),
@@ -131,11 +131,6 @@ impl WindowImpl {
                         } else {
                             dwstyle |= WS_POPUP;
                         }
-
-                        if options.resizable.is_none() {
-                            dwstyle &= !WS_MAXIMIZEBOX;
-                            dwstyle &= !WS_SIZEBOX;
-                        }
                     }
 
                     OpenMode::Embedded(..) => {
@@ -143,53 +138,28 @@ impl WindowImpl {
                     }
                 }
 
-                if options.visible {
-                    dwstyle |= WS_VISIBLE;
-                }
-
                 dwstyle
-            };
-
-            let size = window_size_from_client_size(options.size, dwstyle);
-            let (pos_x, pos_y) = match options.position {
-                Some(point) => (point.x as i32, point.y as i32),
-                None if matches!(mode, OpenMode::Embedded(..)) => (0, 0),
-                None => {
-                    let mut rect = RECT { ..zeroed() };
-                    if GetClientRect(GetDesktopWindow(), &mut rect) != 0 {
-                        (
-                            rect.left + (rect.right - rect.left - size.x) / 2,
-                            rect.top + (rect.bottom - rect.top - size.y) / 2,
-                        )
-                    } else {
-                        (CW_USEDEFAULT, CW_USEDEFAULT)
-                    }
-                }
             };
 
             // set dpi awareness for the window (well restore it later)
             let prev_dpi_awareness =
                 try_set_thread_dpi_awareness(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
 
+            // new window! zero size for now
             let hwnd = CreateWindowExW(
                 0,
                 window_class as _,
-                window_title.as_ptr() as _,
+                [0].as_ptr() as _,
                 dwstyle,
-                pos_x,
-                pos_y,
-                size.x,
-                size.y,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                0,
+                0,
                 parent as _,
                 null_mut(),
                 hinstance(),
                 null(),
             );
-
-            // restore previous dpi awareness
-            if let Some(prev_dpi_awareness) = prev_dpi_awareness {
-                try_set_thread_dpi_awareness(prev_dpi_awareness);
-            }
 
             check_error(!hwnd.is_null(), "CreateWindowExW")?;
 
@@ -227,35 +197,34 @@ impl WindowImpl {
             let keyboard_hook = KeyboardHook::install();
             keyboard_hook.add_window(hwnd);
 
+            // preload our cursors
             let cursor_cache = CursorCache::load();
 
+            // construct our window data, here we store all our state and the event handler
+            // to be called later
             let window = Box::new(Self {
                 waker: Arc::new(WindowWakerImpl {
                     window_hwnd: hwnd,
                     window_open: AtomicBool::new(true),
                 }),
 
+                state_dpi_scale: Cell::new(
+                    try_get_dpi_for_window(hwnd).map_or(USER_DEFAULT_SCREEN_DPI, |dpi| dpi),
+                ),
                 state_mouse_capture: Cell::new(0),
                 state_current_cursor: Cell::new(cursor_cache.get_closest(MouseCursor::Default)),
                 state_current_modifiers: Cell::new(Modifiers::empty()),
                 state_focused: Cell::new(true),
+                state_min_size: Cell::new(POINT { x: 0, y: 0 }),
+                state_max_size: Cell::new(POINT {
+                    x: i32::MAX,
+                    y: i32::MAX,
+                }),
 
                 window_class,
                 window_hwnd: hwnd,
 
                 is_blocking: matches!(mode, OpenMode::Blocking),
-                is_resizable: options.resizable.is_some(),
-                min_max_window_size: Cell::new(
-                    options
-                        .resizable
-                        .map(|r| {
-                            (
-                                window_size_from_client_size(r.start, dwstyle),
-                                window_size_from_client_size(r.end, dwstyle),
-                            )
-                        })
-                        .unwrap_or((size, size)),
-                ),
 
                 gl_context,
                 cursor_cache,
@@ -276,18 +245,24 @@ impl WindowImpl {
             //    drop impl)
             //  - we promise to not move WindowImpl (and by extension the handler) to a
             //    different thread (as that would violate the handler's !Send requirement)
+            // initialize our event handler
             window
                 .event_handler
                 .replace(Some((options.factory)(Window(&*(&*window as *const Self)))));
 
             window.send_event(Event::WindowFocus { focus: true });
-            window.send_event(Event::WindowScale {
-                scale: try_get_dpi_for_window(hwnd)
-                    .map_or(1.0, |dpi| dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32),
-            });
 
+            // get our waker
             let waker = window.waker();
+
+            // store our window data as the userdata for later retrieval
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(window) as _);
+
+            // restore previous dpi awareness, has to be done here because the event handler
+            // may call set_size and friends, and they have to run in dpi-aware mode
+            if let Some(prev_dpi_awareness) = prev_dpi_awareness {
+                try_set_thread_dpi_awareness(prev_dpi_awareness);
+            }
 
             if let OpenMode::Blocking = mode {
                 // our favorite - win32 event pump
@@ -302,20 +277,46 @@ impl WindowImpl {
         }
     }
 
+    /// Send an event to the window's event handler _immediately_.
+    ///
+    /// # Panics
+    ///
+    /// Panics on reentrant events, prefer [`Self::send_event_defer`] instead.
     fn send_event(&self, event: Event) {
-        if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
-            if let Some(handler) = handler.as_mut() {
-                (handler)(event);
+        let mut handler = self
+            .event_handler
+            .try_borrow_mut()
+            .expect("unhandled callback reentrancy");
 
-                while let Some(event) = self.event_queue.borrow_mut().pop_front() {
-                    (handler)(event);
-                }
+        // handler might be None if the window is being dropped, in which case we just
+        // ignore the event
+        if let Some(handler) = handler.as_mut() {
+            (handler)(event);
+
+            loop {
+                // event_queue must NOT be borrowed while calling the handler, so we have to
+                // reborrow it every time
+                let Some(event) = self.event_queue.borrow_mut().pop_front() else {
+                    break;
+                };
+
+                (handler)(event);
             }
-        } else {
-            debug_assert!(false, "send_event reentrancy");
         }
     }
 
+    /// Send an event to the window's event handler, or defer it to the queue if
+    /// the handler is already borrowed.
+    ///
+    /// # On Reentrancy
+    /// Note that `winapi` is reentrant by design, meaning that it is possible
+    /// for `wnd_proc` to be called while already inside it. This does not
+    /// play well with Rust's exclusive borrow rules, so we have to work around
+    /// it by deferring events to a queue if the event handler is already
+    /// borrowed.
+    ///
+    /// Sometimes it is desirable to send an event immediately, in which case
+    /// [`Self::send_event`] should be used instead.
     fn send_event_defer(&self, event: Event<'static>) {
         if self.event_handler.try_borrow_mut().is_ok() {
             self.send_event(event);
@@ -331,11 +332,13 @@ impl Drop for WindowImpl {
         self.waker.window_open.store(false, Ordering::Release);
 
         // drop the handler here, so it could do clean up when the window is still alive
+        // will ignore any events sent after this point, as the handler is gone
         self.event_handler.take();
 
         // remove the window from the keyboard hook
         self.keyboard_hook.remove_window(self.window_hwnd);
 
+        // winapi cleanup stuff
         unsafe {
             RevokeDragDrop(self.window_hwnd);
             SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
@@ -398,14 +401,13 @@ impl PlatformWindow for WindowImpl {
         }
     }
 
+    fn get_scale(&self) -> f64 {
+        self.state_dpi_scale.get() as f64 / USER_DEFAULT_SCREEN_DPI as f64
+    }
+
     fn set_size(&self, size: Size) {
         unsafe {
-            let dwstyle = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
-            let size = window_size_from_client_size(size, dwstyle);
-
-            if !self.is_resizable {
-                self.min_max_window_size.set((size, size));
-            }
+            let size = window_size_from_client_size(size, self.window_hwnd);
 
             SetWindowPos(
                 self.window_hwnd,
@@ -416,6 +418,20 @@ impl PlatformWindow for WindowImpl {
                 size.y,
                 SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE,
             );
+        }
+    }
+
+    fn set_min_size(&self, size: Size) {
+        unsafe {
+            let size = window_size_from_client_size(size, self.window_hwnd);
+            self.state_min_size.set(size);
+        }
+    }
+
+    fn set_max_size(&self, size: Size) {
+        unsafe {
+            let size = window_size_from_client_size(size, self.window_hwnd);
+            self.state_max_size.set(size);
         }
     }
 
@@ -550,8 +566,8 @@ unsafe extern "system" fn wnd_proc(
         let window = &*window_ptr;
         match msg {
             WM_MOVE => {
-                let x = ((lparam >> 0) & 0xFFFF) as i16 as f32;
-                let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
+                let x = ((lparam >> 0) & 0xFFFF) as i16 as f64;
+                let y = ((lparam >> 16) & 0xFFFF) as i16 as f64;
 
                 window.send_event_defer(Event::WindowMove {
                     point: Point { x, y },
@@ -561,7 +577,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_CLOSE => {
-                window.send_event(Event::WindowClose);
+                window.send_event_defer(Event::WindowClose);
                 0
             }
 
@@ -587,12 +603,14 @@ unsafe extern "system" fn wnd_proc(
 
             WM_DPICHANGED => {
                 let dpi = (wparam & 0xFFFF) as u16 as u32;
-                let scale = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
 
                 // we do not resize the window here because we want to keep the _physical_ size
                 // of the window unchanged, and let the application decide how to handle DPI
                 // changes.
-                window.send_event_defer(Event::WindowScale { scale });
+                window.state_dpi_scale.set(dpi);
+                window.send_event_defer(Event::WindowScale {
+                    scale: window.get_scale(),
+                });
                 0
             }
 
@@ -655,7 +673,7 @@ unsafe extern "system" fn wnd_proc(
 
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                 let wheel_delta = (wparam >> 16) as i16;
-                let wheel_delta = wheel_delta as f32 / WHEEL_DELTA as f32;
+                let wheel_delta = wheel_delta as f64 / WHEEL_DELTA as f64;
 
                 window.send_event_defer(Event::MouseScroll {
                     x: if msg == WM_MOUSEWHEEL {
@@ -695,12 +713,12 @@ unsafe extern "system" fn wnd_proc(
 
                 window.send_event_defer(Event::MouseMove {
                     absolute: Point {
-                        x: absolute.x as f32,
-                        y: absolute.y as f32,
+                        x: absolute.x as f64,
+                        y: absolute.y as f64,
                     },
                     relative: Point {
-                        x: x as f32,
-                        y: y as f32,
+                        x: x as f64,
+                        y: y as f64,
                     },
                 });
                 0
@@ -725,7 +743,8 @@ unsafe extern "system" fn wnd_proc(
 
             WM_GETMINMAXINFO => {
                 let info = lparam as *mut MINMAXINFO;
-                let (min_size, max_size) = window.min_max_window_size.get();
+                let min_size = window.state_min_size.get();
+                let max_size = window.state_max_size.get();
                 (*info).ptMinTrackSize = min_size;
                 (*info).ptMaxTrackSize = max_size;
                 (*info).ptMaxSize = max_size;
@@ -772,8 +791,8 @@ unsafe extern "system" fn wnd_proc(
                 window.send_event_defer(Event::DragEnter {
                     data: DropTargetImpl::decode_data_object(wparam as _),
                     point: Point {
-                        x: point.x as f32,
-                        y: point.y as f32,
+                        x: point.x as f64,
+                        y: point.y as f64,
                     },
                 });
                 0
@@ -787,8 +806,8 @@ unsafe extern "system" fn wnd_proc(
 
                 window.send_event_defer(Event::DragMove {
                     point: Point {
-                        x: point.x as f32,
-                        y: point.y as f32,
+                        x: point.x as f64,
+                        y: point.y as f64,
                     },
                 });
 

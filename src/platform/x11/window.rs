@@ -22,6 +22,7 @@ pub const ATOM_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
 pub struct WindowImpl {
     window_id: c_ulong,
     window_parent: c_ulong,
+    window_colormap: c_ulong,
 
     connection: Connection,
     waker: Arc<WindowWakerImpl>,
@@ -100,7 +101,7 @@ impl WindowImpl {
                 })
                 .unwrap_or(VisualConfig::copy_from_parent());
 
-            let colormap = XCreateColormap(
+            let window_colormap = XCreateColormap(
                 connection.display(),
                 default_root,
                 visual_info.visual,
@@ -124,7 +125,7 @@ impl WindowImpl {
                 CWEventMask | CWColormap | CWBorderPixel,
                 &mut XSetWindowAttributes {
                     border_pixel: 0,
-                    colormap,
+                    colormap: window_colormap,
                     event_mask: ButtonPressMask
                         | ButtonReleaseMask
                         | StructureNotifyMask
@@ -243,12 +244,23 @@ impl WindowImpl {
                 Duration::from_secs_f64(1.0 / query_refresh_rate(&connection).unwrap_or(60.0));
             let dpi_scale = query_scale_dpi(&connection).unwrap_or(96.0) / 96.0;
 
+            // sync and error check
             XSync(connection.display(), 0);
-            connection.last_error().map_err(WindowError::Platform)?;
+
+            // if we get an error here, it means the window creation failed
+            if let Err(e) = connection.last_error() {
+                // cleanup so we dont leave a dangling window and colormap
+                XDestroyWindow(connection.display(), window_id);
+                XFreeColormap(connection.display(), window_colormap);
+
+                // :p
+                return Err(WindowError::Platform(e));
+            }
 
             let window = Box::new(Self {
                 window_id,
                 window_parent,
+                window_colormap,
 
                 waker: Arc::new(WindowWakerImpl {
                     display: RwLock::new(connection.display()),
@@ -849,6 +861,7 @@ impl WindowImpl {
             // kill the window itself
             if !self.is_destroyed.get() {
                 XDestroyWindow(self.connection.display(), self.window_id);
+                XFreeColormap(self.connection.display(), self.window_colormap);
             }
 
             // sync & error check

@@ -651,11 +651,15 @@ impl WindowImpl {
     }
 
     unsafe extern "C" fn magnify_with_event(&self, _: Sel, event: &NSEvent) {
-        println!("magnify: {}", event.magnification());
+        self.send_event_defer(Event::GestureZoom {
+            delta: event.magnification() as f32,
+        });
     }
 
     unsafe extern "C" fn rotate_with_event(&self, _: Sel, event: &NSEvent) {
-        println!("rotate: {}", event.rotation());
+        self.send_event_defer(Event::GestureRotate {
+            delta: event.rotation() as f32,
+        });
     }
 
     unsafe extern "C" fn draw_rect(&self, _: Sel, rect: NSRect) {

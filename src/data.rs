@@ -123,6 +123,11 @@ impl Size {
             height: (height * scale).round() as u32,
         }
     }
+
+    /// Convert this [`Size`] to logical pixels using a scale factor.
+    pub fn to_logical(&self, scale: f64) -> (f64, f64) {
+        (self.width as f64 / scale, self.height as f64 / scale)
+    }
 }
 
 impl From<(u32, u32)> for Size {
@@ -144,26 +149,6 @@ impl From<(f64, f64)> for Point {
     fn from((x, y): (f64, f64)) -> Self {
         Self { x, y }
     }
-}
-
-/// A window geometry, including scale factor, size, and position.
-#[derive(Copy, Clone, Debug, PartialEq, Default)]
-pub struct Geometry {
-    /// Logical/physical scale of the operating system.
-    pub scale: f64,
-
-    /// Size of the window's client area in physical pixels.
-    pub inner_size: Size,
-    /// Size of the window's outer area in physical pixels, including title bar
-    /// and borders.
-    pub outer_size: Size,
-
-    /// Position of the window's client area in physical pixels relative to the
-    /// origin of the screen.
-    pub inner_position: Point,
-    /// Position of the window's outer area in physical pixels relative to the
-    /// origin of the screen.
-    pub outer_position: Point,
 }
 
 /// A mouse button.
