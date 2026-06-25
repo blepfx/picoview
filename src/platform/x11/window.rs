@@ -357,10 +357,11 @@ impl WindowImpl {
                 }
             }
 
-            self.destroy()
+            Ok(())
         }
     }
 
+    /// Handle a single [`XEvent`] from the main event loop
     #[allow(non_upper_case_globals)]
     fn handle_event(&self, event: XEvent) {
         unsafe {
@@ -672,6 +673,10 @@ impl WindowImpl {
                 }
 
                 MotionNotify => {
+                    if self.xi2_info.is_some() {
+                        return; // use XInput2 motion events instead :p
+                    }
+
                     let event = event.motion;
                     self.handle_event_modifiers(keymask_to_mods(event.state));
                     self.handle_event_motion(
@@ -816,6 +821,7 @@ impl WindowImpl {
         }
     }
 
+    /// Emits a [`Event::MouseMove`] event if the cursor position has changed.
     fn handle_event_motion(&self, x: f64, y: f64, x_root: f64, y_root: f64) {
         let relative = Point { x, y };
         let absolute = Point {
@@ -832,45 +838,44 @@ impl WindowImpl {
         }
     }
 
+    /// Emits a [`Event::KeyModifiers`] event if the modifiers have changed.
     fn handle_event_modifiers(&self, modifiers: Modifiers) {
         if self.last_modifiers.replace(modifiers) != modifiers {
             self.send_event(Event::KeyModifiers { modifiers });
         }
     }
 
+    /// Sends an event to our event handler.
     fn send_event(&self, e: Event) {
         if let Some(handler) = &mut *self.handler.borrow_mut() {
             handler(e)
         }
     }
+}
 
-    fn destroy(self) -> Result<(), WindowError> {
+impl Drop for WindowImpl {
+    fn drop(&mut self) {
+        // we set waker display to null before sending the close event, to ensure that
+        // any pending wakeups that get triggered by the close event will be
+        // ignored, preventing a potential use-after-free in the
+        // `WindowWakerImpl::wakeup` method
+        if let Ok(mut display) = self.waker.display.write() {
+            *display = std::ptr::null_mut();
+        }
+
+        // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends
+        // on WindowImpl
+        self.handler.take();
+
         unsafe {
-            // we set waker display to null before sending the close event, to ensure that
-            // any pending wakeups that get triggered by the close event will be
-            // ignored, preventing a potential use-after-free in the
-            // `WindowWakerImpl::wakeup` method
-            if let Ok(mut display) = self.waker.display.write() {
-                *display = std::ptr::null_mut();
-            }
-
-            // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends
-            // on WindowImpl
-            self.handler.take();
-
             // kill the window itself
             if !self.is_destroyed.get() {
                 XDestroyWindow(self.connection.display(), self.window_id);
                 XFreeColormap(self.connection.display(), self.window_colormap);
             }
 
-            // sync & error check
+            // sync
             XSync(self.connection.display(), 0);
-            self.connection
-                .last_error()
-                .map_err(WindowError::Platform)?;
-
-            Ok(())
         }
     }
 }

@@ -11,8 +11,8 @@ crate-type = ["cdylib"]
 [dependencies]
 picoview = { path = "../.." }
 
-clack-plugin = { git = "https://github.com/Quant1um/clack", rev = "6fd151fa28be30eefbcfb156b2a8e978797d0db2" }
-clack-extensions = { git = "https://github.com/Quant1um/clack", rev = "6fd151fa28be30eefbcfb156b2a8e978797d0db2", features = [
+clack-plugin = "0.1.0"
+clack-extensions = { version = "0.1.0", features = [
     "audio-ports",
     "clack-plugin",
     "gui",

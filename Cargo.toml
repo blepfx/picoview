@@ -78,6 +78,7 @@ name = "startup"
 harness = false
 
 [workspace]
+resolver = "3"
 members = [
     ".",
     "examples/clack-gain", 
