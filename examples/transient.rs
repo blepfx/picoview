@@ -1,4 +1,4 @@
-use picoview::{Event, Key, MouseButton, MouseCursor, Point, WindowBuilder};
+use picoview::{Key, MouseButton, MouseCursor, Point, Window, WindowBuilder, WindowHandler};
 
 fn main() {
     WindowBuilder::new(|window| {
@@ -11,66 +11,75 @@ fn main() {
             window.set_size((200, 200));
             window.set_visible(true);
 
-            Box::new(move |event| match event {
-                Event::WindowFrame => {}
-
-                Event::WindowClose => {
-                    println!("{:?}", event);
-                    window.close();
-                }
-
-                Event::KeyDown { key, capture } => {
-                    if key == Key::Enter {
-                        *capture = true;
-                    } else if key == Key::Escape {
-                        *capture = true;
-                        window.close();
-                    }
-                }
-
-                Event::MouseDown {
-                    button: MouseButton::Right,
-                } => {
-                    window.set_position((1000, 200));
-                }
-
-                _ => {
-                    println!("child {:?}", event);
-                }
-            })
+            Box::new(Child { window })
         })
         .open_transient(window)
         .expect("failed to open a child window");
 
         child.wakeup().unwrap();
 
-        Box::new(move |event| match event {
-            Event::WindowFrame => {}
-
-            // you have to handle WindowClose explicitly to close the window
-            Event::WindowClose => {
-                println!("{:?}", event);
-                window.close();
-            }
-
-            Event::MouseMove { relative, .. } => {
-                if relative.x < -10.0 {
-                    window.set_cursor_icon(MouseCursor::Hidden);
-                    window.set_cursor_position(Point { x: 100.0, y: 100.0 });
-                } else {
-                    window.set_cursor_icon(MouseCursor::Default);
-                }
-
-                println!("{:?}", event);
-            }
-
-            _ => {
-                println!("{:?}", event);
-            }
-        })
+        Box::new(Parent { window })
     })
     .open_blocking()
     .expect("failed to open a window");
 
     println!("Exiting loop");
+}
+
+struct Child<'a> {
+    window: Window<'a>,
+}
+
+struct Parent<'a> {
+    window: Window<'a>,
+}
+
+impl WindowHandler for Parent<'_> {
+    fn close(&mut self) {
+        self.window.close();
+    }
+
+    fn mouse_move(&mut self, point: Point) {
+        if point.x < -10.0 {
+            self.window.set_cursor_position((100.0, 100.0));
+        }
+
+        if point.x < 10.0 {
+            self.window.set_cursor_icon(MouseCursor::Hidden);
+        } else {
+            self.window.set_cursor_icon(MouseCursor::Default);
+        }
+    }
+
+    fn key_press(&mut self, key: Key, pressed: bool) -> bool {
+        println!("parent.key_press({key:?}, {pressed})");
+        false
+    }
+}
+
+impl WindowHandler for Child<'_> {
+    fn close(&mut self) {
+        self.window.close();
+    }
+
+    fn wakeup(&mut self) {
+        println!("child.wakeup()");
+    }
+
+    fn mouse_press(&mut self, button: MouseButton, pressed: bool) {
+        if button == MouseButton::Right && pressed {
+            self.window.set_position((1000, 200));
+        }
+    }
+
+    fn key_press(&mut self, key: Key, pressed: bool) -> bool {
+        println!("child.key_press({key:?}, {pressed})");
+
+        if key == Key::Escape && pressed {
+            self.window.close();
+            return true;
+        }
+
+        false
+    }
 }

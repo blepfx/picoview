@@ -257,7 +257,7 @@ mod connection {
 
 mod selection {
     use super::Connection;
-    use crate::Exchange;
+    use crate::{DropEffect, Exchange};
     use std::array::from_fn;
     use std::ffi::{OsStr, OsString, c_char, c_int, c_ulong};
     use std::mem::zeroed;
@@ -453,7 +453,13 @@ mod selection {
         Err(SelectionError::Empty)
     }
 
-    pub fn send_xdnd_feedback(conn: &Connection, target: c_ulong, source: c_ulong, finished: bool) {
+    pub fn send_xdnd_feedback(
+        conn: &Connection,
+        target: c_ulong,
+        source: c_ulong,
+        finished: bool,
+        effect: DropEffect,
+    ) {
         unsafe {
             XSendEvent(
                 conn.display(),
@@ -476,8 +482,18 @@ mod selection {
                         data: {
                             let mut data = ClientMessageData::default();
                             data.set_long(0, target as _);
-                            data.set_long(1, 1); // success
-                            data.set_long(2, conn.atom(c"XdndActionPrivate") as _);
+                            data.set_long(1, if effect == DropEffect::Reject { 0 } else { 1 }); // success
+                            data.set_long(
+                                2,
+                                match effect {
+                                    DropEffect::Move => conn.atom(c"XdndActionMove") as _,
+                                    DropEffect::Link => conn.atom(c"XdndActionLink") as _,
+                                    DropEffect::Generic => conn.atom(c"XdndActionPrivate") as _,
+                                    DropEffect::Copy | DropEffect::Reject => {
+                                        conn.atom(c"XdndActionCopy") as _
+                                    }
+                                },
+                            );
                             data
                         },
                     },
@@ -852,21 +868,16 @@ mod info {
                 return None;
             }
 
-            let mut type_ = null_mut();
             let mut value = XrmValue { ..zeroed() };
             let result = XrmGetResource(
                 db,
                 c"Xft.dpi".as_ptr(),
                 c"Xft.Dpi".as_ptr(),
-                &mut type_,
+                &mut null_mut(),
                 &mut value,
             );
 
-            if result == 0
-                || type_.is_null()
-                || CStr::from_ptr(type_) != c"String"
-                || value.addr.is_null()
-            {
+            if result == 0 || value.addr.is_null() {
                 XrmDestroyDatabase(db);
                 return None;
             }

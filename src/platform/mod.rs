@@ -1,7 +1,4 @@
-use crate::{
-    Exchange, MakeCurrentError, MouseCursor, Point, Size, SwapBuffersError, WakeupError,
-    WindowWaker, rwh_06,
-};
+use crate::*;
 use std::ffi::{CStr, c_void};
 
 cfg_select! {
@@ -59,13 +56,12 @@ pub trait PlatformWindow /* : !Send + !Sync */ {
     fn close(&self);
     fn waker(&self) -> WindowWaker;
     fn opengl(&self) -> Option<&dyn PlatformOpenGl>;
+    fn scale(&self) -> f64;
 
     fn set_title(&self, title: &str);
     fn set_cursor_icon(&self, icon: MouseCursor);
     fn set_cursor_position(&self, pos: Point);
     fn set_visible(&self, visible: bool);
-
-    fn get_scale(&self) -> f64;
     fn set_size(&self, size: Size);
     fn set_min_size(&self, size: Size);
     fn set_max_size(&self, size: Size);

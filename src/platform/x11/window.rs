@@ -21,7 +21,7 @@ pub const ATOM_WAKEUP: &CStr = c"PICOVIEW_WAKEUP";
 
 pub struct WindowImpl {
     window_id: c_ulong,
-    window_parent: c_ulong,
+    window_parent: Cell<c_ulong>,
     window_colormap: c_ulong,
 
     connection: Connection,
@@ -35,7 +35,7 @@ pub struct WindowImpl {
 
     last_modifiers: Cell<Modifiers>,
     last_cursor_icon: Cell<MouseCursor>,
-    last_cursor_position: Cell<Option<(Point, Point)>>, // (relative, absolute)
+    last_cursor_position: Cell<Option<Point>>,
     last_window_position: Cell<Option<Point>>,
     last_window_size: Cell<Option<Size>>,
     last_window_min_size: Cell<Size>,
@@ -55,7 +55,7 @@ pub struct WindowImpl {
     xi2_axes: RefCell<Vec<XI2DeviceAxis>>,
 
     #[allow(clippy::type_complexity)]
-    handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
+    handler: RefCell<Option<Box<dyn WindowHandler>>>,
     gl_context: Option<GlContext>,
 }
 
@@ -259,7 +259,7 @@ impl WindowImpl {
 
             let window = Box::new(Self {
                 window_id,
-                window_parent,
+                window_parent: Cell::new(window_parent),
                 window_colormap,
 
                 waker: Arc::new(WindowWakerImpl {
@@ -312,7 +312,7 @@ impl WindowImpl {
         }
     }
 
-    #[allow(clippy::boxed_local)]
+    /// Poll the events until our window is closed.
     fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), WindowError> {
         unsafe {
             // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so
@@ -333,7 +333,7 @@ impl WindowImpl {
                 let wait_time = match next_frame.checked_duration_since(curr_frame) {
                     Some(wait_time) => wait_time,
                     None => {
-                        self.send_event(Event::WindowFrame);
+                        self.event(|e| e.frame());
                         next_frame = (next_frame + self.refresh_interval).max(curr_frame);
                         Duration::ZERO
                     }
@@ -391,12 +391,7 @@ impl WindowImpl {
                                         event.mods.effective as _,
                                     ));
 
-                                    self.handle_event_motion(
-                                        event.event_x,
-                                        event.event_y,
-                                        event.root_x,
-                                        event.root_y,
-                                    );
+                                    self.handle_event_motion(event.event_x, event.event_y, true);
 
                                     let mut scroll_x = 0.0;
                                     let mut scroll_y = 0.0;
@@ -429,10 +424,7 @@ impl WindowImpl {
                                     }
 
                                     if scroll_x != 0.0 || scroll_y != 0.0 {
-                                        self.send_event(Event::MouseScroll {
-                                            x: scroll_x,
-                                            y: scroll_y,
-                                        });
+                                        self.event(|e| e.mouse_scroll(scroll_x, scroll_y));
                                     }
                                 }
                             }
@@ -458,15 +450,11 @@ impl WindowImpl {
                                 let old_zoom = self.last_gesture_zoom.replace(new_zoom);
 
                                 if new_zoom != old_zoom {
-                                    self.send_event(Event::GestureZoom {
-                                        scale: new_zoom / old_zoom,
-                                    });
+                                    self.event(|e| e.gesture_zoom(new_zoom / old_zoom));
                                 }
 
                                 if event.delta_angle != 0.0 {
-                                    self.send_event(Event::GestureRotate {
-                                        angle: event.delta_angle,
-                                    });
+                                    self.event(|e| e.gesture_rotate(event.delta_angle));
                                 }
                             }
 
@@ -483,13 +471,13 @@ impl WindowImpl {
                         && event.message_type == self.connection.atom(c"WM_PROTOCOLS") as _
                         && event.data.get_long(0) == self.connection.atom(c"WM_DELETE_WINDOW") as _
                     {
-                        self.send_event(Event::WindowClose);
+                        self.event(|e| e.close());
                     }
 
                     if event.format == 32
                         && event.message_type == self.connection.atom(ATOM_WAKEUP) as _
                     {
-                        self.send_event(Event::Wakeup);
+                        self.event(|e| e.wakeup());
                     }
 
                     if event.format == 32
@@ -509,7 +497,7 @@ impl WindowImpl {
                             y: y as f64 - origin.y,
                         };
 
-                        if !self.last_dragdrop_state.replace(true) {
+                        let effect = if !self.last_dragdrop_state.replace(true) {
                             let timestamp = event.data.get_long(3) as c_ulong;
                             let data = match parse_selection(
                                 &self.connection,
@@ -525,30 +513,31 @@ impl WindowImpl {
                                 }
                             };
 
-                            self.send_event(Event::DragEnter { data, point });
+                            self.event(|e| e.drag_enter(data, point))
                         } else {
-                            self.send_event(Event::DragMove { point });
-                        }
+                            self.event(|e| e.drag_move(point))
+                        };
 
                         send_xdnd_feedback(
                             &self.connection,
                             self.window_id,
                             event.data.get_long(0) as c_ulong,
                             false,
+                            effect.unwrap_or(DropEffect::Reject),
                         );
                     }
 
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndLeave") as _
                     {
-                        self.send_event(Event::DragLeave);
+                        self.event(|e| e.drag_leave());
                         self.last_dragdrop_state.set(false);
                     }
 
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndDrop") as _
                     {
-                        self.send_event(Event::DragAccept);
+                        let effect = self.event(|e| e.drag_accept());
                         self.last_dragdrop_state.set(false);
 
                         send_xdnd_feedback(
@@ -556,6 +545,7 @@ impl WindowImpl {
                             self.window_id,
                             event.data.get_long(0) as c_ulong,
                             true,
+                            effect.unwrap_or(DropEffect::Reject),
                         );
                     }
                 }
@@ -570,48 +560,16 @@ impl WindowImpl {
                     if let Some(point) = window_position(&self.connection, self.window_id)
                         && self.last_window_position.replace(Some(point)) != Some(point)
                     {
-                        self.send_event(Event::WindowMove { point });
+                        self.event(|e| e.position_changed(point));
                     }
 
                     if self.last_window_size.replace(Some(size)) != Some(size) {
-                        self.send_event(Event::WindowResize { size });
+                        self.event(|e| e.size_changed(size));
                     }
                 }
 
                 ButtonPress | ButtonRelease => {
                     let event = event.button;
-                    let result = match event.button {
-                        1 | 2 | 3 | 8 | 9 => {
-                            let button = match event.button {
-                                1 => MouseButton::Left,
-                                2 => MouseButton::Middle,
-                                3 => MouseButton::Right,
-                                8 => MouseButton::Back,
-                                9 => MouseButton::Forward,
-                                _ => return,
-                            };
-
-                            if event.type_ == ButtonPress {
-                                Event::MouseDown { button }
-                            } else {
-                                Event::MouseUp { button }
-                            }
-                        }
-
-                        4..=7 if event.type_ == ButtonPress && self.xi2_info.is_none() => {
-                            let (x, y) = match event.button {
-                                4 => (0.0, -1.0),
-                                5 => (0.0, 1.0),
-                                6 => (-1.0, 0.0),
-                                7 => (1.0, 0.0),
-                                _ => return,
-                            };
-
-                            Event::MouseScroll { x, y }
-                        }
-
-                        _ => return,
-                    };
 
                     if event.type_ == ButtonPress {
                         XSetInputFocus(
@@ -623,13 +581,36 @@ impl WindowImpl {
                     }
 
                     self.handle_event_modifiers(keymask_to_mods(event.state));
-                    self.handle_event_motion(
-                        event.x as f64,
-                        event.y as f64,
-                        event.x_root as f64,
-                        event.y_root as f64,
-                    );
-                    self.send_event(result);
+                    self.handle_event_motion(event.x as f64, event.y as f64, false);
+
+                    match event.button {
+                        1 | 2 | 3 | 8 | 9 => {
+                            let button = match event.button {
+                                1 => MouseButton::Left,
+                                2 => MouseButton::Middle,
+                                3 => MouseButton::Right,
+                                8 => MouseButton::Back,
+                                9 => MouseButton::Forward,
+                                _ => return,
+                            };
+
+                            self.event(|e| e.mouse_press(button, event.type_ == ButtonPress));
+                        }
+
+                        4..=7 if event.type_ == ButtonPress && self.xi2_info.is_none() => {
+                            let (x, y) = match event.button {
+                                4 => (0.0, -1.0),
+                                5 => (0.0, 1.0),
+                                6 => (-1.0, 0.0),
+                                7 => (1.0, 0.0),
+                                _ => return,
+                            };
+
+                            self.event(|e| e.mouse_scroll(x, y));
+                        }
+
+                        _ => {}
+                    };
                 }
 
                 KeyPress | KeyRelease => {
@@ -638,24 +619,14 @@ impl WindowImpl {
                     self.handle_event_modifiers(keymask_to_mods(event.state));
 
                     if let Some(key) = keycode_to_key(event.keycode) {
-                        let mut capture = false;
-
-                        if event.type_ == KeyPress {
-                            self.send_event(Event::KeyDown {
-                                key,
-                                capture: &mut capture,
-                            });
-                        } else {
-                            self.send_event(Event::KeyUp {
-                                key,
-                                capture: &mut capture,
-                            });
-                        }
+                        let capture = self
+                            .event(|e| e.key_press(key, event.type_ == KeyPress))
+                            .unwrap_or(false);
 
                         if !capture {
                             XSendEvent(
                                 self.connection.display(),
-                                self.window_parent,
+                                self.window_parent.get(),
                                 1,
                                 match event.type_ {
                                     KeyPress => KeyPressMask,
@@ -663,7 +634,7 @@ impl WindowImpl {
                                 },
                                 &mut XEvent {
                                     key: XKeyEvent {
-                                        window: self.window_parent,
+                                        window: self.window_parent.get(),
                                         ..event
                                     },
                                 },
@@ -673,18 +644,9 @@ impl WindowImpl {
                 }
 
                 MotionNotify => {
-                    if self.xi2_info.is_some() {
-                        return; // use XInput2 motion events instead :p
-                    }
-
                     let event = event.motion;
                     self.handle_event_modifiers(keymask_to_mods(event.state));
-                    self.handle_event_motion(
-                        event.x as f64,
-                        event.y as f64,
-                        event.x_root as f64,
-                        event.y_root as f64,
-                    );
+                    self.handle_event_motion(event.x as f64, event.y as f64, false);
                 }
 
                 LeaveNotify => {
@@ -699,7 +661,7 @@ impl WindowImpl {
                         return;
                     }
 
-                    self.send_event(Event::MouseLeave);
+                    self.event(|e| e.mouse_leave());
                 }
 
                 FocusIn | FocusOut => {
@@ -711,7 +673,7 @@ impl WindowImpl {
                     }
 
                     if self.last_window_focused.replace(focus) != focus {
-                        self.send_event(Event::WindowFocus { focus });
+                        self.event(|e| e.focus_changed(focus));
                     }
                 }
 
@@ -720,13 +682,20 @@ impl WindowImpl {
                     self.is_destroyed.set(true);
                 }
 
+                ReparentNotify => {
+                    let event = event.reparent;
+                    self.window_parent.set(event.parent);
+                }
+
                 Expose => {
                     let event = event.expose;
-                    self.send_event(Event::WindowDamage {
-                        x: event.x.try_into().unwrap_or(0),
-                        y: event.y.try_into().unwrap_or(0),
-                        w: event.width.try_into().unwrap_or(0),
-                        h: event.height.try_into().unwrap_or(0),
+                    self.event(|e| {
+                        e.damage(Rect::xywh(
+                            event.x,
+                            event.y,
+                            event.width.try_into().unwrap_or(0),
+                            event.height.try_into().unwrap_or(0),
+                        ))
                     });
                 }
 
@@ -821,35 +790,41 @@ impl WindowImpl {
         }
     }
 
-    /// Emits a [`Event::MouseMove`] event if the cursor position has changed.
-    fn handle_event_motion(&self, x: f64, y: f64, x_root: f64, y_root: f64) {
-        let relative = Point { x, y };
-        let absolute = Point {
-            x: x_root,
-            y: y_root,
-        };
+    /// Emits a [`WindowHandler::mouse_move`] event if the cursor position has
+    /// changed.
+    fn handle_event_motion(&self, x: f64, y: f64, is_precise: bool) {
+        // if we have xinput2 and this is a xi1 event...
+        if !is_precise && self.xi2_info.is_some() {
+            // we should ignore it as xinput2 will provide us with a better precision
+            // event...
 
-        if self
-            .last_cursor_position
-            .replace(Some((relative, absolute)))
-            != Some((relative, absolute))
-        {
-            self.send_event(Event::MouseMove { relative, absolute });
+            let size = self.last_window_size.get().unwrap_or_default();
+            if x >= 0.0 && y >= 0.0 && x <= size.width as f64 && y <= size.height as f64 {
+                // unless it is out of bounds, as xinput2 will not provide us
+                // with out of bound events
+                return;
+            }
+        }
+
+        let point = Point { x, y };
+        if self.last_cursor_position.replace(Some(point)) != Some(point) {
+            self.event(|e| e.mouse_move(point)); // TODO: absolute?
         }
     }
 
-    /// Emits a [`Event::KeyModifiers`] event if the modifiers have changed.
+    /// Emits a [`WindowHandler::key_modifiers`] event if the modifiers have
+    /// changed.
     fn handle_event_modifiers(&self, modifiers: Modifiers) {
         if self.last_modifiers.replace(modifiers) != modifiers {
-            self.send_event(Event::KeyModifiers { modifiers });
+            self.event(|e| e.key_modifiers(modifiers));
         }
     }
 
-    /// Sends an event to our event handler.
-    fn send_event(&self, e: Event) {
-        if let Some(handler) = &mut *self.handler.borrow_mut() {
-            handler(e)
-        }
+    /// Access the [`WindowHandler`] if available.
+    fn event<R>(&self, f: impl FnOnce(&mut dyn WindowHandler) -> R) -> Option<R> {
+        (*self.handler.borrow_mut())
+            .as_mut()
+            .map(|handler| f(handler.as_mut()))
     }
 }
 
@@ -891,6 +866,10 @@ impl PlatformWindow for WindowImpl {
 
     fn opengl(&self) -> Option<&dyn PlatformOpenGl> {
         self.gl_context.as_ref().map(|gl| gl as &dyn PlatformOpenGl)
+    }
+
+    fn scale(&self) -> f64 {
+        self.dpi_scale
     }
 
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
@@ -966,10 +945,6 @@ impl PlatformWindow for WindowImpl {
                 point.y.round() as i32,
             );
         }
-    }
-
-    fn get_scale(&self) -> f64 {
-        self.dpi_scale
     }
 
     fn set_size(&self, size: Size) {
