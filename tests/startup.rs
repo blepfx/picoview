@@ -12,6 +12,8 @@ fn main() {
     test_startup_transient();
     sleep(Duration::from_millis(100));
     test_startup_embedded();
+    sleep(Duration::from_millis(100));
+    test_startup_error();
 }
 
 fn test_startup_blocking() {
@@ -34,10 +36,10 @@ fn test_startup_blocking() {
         window.set_position((100, 200));
         window.set_visible(true);
 
-        Box::new(Handler {
+        Ok(Box::new(Handler {
             window,
             instant: Instant::now(),
-        })
+        }))
     })
     .open_blocking()
     .unwrap();
@@ -64,10 +66,10 @@ fn test_startup_blocking_undecorated() {
         window.set_decorations(false);
         window.set_visible(true);
 
-        Box::new(Handler {
+        Ok(Box::new(Handler {
             window,
             instant: Instant::now(),
-        })
+        }))
     })
     .open_blocking()
     .unwrap();
@@ -88,7 +90,7 @@ fn test_startup_transient() {
                     window.set_position((256, 0));
                     window.set_visible(true);
 
-                    Box::new(())
+                    Ok(Box::new(()))
                 })
                 .open_transient(self.window)
                 .unwrap();
@@ -108,7 +110,7 @@ fn test_startup_transient() {
         window.set_position((100, 200));
         window.set_visible(true);
 
-        Box::new(Handler { window, frames: 0 })
+        Ok(Box::new(Handler { window, frames: 0 }))
     })
     .open_blocking()
     .unwrap();
@@ -138,7 +140,7 @@ fn test_startup_embedded() {
                     window.set_size((256, 256));
                     window.set_visible(true);
 
-                    Box::new(Handler { window })
+                    Ok(Box::new(Handler { window }))
                 })
                 .open_embedded(self.window)
                 .unwrap();
@@ -149,7 +151,7 @@ fn test_startup_embedded() {
                     window.set_size((256, 256));
                     window.set_visible(true);
 
-                    Box::new(())
+                    Ok(Box::new(()))
                 })
                 .open_embedded(self.window)
                 .unwrap();
@@ -169,8 +171,23 @@ fn test_startup_embedded() {
         window.set_position((100, 200));
         window.set_visible(true);
 
-        Box::new(Handler { window, frames: 0 })
+        Ok(Box::new(Handler { window, frames: 0 }))
     })
     .open_blocking()
     .unwrap();
+}
+
+fn test_startup_error() {
+    let err = WindowBuilder::new(|window| {
+        window.set_title("picoview test - error");
+        window.set_size((512, 256));
+        window.set_position((100, 200));
+        window.set_visible(true);
+
+        Err("test error".into())
+    })
+    .open_blocking()
+    .unwrap_err();
+
+    assert_eq!(err.to_string(), "test error");
 }

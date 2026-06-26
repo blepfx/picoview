@@ -14,6 +14,9 @@ pub struct SwapBuffersError;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WindowError {
+    /// A user-defined error occurred.
+    User(Box<dyn Error + Send + Sync>),
+
     /// A platform-specific error occurred.
     Platform(String),
 
@@ -32,6 +35,7 @@ impl Error for WindowError {}
 impl fmt::Display for WindowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            WindowError::User(err) => write!(f, "{}", err),
             WindowError::Platform(err) => write!(f, "platform error: {}", err),
             WindowError::OpenGl(err) => write!(f, "failed to create opengl context: {}", err),
             WindowError::InvalidParent => write!(f, "invalid parent window handle"),

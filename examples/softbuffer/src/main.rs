@@ -16,11 +16,11 @@ fn main() {
             .resize(NonZero::new(600).unwrap(), NonZero::new(600).unwrap())
             .unwrap();
 
-        Box::new(Handler {
+        Ok(Box::new(Handler {
             window,
             surface,
             damage: false,
-        })
+        }))
     })
     .with_transparency(true)
     .open_blocking()

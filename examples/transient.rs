@@ -11,14 +11,14 @@ fn main() {
             window.set_size((200, 200));
             window.set_visible(true);
 
-            Box::new(Child { window })
+            Ok(Box::new(Child { window }))
         })
         .open_transient(window)
         .expect("failed to open a child window");
 
         child.wakeup().unwrap();
 
-        Box::new(Parent { window })
+        Ok(Box::new(Parent { window }))
     })
     .open_blocking()
     .expect("failed to open a window");

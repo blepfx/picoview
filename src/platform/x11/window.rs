@@ -290,8 +290,12 @@ impl WindowImpl {
             //    drop impl)
             //  - we promise to not move WindowImpl (and by extension the handler) to a
             //    different thread (as that would violate the handler's !Send requirement)
-            self.handler
-                .replace(Some((factory)(Window(&*(&*self as *const Self)))));
+            let handler = match (factory)(Window(&*(&*self as *const Self))) {
+                Ok(handler) => handler,
+                Err(error) => return Err(WindowError::User(error)),
+            };
+
+            self.handler.replace(Some(handler));
 
             // main loop
             let mut next_frame = Instant::now();

@@ -9,14 +9,14 @@ fn main() {
         window.set_decorations(true);
         window.set_visible(true);
 
-        Box::new(Handler {
+        Ok(Box::new(Handler {
             window,
             scale: window.scale(),
             size: Size {
                 width: 200,
                 height: 200,
             },
-        })
+        }))
     })
     .with_opengl(GlConfig {
         version: GlVersion::Compat(2, 1),

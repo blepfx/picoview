@@ -1,4 +1,5 @@
 use crate::*;
+use std::error::Error;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -147,9 +148,19 @@ impl WindowHandler for () {}
 // performance overhead of dynamic dispatch is extremely low anyway
 
 /// A function that constructs _an event handler_ for a window.
+///
 /// The factory must be `Send` and `'static`.
-pub type WindowFactory =
-    Box<dyn for<'a> FnOnce(Window<'a>) -> Box<dyn WindowHandler + 'a> + Send + 'static>;
+///
+/// Optionally, the factory can return an error if it fails to initialize for
+/// some reason. The error will be propagated to the caller as
+/// [`WindowError::User`].
+pub type WindowFactory = Box<
+    dyn for<'a> FnOnce(
+            Window<'a>,
+        ) -> Result<Box<dyn WindowHandler + 'a>, Box<dyn Error + Send + Sync>>
+        + Send
+        + 'static,
+>;
 
 /// A builder for opening new windows.
 ///
@@ -320,7 +331,13 @@ impl WindowBuilder {
     /// Create a new [`WindowBuilder`] with the given event handler factory and
     /// default parameters
     pub fn new(
-        factory: impl for<'a> FnOnce(Window<'a>) -> Box<dyn WindowHandler + 'a> + Send + 'static,
+        factory: impl for<'a> FnOnce(
+            Window<'a>,
+        ) -> Result<
+            Box<dyn WindowHandler + 'a>,
+            Box<dyn Error + Send + Sync>,
+        > + Send
+        + 'static,
     ) -> Self {
         Self {
             transparent: false,

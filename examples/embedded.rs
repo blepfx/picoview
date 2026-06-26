@@ -11,11 +11,11 @@ fn main() {
             window.set_size((200, 200));
             window.set_visible(true);
 
-            Box::new(Child {
+            Ok(Box::new(Child {
                 window,
                 name: "left",
                 cursor: MouseCursor::Crosshair,
-            })
+            }))
         })
         .open_embedded(window)
         .expect("failed to open a child window");
@@ -25,16 +25,16 @@ fn main() {
             window.set_position((200, 0));
             window.set_visible(true);
 
-            Box::new(Child {
+            Ok(Box::new(Child {
                 window,
                 name: "right",
                 cursor: MouseCursor::NotAllowed,
-            })
+            }))
         })
         .open_embedded(window)
         .expect("failed to open a child window");
 
-        Box::new(Parent { window })
+        Ok(Box::new(Parent { window }))
     })
     .open_blocking()
     .expect("failed to open a window");
