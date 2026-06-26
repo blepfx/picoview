@@ -3,6 +3,7 @@ use super::util::*;
 use crate::platform::{OpenMode, PlatformOpenGl, PlatformWaker, PlatformWindow};
 use crate::*;
 use libc::c_ulong;
+use raw_window_handle::RawWindowHandle;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -80,10 +81,12 @@ impl WindowImpl {
             })?;
 
             let default_root = XDefaultRootWindow(connection.display());
-            let window_parent = match mode.handle() {
-                None => default_root,
-                Some(rwh_06::RawWindowHandle::Xlib(handle)) => handle.window,
-                Some(rwh_06::RawWindowHandle::Xcb(handle)) => handle.window.get() as u64,
+            let window_parent = match mode {
+                OpenMode::Blocking => default_root,
+                OpenMode::Embedded(RawWindowHandle::Xlib(handle)) => handle.window,
+                OpenMode::Embedded(RawWindowHandle::Xcb(handle)) => handle.window.get() as u64,
+                OpenMode::Transient(RawWindowHandle::Xlib(handle)) => handle.window,
+                OpenMode::Transient(RawWindowHandle::Xcb(handle)) => handle.window.get() as u64,
                 _ => return Err(WindowError::InvalidParent),
             };
 
