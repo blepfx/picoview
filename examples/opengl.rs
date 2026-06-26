@@ -6,6 +6,7 @@ fn main() {
         window.set_max_size((1000, 1000));
         window.set_size((200, 200));
         window.set_title("OpenGL Example");
+        window.set_decorations(true);
         window.set_visible(true);
 
         Box::new(Handler {

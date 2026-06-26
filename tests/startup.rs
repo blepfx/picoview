@@ -61,6 +61,7 @@ fn test_startup_blocking_undecorated() {
         window.set_title("picoview test - blocking undecorated");
         window.set_size((512, 256));
         window.set_position((100, 200));
+        window.set_decorations(false);
         window.set_visible(true);
 
         Box::new(Handler {
@@ -68,7 +69,6 @@ fn test_startup_blocking_undecorated() {
             instant: Instant::now(),
         })
     })
-    .with_decorations(false)
     .open_blocking()
     .unwrap();
 }

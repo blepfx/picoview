@@ -59,6 +59,7 @@ pub trait PlatformWindow /* : !Send + !Sync */ {
     fn scale(&self) -> f64;
 
     fn set_title(&self, title: &str);
+    fn set_decorations(&self, decorations: bool);
     fn set_cursor_icon(&self, icon: MouseCursor);
     fn set_cursor_position(&self, pos: Point);
     fn set_visible(&self, visible: bool);

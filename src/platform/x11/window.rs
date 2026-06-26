@@ -195,39 +195,6 @@ impl WindowImpl {
                 );
             }
 
-            // decoration stuff
-            {
-                let data: [u32; 1] = [if options.decorations {
-                    connection.atom(c"_NET_WM_WINDOW_TYPE_NORMAL") as u32
-                } else {
-                    connection.atom(c"_NET_WM_WINDOW_TYPE_DOCK") as u32
-                }];
-
-                XChangeProperty(
-                    connection.display(),
-                    window_id,
-                    connection.atom(c"_NET_WM_WINDOW_TYPE"),
-                    connection.atom(c"ATOM"),
-                    32,
-                    PropModeReplace,
-                    data.as_ptr() as *mut _,
-                    data.len() as _,
-                );
-
-                let data: [u32; 5] = [0b10, 0, options.decorations as u32, 0, 0];
-
-                XChangeProperty(
-                    connection.display(),
-                    window_id,
-                    connection.atom(c"_MOTIF_WM_HINTS"),
-                    connection.atom(c"ATOM"),
-                    32,
-                    PropModeReplace,
-                    data.as_ptr() as *mut _,
-                    data.len() as _,
-                );
-            }
-
             let gl_context = if let Some(config) = options.opengl {
                 GlContext::new(
                     connection.clone(),
@@ -895,6 +862,62 @@ impl PlatformWindow for WindowImpl {
                     XFree(text.value as *mut _);
                 }
             }
+        }
+    }
+
+    fn set_decorations(&self, decorations: bool) {
+        if self.is_closed.get() {
+            return;
+        }
+
+        // _NET_WM_WINDOW_TYPE
+        unsafe {
+            let data: [u32; 1] = [match decorations {
+                true => self.connection.atom(c"_NET_WM_WINDOW_TYPE_NORMAL") as u32,
+                false => self.connection.atom(c"_NET_WM_WINDOW_TYPE_DOCK") as u32,
+            }];
+
+            XChangeProperty(
+                self.connection.display(),
+                self.window_id,
+                self.connection.atom(c"_NET_WM_WINDOW_TYPE"),
+                self.connection.atom(c"ATOM"),
+                32,
+                PropModeReplace,
+                data.as_ptr() as *mut _,
+                data.len() as _,
+            );
+        }
+
+        // _MOTIF_WM_HINTS
+        unsafe {
+            let data: [u32; 5] = [
+                0b10,
+                0,
+                match decorations {
+                    true => 1,
+                    false => 0,
+                },
+                0,
+                0,
+            ];
+
+            XChangeProperty(
+                self.connection.display(),
+                self.window_id,
+                self.connection.atom(c"_MOTIF_WM_HINTS"),
+                self.connection.atom(c"ATOM"),
+                32,
+                PropModeReplace,
+                data.as_ptr() as *mut _,
+                data.len() as _,
+            );
+        }
+
+        // re-map the window to apply the changes
+        if self.last_window_visible.get() {
+            self.set_visible(false);
+            self.set_visible(true);
         }
     }
 

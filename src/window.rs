@@ -161,9 +161,6 @@ pub type WindowFactory =
 #[non_exhaustive]
 #[must_use = "`WindowBuilder` does nothing until you call one of the open methods"]
 pub struct WindowBuilder {
-    /// Whether the window has decorations (title bar, borders, etc)
-    pub decorations: bool,
-
     /// Whether the window client area is transparent (premultiplied alpha)
     pub transparent: bool,
 
@@ -229,6 +226,11 @@ impl<'a> Window<'a> {
     /// Set the cursor icon that is shown when hovering over the window.
     pub fn set_cursor_icon(&self, icon: MouseCursor) {
         self.0.set_cursor_icon(icon);
+    }
+
+    /// Set whether the window has decorations (title bar, borders, etc)
+    pub fn set_decorations(&self, decorations: bool) {
+        self.0.set_decorations(decorations);
     }
 
     /// Warp the mouse cursor to the given position within the window.
@@ -321,20 +323,9 @@ impl WindowBuilder {
         factory: impl for<'a> FnOnce(Window<'a>) -> Box<dyn WindowHandler + 'a> + Send + 'static,
     ) -> Self {
         Self {
-            decorations: true,
             transparent: false,
             opengl: None,
             factory: Box::new(factory),
-        }
-    }
-
-    /// Set whether the window has decorations (title bar, borders, etc)
-    ///
-    /// `true` by default
-    pub fn with_decorations(self, decorations: bool) -> Self {
-        Self {
-            decorations,
-            ..self
         }
     }
 
@@ -435,7 +426,7 @@ impl<'a> Debug for Window<'a> {
 impl Debug for WindowBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowBuilder")
-            .field("decorations", &self.decorations)
+            .field("transparent", &self.transparent)
             .field("opengl", &self.opengl)
             .finish_non_exhaustive()
     }
