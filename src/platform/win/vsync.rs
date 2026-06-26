@@ -11,6 +11,12 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::SendNotifyMessageW;
 
+/// A thread that waits for VSync blanks and sends a message to the window to
+/// trigger [`WindowHandler::frame`](crate::WindowHandler::frame) event.
+///
+/// Uses DWM flush ([`DwmFlush`]) if available, otherwise falls back to a timer
+/// based on the refresh rate of the monitor (queried using
+/// [`GetMonitorInfoW`] and [`EnumDisplaySettingsW`]).
 pub struct VSyncThread {
     inner: Arc<Inner>,
     thread: Option<JoinHandle<()>>,
@@ -36,12 +42,16 @@ impl VSyncThread {
         }
     }
 
+    /// Notifies the vsync thread that the display has changed and we should
+    /// recalculate the refresh rate for the fallback timer.
     pub fn notify_display_change(&self) {
         self.inner
             .notify_display_change
             .store(true, Ordering::Relaxed);
     }
 
+    /// Notifies the vsync thread that the frame has finished and we are ready
+    /// for the next frame.
     pub fn notify_frame_finished(&self) {
         self.inner
             .notify_frame_finished
@@ -51,8 +61,10 @@ impl VSyncThread {
 
 impl Drop for VSyncThread {
     fn drop(&mut self) {
+        // asks the vsync thread to exit and waits for it to finish.
         self.inner.active.store(false, Ordering::Relaxed);
 
+        // wait for the thread to finish, if it panicked we rethrow
         if let Some(thread) = self.thread.take()
             && let Err(panic) = thread.join()
         {
@@ -62,9 +74,15 @@ impl Drop for VSyncThread {
 }
 
 struct Inner {
+    /// The window we send the messages to
     hwnd: usize,
+    /// Whether the thread is still active, if not we should exit the thread.
     active: AtomicBool,
+    /// Whether the display has changed and we should recalculate the refresh
+    /// rate for the fallback timer.
     notify_display_change: AtomicBool,
+    /// Whether the frame has finished and the window expects a new frame to be
+    /// queued.
     notify_frame_finished: AtomicBool,
 }
 
@@ -92,13 +110,21 @@ unsafe fn run_vsync_thread(sync: Arc<Inner>) {
             if sync.notify_frame_finished.swap(false, Ordering::Relaxed) {
                 // same as SendMessage but does not block the thread
                 //
-                // does not clog the main-thread message queue
+                // why not PostMessage?: does not clog the main-thread message queue, has higher
+                // priority than posted messages (i think, dont quote me on
+                // that)
+                //
+                // why not SendMessage?: blocks the vsync thread until the main thread processes
+                // the message, which can cause a deadlock if the main thread is waiting for the
+                // vsync thread to finish.
                 SendNotifyMessageW(hwnd, WM_USER_VSYNC, 0, 0);
             }
         }
     }
 }
 
+/// Waits for the next VSync blank using DWM, returns true if it was successful,
+/// false if we need to fallback to a timer.
 fn wait_dwm_flush() -> bool {
     unsafe {
         let mut pfenabled = 0;
@@ -110,6 +136,7 @@ fn wait_dwm_flush() -> bool {
     }
 }
 
+/// Waits for the next VSync blank using a timer.
 fn wait_fallback(next_frame: &mut Instant, interval: Duration) {
     let curr_frame = Instant::now();
     let wait_time = next_frame.checked_duration_since(curr_frame);
@@ -120,6 +147,9 @@ fn wait_fallback(next_frame: &mut Instant, interval: Duration) {
     }
 }
 
+/// Returns the refresh rate of the monitor in Hz, or None if it could not be
+/// determined. This is used to determine the fallback interval for VSync when
+/// DWM is not available (should be rare, but it can happen on some systems).
 unsafe fn get_refresh_rate(monitor: HMONITOR) -> Option<u32> {
     unsafe {
         let mut info = MONITORINFOEXW::default();

@@ -55,7 +55,9 @@ type WglSwapIntervalEXT = unsafe extern "system" fn(i32) -> i32;
 type WglGetExtensionsStringEXT = unsafe extern "system" fn() -> *const c_char;
 type WglGetExtensionsStringARB = unsafe extern "system" fn(HDC) -> *const c_char;
 
+/// WGL based [`PlatformOpenGl`] implementation
 pub struct GlContext {
+    /// The window our context was created for
     hwnd: HWND,
     hdc: HDC,
     hglrc: HGLRC,
@@ -65,11 +67,10 @@ pub struct GlContext {
 impl GlContext {
     pub unsafe fn new(hwnd: HWND, config: crate::GlConfig) -> Result<Self, OpenGlError> {
         unsafe {
-            let ext = WglExtensions::get();
             let hdc = GetDC(hwnd);
             let gl_library = LoadLibraryA(c"opengl32.dll".as_ptr() as *const _);
 
-            let (format_id, format_desc) = create_pixel_format_arb(hdc, &config, ext)
+            let (format_id, format_desc) = create_pixel_format_arb(hdc, &config)
                 .or_else(|| create_pixel_format_fallback(hdc, &config))
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
@@ -79,7 +80,7 @@ impl GlContext {
 
             SetPixelFormat(hdc, format_id, &format_desc);
 
-            let hglrc = create_context_arb(hdc, &config, ext)
+            let hglrc = create_context_arb(hdc, &config)
                 .or_else(|| create_context_fallback(hdc))
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
@@ -87,13 +88,7 @@ impl GlContext {
                     OpenGlError("Failed to create a context with given requirements".to_owned())
                 })?;
 
-            if ext.ext_swap_control
-                && let Some(swap_interval) = ext.swap_interval
-            {
-                wglMakeCurrent(hdc, hglrc);
-                (swap_interval)(0);
-                wglMakeCurrent(hdc, null_mut());
-            }
+            try_set_swap_interval(hdc, hglrc, 0);
 
             Ok(Self {
                 hwnd,
@@ -145,18 +140,17 @@ impl Drop for GlContext {
     }
 }
 
+/// Information about supported WGL extensions and methods, computed once and
+/// cached for the lifetime of the program.
 #[derive(Default)]
 struct WglExtensions {
     create_context_attribs: Option<WglCreateContextAttribsARB>,
     choose_pixel_format: Option<WglChoosePixelFormatARB>,
     swap_interval: Option<WglSwapIntervalEXT>,
 
-    ext_context_arb: bool,
-    ext_context_es_profile: bool,
     ext_multisample: bool,
-    ext_pixel_format_arb: bool,
     ext_framebuffer_srgb: bool,
-    ext_swap_control: bool,
+    ext_context_es_profile: bool,
 }
 
 impl WglExtensions {
@@ -165,6 +159,14 @@ impl WglExtensions {
         CACHE.get_or_init(|| unsafe { Self::create() })
     }
 
+    /// Query the WGL extensions and methods supported by the current system.
+    ///
+    /// This has to be done by making a temporary window, OpenGL context, and
+    /// then querying the extensions, unfortunately. This is expensive but only
+    /// needs to be done once per program execution.
+    ///
+    /// This is required if we want to have access to fancier features, like
+    /// better context creation and pixel format selection.
     unsafe fn create() -> WglExtensions {
         unsafe {
             let class_name = to_widestring(&format!("picoview-dummy-{}", generate_guid()));
@@ -251,22 +253,26 @@ impl WglExtensions {
             };
 
             let context = Self {
-                create_context_attribs: load_fn!(
-                    WglCreateContextAttribsARB,
-                    "wglCreateContextAttribsARB"
-                ),
-                choose_pixel_format: load_fn!(WglChoosePixelFormatARB, "wglChoosePixelFormatARB"),
-                swap_interval: load_fn!(WglSwapIntervalEXT, "wglSwapIntervalEXT"),
+                create_context_attribs: extensions
+                    .contains("WGL_ARB_create_context")
+                    .then(|| load_fn!(WglCreateContextAttribsARB, "wglCreateContextAttribsARB"))
+                    .flatten(),
 
-                ext_context_arb: extensions.contains("WGL_ARB_create_context"),
+                choose_pixel_format: extensions
+                    .contains("WGL_ARB_pixel_format")
+                    .then(|| load_fn!(WglChoosePixelFormatARB, "wglChoosePixelFormatARB"))
+                    .flatten(),
+
+                swap_interval: extensions
+                    .contains("WGL_EXT_swap_control")
+                    .then(|| load_fn!(WglSwapIntervalEXT, "wglSwapIntervalEXT"))
+                    .flatten(),
+
                 ext_context_es_profile: extensions.contains("WGL_EXT_create_context_es_profile")
                     || extensions.contains("WGL_EXT_create_context_es2_profile"),
-
                 ext_multisample: extensions.contains("WGL_ARB_multisample"),
-                ext_pixel_format_arb: extensions.contains("WGL_ARB_pixel_format"),
                 ext_framebuffer_srgb: extensions.contains("WGL_ARB_framebuffer_sRGB")
                     || extensions.contains("WGL_EXT_framebuffer_sRGB"),
-                ext_swap_control: extensions.contains("WGL_EXT_swap_control"),
             };
 
             wglMakeCurrent(hdc, null_mut());
@@ -285,6 +291,19 @@ fn check_ptr(ptr: *const c_void) -> bool {
     ptr >= 8 && ptr != usize::MAX
 }
 
+fn try_set_swap_interval(hdc: HDC, hglrc: HGLRC, interval: i32) {
+    unsafe {
+        let wgl = WglExtensions::get();
+        let Some(swap_interval) = wgl.swap_interval else {
+            return;
+        };
+
+        wglMakeCurrent(hdc, hglrc);
+        swap_interval(interval);
+        wglMakeCurrent(hdc, null_mut());
+    }
+}
+
 fn create_context_fallback(hdc: HDC) -> Option<HGLRC> {
     unsafe {
         let ptr = wglCreateContext(hdc);
@@ -292,13 +311,10 @@ fn create_context_fallback(hdc: HDC) -> Option<HGLRC> {
     }
 }
 
-fn create_context_arb(hdc: HDC, config: &crate::GlConfig, ext: &WglExtensions) -> Option<HGLRC> {
+fn create_context_arb(hdc: HDC, config: &crate::GlConfig) -> Option<HGLRC> {
     unsafe {
-        let create_context_attribs = ext.create_context_attribs?;
-        if !ext.ext_context_arb {
-            return None;
-        }
-
+        let wgl = WglExtensions::get();
+        let create_context_attribs = wgl.create_context_attribs?;
         let ctx_attribs = {
             let mut ctx_attribs = vec![];
 
@@ -328,7 +344,7 @@ fn create_context_arb(hdc: HDC, config: &crate::GlConfig, ext: &WglExtensions) -
                     ]);
                 }
                 crate::GlVersion::ES(major, minor) => {
-                    if !ext.ext_context_es_profile {
+                    if !wgl.ext_context_es_profile {
                         return None;
                     }
 
@@ -390,14 +406,10 @@ fn create_pixel_format_fallback(
 fn create_pixel_format_arb(
     hdc: HDC,
     config: &crate::GlConfig,
-    ext: &WglExtensions,
 ) -> Option<(i32, PIXELFORMATDESCRIPTOR)> {
     unsafe {
-        let choose_pixel_format = ext.choose_pixel_format?;
-        if !ext.ext_pixel_format_arb {
-            return None;
-        }
-
+        let wgl = WglExtensions::get();
+        let choose_pixel_format = wgl.choose_pixel_format?;
         let pixel_format_attribs = {
             let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
 
@@ -423,7 +435,7 @@ fn create_pixel_format_arb(
                     .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_GENERIC_ACCELERATION_ARB]);
             }
 
-            if ext.ext_multisample {
+            if wgl.ext_multisample {
                 pixel_format_attribs.extend_from_slice(&[
                     WGL_SAMPLE_BUFFERS_ARB,
                     (config.msaa_count != 0) as i32,
@@ -432,7 +444,7 @@ fn create_pixel_format_arb(
                 ]);
             }
 
-            if ext.ext_framebuffer_srgb {
+            if wgl.ext_framebuffer_srgb {
                 pixel_format_attribs
                     .extend_from_slice(&[WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, config.srgb as i32]);
             }
