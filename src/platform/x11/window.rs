@@ -30,7 +30,7 @@ pub struct WindowImpl {
     refresh_interval: Duration,
     dpi_scale: f64,
 
-    is_closed: Cell<bool>,
+    is_closing: Cell<bool>,
     is_destroyed: Cell<bool>,
 
     last_modifiers: Cell<Modifiers>,
@@ -234,7 +234,7 @@ impl WindowImpl {
                     window_id,
                 }),
 
-                is_closed: Cell::new(false),
+                is_closing: Cell::new(false),
                 is_destroyed: Cell::new(false),
                 refresh_interval,
                 dpi_scale,
@@ -304,7 +304,7 @@ impl WindowImpl {
             // - if an event happens, we will handle it immediately and continue waiting for
             //   the next event/until the frame timer runs out.
             let mut next_frame = Instant::now();
-            while !self.is_closed.get() {
+            while !self.is_closing.get() {
                 let curr_frame = Instant::now();
                 let wait_time = match next_frame.checked_duration_since(curr_frame) {
                     Some(wait_time) => wait_time,
@@ -654,7 +654,7 @@ impl WindowImpl {
                 }
 
                 DestroyNotify => {
-                    self.is_closed.set(true);
+                    self.is_closing.set(true);
                     self.is_destroyed.set(true);
                 }
 
@@ -833,7 +833,7 @@ impl Drop for WindowImpl {
 
 impl PlatformWindow for WindowImpl {
     fn close(&self) {
-        self.is_closed.set(true);
+        self.is_closing.set(true);
     }
 
     fn waker(&self) -> WindowWaker {
@@ -860,10 +860,6 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_title(&self, title: &str) {
-        if self.is_closed.get() {
-            return;
-        }
-
         if let Ok(title) = CString::new(title.to_owned()) {
             unsafe {
                 let mut text = XTextProperty { ..zeroed() };
@@ -878,10 +874,6 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_decorations(&self, decorations: bool) {
-        if self.is_closed.get() {
-            return;
-        }
-
         // _NET_WM_WINDOW_TYPE
         unsafe {
             let data: [u32; 1] = [match decorations {
@@ -934,7 +926,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_cursor_icon(&self, cursor: MouseCursor) {
-        if self.is_closed.get() || self.last_cursor_icon.replace(cursor) == cursor {
+        if self.last_cursor_icon.replace(cursor) == cursor {
             return;
         }
 
@@ -963,10 +955,6 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_cursor_position(&self, point: Point) {
-        if self.is_closed.get() {
-            return;
-        }
-
         unsafe {
             XWarpPointer(
                 self.connection.display(),
@@ -983,7 +971,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_size(&self, size: Size) {
-        if self.is_closed.get() || self.last_window_size.replace(Some(size)) == Some(size) {
+        if self.last_window_size.replace(Some(size)) == Some(size) {
             return;
         }
 
@@ -1007,7 +995,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_min_size(&self, size: Size) {
-        if self.is_closed.get() || self.last_window_min_size.replace(size) == size {
+        if self.last_window_min_size.replace(size) == size {
             return;
         }
 
@@ -1029,7 +1017,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_max_size(&self, size: Size) {
-        if self.is_closed.get() || self.last_window_max_size.replace(size) == size {
+        if self.last_window_max_size.replace(size) == size {
             return;
         }
 
@@ -1051,7 +1039,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_position(&self, point: Point) {
-        if self.is_closed.get() || self.last_window_position.replace(Some(point)) == Some(point) {
+        if self.last_window_position.replace(Some(point)) == Some(point) {
             return;
         }
 
@@ -1070,7 +1058,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_visible(&self, visible: bool) {
-        if self.is_closed.get() || self.last_window_visible.replace(visible) == visible {
+        if self.last_window_visible.replace(visible) == visible {
             return;
         }
 
