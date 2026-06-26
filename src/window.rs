@@ -153,7 +153,7 @@ impl WindowHandler for () {}
 ///
 /// Optionally, the factory can return an error if it fails to initialize for
 /// some reason. The error will be propagated to the caller as
-/// [`WindowError::User`].
+/// [`WindowError::Factory`].
 pub type WindowFactory = Box<
     dyn for<'a> FnOnce(
             Window<'a>,
@@ -201,7 +201,7 @@ impl<'a> Window<'a> {
     }
 
     /// Get the OpenGL context associated with the window, if present.
-    pub fn opengl(&self) -> Option<GlContext<'a>> {
+    pub fn opengl(&self) -> Result<GlContext<'a>, OpenGlError> {
         self.0.opengl().map(GlContext)
     }
 

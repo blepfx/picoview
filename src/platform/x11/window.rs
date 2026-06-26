@@ -56,7 +56,7 @@ pub struct WindowImpl {
 
     #[allow(clippy::type_complexity)]
     handler: RefCell<Option<Box<dyn WindowHandler>>>,
-    gl_context: Option<GlContext>,
+    gl_context: Result<GlContext, OpenGlError>,
 }
 
 pub struct WindowWakerImpl {
@@ -91,7 +91,7 @@ impl WindowImpl {
                 .opengl
                 .as_ref()
                 .and_then(|config| {
-                    GlContext::find_best_config(&connection, config, options.transparent).ok()
+                    GlContext::find_best_config(&connection, config, options.transparent)
                 })
                 .or_else(|| {
                     VisualConfig::try_new_true_color(
@@ -195,17 +195,17 @@ impl WindowImpl {
                 );
             }
 
-            let gl_context = if let Some(config) = options.opengl {
-                GlContext::new(
-                    connection.clone(),
-                    window_id as _,
-                    config,
-                    visual_info.fb_config,
-                )
-                .ok()
-            } else {
-                None
-            };
+            let gl_context = options
+                .opengl
+                .map(|config| {
+                    GlContext::new(
+                        connection.clone(),
+                        window_id as _,
+                        config,
+                        visual_info.fb_config,
+                    )
+                })
+                .unwrap_or_else(|| Err(OpenGlError("No config was provided".into())));
 
             let refresh_interval =
                 Duration::from_secs_f64(1.0 / query_refresh_rate(&connection).unwrap_or(60.0));
@@ -292,12 +292,17 @@ impl WindowImpl {
             //    different thread (as that would violate the handler's !Send requirement)
             let handler = match (factory)(Window(&*(&*self as *const Self))) {
                 Ok(handler) => handler,
-                Err(error) => return Err(WindowError::User(error)),
+                Err(error) => return Err(WindowError::Factory(error)),
             };
 
+            // start accepting events
             self.handler.replace(Some(handler));
 
             // main loop
+            // - use a fixed refresh interval to call into [`WindowHandler::frame`] at a
+            //   consistent rate
+            // - if an event happens, we will handle it immediately and continue waiting for
+            //   the next event/until the frame timer runs out.
             let mut next_frame = Instant::now();
             while !self.is_closed.get() {
                 let curr_frame = Instant::now();
@@ -305,8 +310,8 @@ impl WindowImpl {
                     Some(wait_time) => wait_time,
                     None => {
                         self.event(|e| e.frame());
-                        next_frame = (next_frame + self.refresh_interval).max(curr_frame);
-                        Duration::ZERO
+                        next_frame = (next_frame + self.refresh_interval).max(curr_frame); //avoid death spiral by capping next_frame to the current time if we are behind schedule
+                        next_frame.saturating_duration_since(curr_frame) // return the time until the next frame, or 0 if we are behind schedule
                     }
                 };
 
@@ -835,8 +840,11 @@ impl PlatformWindow for WindowImpl {
         WindowWaker(self.waker.clone())
     }
 
-    fn opengl(&self) -> Option<&dyn PlatformOpenGl> {
-        self.gl_context.as_ref().map(|gl| gl as &dyn PlatformOpenGl)
+    fn opengl(&self) -> Result<&dyn PlatformOpenGl, OpenGlError> {
+        match &self.gl_context {
+            Ok(gl) => Ok(gl),
+            Err(e) => Err(e.clone()),
+        }
     }
 
     fn scale(&self) -> f64 {

@@ -1,4 +1,6 @@
-use picoview::{GlConfig, GlVersion, Point, Rect, Size, Window, WindowBuilder, WindowHandler};
+use picoview::{
+    GlConfig, GlContext, GlVersion, Point, Rect, Size, Window, WindowBuilder, WindowHandler,
+};
 use std::mem::transmute;
 
 fn main() {
@@ -11,6 +13,7 @@ fn main() {
 
         Ok(Box::new(Handler {
             window,
+            opengl: window.opengl()?,
             scale: window.scale(),
             size: Size {
                 width: 200,
@@ -29,26 +32,15 @@ fn main() {
 
 struct Handler<'a> {
     window: Window<'a>,
+    opengl: GlContext<'a>,
     size: Size,
     scale: f64,
 }
 
 impl<'a> WindowHandler for Handler<'a> {
-    fn mouse_move(&mut self, point: Point) {
-        println!("mouse_move({:?})", point);
-
-        if point.x < -10.0 {
-            self.window.set_cursor_position((100.0, 100.0));
-        }
-    }
-
-    fn close(&mut self) {
-        self.window.close();
-    }
-
     fn frame(&mut self) {
         // we just rawdogging opengl here lol
-        let gl = self.window.opengl().expect("failed to get OpenGL context");
+        let gl = self.opengl;
         let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
             unsafe { transmute(gl.get_proc_address(c"glClearColor")) };
         let clear: unsafe extern "system" fn(i32) =
@@ -105,6 +97,18 @@ impl<'a> WindowHandler for Handler<'a> {
 
         gl.swap_buffers().unwrap();
         gl.make_current(false).unwrap();
+    }
+
+    fn mouse_move(&mut self, point: Point) {
+        println!("mouse_move({:?})", point);
+
+        if point.x < -10.0 {
+            self.window.set_cursor_position((100.0, 100.0));
+        }
+    }
+
+    fn close(&mut self) {
+        self.window.close();
     }
 
     fn wakeup(&mut self) {}

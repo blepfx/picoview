@@ -55,7 +55,7 @@ pub trait PlatformWindow /* : !Send + !Sync */ {
 
     fn close(&self);
     fn waker(&self) -> WindowWaker;
-    fn opengl(&self) -> Option<&dyn PlatformOpenGl>;
+    fn opengl(&self) -> Result<&dyn PlatformOpenGl, OpenGlError>;
     fn scale(&self) -> f64;
 
     fn set_title(&self, title: &str);
