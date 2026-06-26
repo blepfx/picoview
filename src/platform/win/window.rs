@@ -4,7 +4,7 @@ use super::util::*;
 use super::vsync::VSyncThread;
 use crate::platform::win::dnd::DropTargetImpl;
 use crate::platform::*;
-use crate::*;
+use raw_window_handle::RawWindowHandle;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::mem::{size_of, zeroed};
@@ -30,7 +30,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-/// Sent by Vsync thread, triggers [`Event::WindowFrame`] event
+/// Sent by Vsync thread, triggers [`WindowHandler::frame`] event
 pub const WM_USER_VSYNC: u32 = WM_USER + 1;
 /// Sent by [`PlatformWindow::close`] and received in the wnd_proc, closes the
 /// window
@@ -43,25 +43,26 @@ pub const WM_USER_KEY_UP: u32 = WM_USER + 4;
 /// Sent by [`WindowWakerImpl::wakeup`] to wake up the event loop
 pub const WM_USER_WAKEUP: u32 = WM_USER + 5;
 /// Sent by [`DropTargetImpl`] when a drop enters the window, triggers
-/// [`Event::DragEnter`] event.
+/// [`WindowHandler::drag_enter`] event.
 pub const WM_USER_DND_ENTER: u32 = WM_USER + 6;
 /// Sent by [`DropTargetImpl`] when a drop hovers over the window, triggers
-/// [`Event::DragMove`] event.
+/// [`WindowHandler::drag_move`] event.
 pub const WM_USER_DND_HOVER: u32 = WM_USER + 7;
 /// Sent by [`DropTargetImpl`] when a drop leaves the window, triggers
-/// [`Event::DragLeave`] event.
+/// [`WindowHandler::drag_leave`] event.
 pub const WM_USER_DND_LEAVE: u32 = WM_USER + 8;
 /// Sent by [`DropTargetImpl`] when a drop is performed, triggers
-/// [`Event::DragAccept`] event.
+/// [`WindowHandler::drag_accept`] event.
 pub const WM_USER_DND_ACCEPT: u32 = WM_USER + 9;
 
+/// A Win32 implementation of a [`PlatformWindow`].
 pub struct WindowImpl {
-    gl_context: Option<GlContext>,
     waker: Arc<WindowWakerImpl>,
+    gl_context: Result<GlContext, OpenGlError>,
 
     #[allow(clippy::type_complexity)]
-    event_handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
-    event_queue: RefCell<VecDeque<Event<'static>>>,
+    event_handler: RefCell<Option<Box<dyn WindowHandler>>>,
+    event_queue: RefCell<VecDeque<Deferred>>,
 
     window_hwnd: HWND,
     window_class: u16,
@@ -69,8 +70,10 @@ pub struct WindowImpl {
     _drop_target: Arc<DropTargetImpl>,
     keyboard_hook: Rc<KeyboardHook>,
     vsync_thread: VSyncThread,
-    is_blocking: bool,
 
+    open_mode: OpenMode,
+
+    state_size: Cell<Size>,
     state_max_size: Cell<POINT>,
     state_min_size: Cell<POINT>,
     state_focused: Cell<bool>,
@@ -82,9 +85,34 @@ pub struct WindowImpl {
     cursor_cache: CursorCache,
 }
 
+/// Win32 implementation of a [`PlatformWaker`].
 pub struct WindowWakerImpl {
     window_hwnd: HWND,
     window_open: AtomicBool,
+}
+
+/// A deferred task to be processed later.
+///
+/// We need this because winapi is inherently reentrant, and this does not play
+/// well with Rust's borrow checker. So we have to queue up events and process
+/// them later.
+///
+/// See [`WindowImpl::post_deferred`] and [`WindowImpl::non_reentrant_event`]
+/// for more info.
+enum Deferred {
+    PositionChanged(Point),
+    SizeChanged,
+    ScaleChanged,
+    FocusChanged(bool),
+
+    WakeupRequested,
+    CloseRequested,
+    DamageRegion(Rect),
+
+    MouseMove(Point),
+    MousePress(MouseButton, bool),
+    MouseScroll(f64, f64),
+    MouseLeave,
 }
 
 unsafe impl Send for WindowWakerImpl {}
@@ -93,10 +121,11 @@ unsafe impl Sync for WindowWakerImpl {}
 impl WindowImpl {
     pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
         unsafe {
-            let parent = match mode.handle() {
-                None => null_mut(),
-                Some(rwh_06::RawWindowHandle::Win32(window)) => window.hwnd.get() as HWND,
-                Some(_) => return Err(WindowError::InvalidParent),
+            let parent = match mode {
+                OpenMode::Blocking => null_mut(),
+                OpenMode::Embedded(RawWindowHandle::Win32(window)) => window.hwnd.get() as HWND,
+                OpenMode::Transient(RawWindowHandle::Win32(window)) => window.hwnd.get() as HWND,
+                _ => return Err(WindowError::InvalidParent),
             };
 
             // S_FALSE is okay here if OleInitialize was already called on the current
@@ -126,11 +155,7 @@ impl WindowImpl {
 
                 match mode {
                     OpenMode::Blocking | OpenMode::Transient(..) => {
-                        if options.decorations {
-                            dwstyle |= WS_OVERLAPPEDWINDOW;
-                        } else {
-                            dwstyle |= WS_POPUP;
-                        }
+                        dwstyle |= WS_OVERLAPPEDWINDOW;
                     }
 
                     OpenMode::Embedded(..) => {
@@ -185,10 +210,10 @@ impl WindowImpl {
             }
 
             // new gl context if requested
-            let gl_context = match options.opengl {
-                Some(config) => GlContext::new(hwnd, config).ok(),
-                None => None,
-            };
+            let gl_context = options
+                .opengl
+                .map(|config| GlContext::new(hwnd, config))
+                .unwrap_or_else(|| Err(OpenGlError("no OpenGl config was provided".to_string())));
 
             // install the keyboard hook and register our window to it, so we could capture
             // key events even when the window is not focused. keyboard hooks are shared on
@@ -215,6 +240,8 @@ impl WindowImpl {
                 state_current_cursor: Cell::new(cursor_cache.get_closest(MouseCursor::Default)),
                 state_current_modifiers: Cell::new(Modifiers::default()),
                 state_focused: Cell::new(true),
+
+                state_size: Cell::new(Size::default()),
                 state_min_size: Cell::new(POINT { x: 0, y: 0 }),
                 state_max_size: Cell::new(POINT {
                     x: i32::MAX,
@@ -224,7 +251,7 @@ impl WindowImpl {
                 window_class,
                 window_hwnd: hwnd,
 
-                is_blocking: matches!(mode, OpenMode::Blocking),
+                open_mode: mode,
 
                 gl_context,
                 cursor_cache,
@@ -246,11 +273,13 @@ impl WindowImpl {
             //  - we promise to not move WindowImpl (and by extension the handler) to a
             //    different thread (as that would violate the handler's !Send requirement)
             // initialize our event handler
-            window
-                .event_handler
-                .replace(Some((options.factory)(Window(&*(&*window as *const Self)))));
+            let handler = match (options.factory)(Window(&*(&*window as *const Self))) {
+                Ok(handler) => handler,
+                Err(error) => return Err(WindowError::Factory(error)),
+            };
 
-            window.send_event(Event::WindowFocus { focus: true });
+            // start accepting events
+            window.event_handler.replace(Some(handler));
 
             // get our waker
             let waker = window.waker();
@@ -277,21 +306,21 @@ impl WindowImpl {
         }
     }
 
-    /// Send an event to the window's event handler _immediately_.
+    /// Run a closure with exclusive access to the window's event handler.
     ///
-    /// # Panics
-    ///
-    /// Panics on reentrant events, prefer [`Self::send_event_defer`] instead.
-    fn send_event(&self, event: Event) {
+    /// Panics if [`Self::non_reentrant_event`] is called inside of another
+    /// [`Self::non_reentrant_event`]. To safely post a task, use
+    /// [`Self::post_deferred`].
+    fn non_reentrant_event<R>(&self, call: impl FnOnce(&mut dyn WindowHandler) -> R) -> Option<R> {
         let mut handler = self
             .event_handler
             .try_borrow_mut()
             .expect("unhandled callback reentrancy");
 
-        // handler might be None if the window is being dropped, in which case we just
-        // ignore the event
+        // handler might be None if the window is being dropped, in which case we return
+        // None
         if let Some(handler) = handler.as_mut() {
-            (handler)(event);
+            let result = Some(call(&mut **handler));
 
             loop {
                 // event_queue must NOT be borrowed while calling the handler, so we have to
@@ -300,28 +329,39 @@ impl WindowImpl {
                     break;
                 };
 
-                (handler)(event);
+                self.process_deferred(&mut **handler, event);
             }
+
+            result
+        } else {
+            None
         }
     }
 
-    /// Send an event to the window's event handler, or defer it to the queue if
-    /// the handler is already borrowed.
-    ///
-    /// # On Reentrancy
-    /// Note that `winapi` is reentrant by design, meaning that it is possible
-    /// for `wnd_proc` to be called while already inside it. This does not
-    /// play well with Rust's exclusive borrow rules, so we have to work around
-    /// it by deferring events to a queue if the event handler is already
-    /// borrowed.
-    ///
-    /// Sometimes it is desirable to send an event immediately, in which case
-    /// [`Self::send_event`] should be used instead.
-    fn send_event_defer(&self, event: Event<'static>) {
+    /// Process a single deferred task.
+    fn process_deferred(&self, handler: &mut dyn WindowHandler, task: Deferred) {
+        match task {
+            Deferred::PositionChanged(point) => handler.position_changed(point),
+            Deferred::SizeChanged => handler.size_changed(self.state_size.get()),
+            Deferred::ScaleChanged => handler.scale_changed(self.scale()),
+            Deferred::FocusChanged(focused) => handler.focus_changed(focused),
+            Deferred::CloseRequested => handler.close(),
+            Deferred::WakeupRequested => handler.wakeup(),
+            Deferred::DamageRegion(rect) => handler.damage(rect),
+            Deferred::MouseMove(point) => handler.mouse_move(point),
+            Deferred::MousePress(button, down) => handler.mouse_press(button, down),
+            Deferred::MouseScroll(x, y) => handler.mouse_scroll(x, y),
+            Deferred::MouseLeave => handler.mouse_leave(),
+        }
+    }
+
+    /// Post a task to the window's deferred queue, to be processed as soon as
+    /// possible without violating exclusive-borrow/reentrancy rules.
+    fn post_deferred(&self, task: Deferred) {
         if self.event_handler.try_borrow_mut().is_ok() {
-            self.send_event(event);
+            self.non_reentrant_event(|handler| self.process_deferred(handler, task));
         } else {
-            self.event_queue.borrow_mut().push_back(event);
+            self.event_queue.borrow_mut().push_back(task);
         }
     }
 }
@@ -348,20 +388,6 @@ impl Drop for WindowImpl {
 }
 
 impl PlatformWindow for WindowImpl {
-    fn close(&self) {
-        unsafe {
-            PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
-        }
-    }
-
-    fn waker(&self) -> WindowWaker {
-        WindowWaker(self.waker.clone())
-    }
-
-    fn opengl(&self) -> Option<&dyn PlatformOpenGl> {
-        self.gl_context.as_ref().map(|c| c as &dyn PlatformOpenGl)
-    }
-
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
         unsafe {
             let mut handle = rwh_06::Win32WindowHandle::new(NonZeroIsize::new_unchecked(
@@ -376,10 +402,54 @@ impl PlatformWindow for WindowImpl {
         rwh_06::RawDisplayHandle::Windows(rwh_06::WindowsDisplayHandle::new())
     }
 
+    fn close(&self) {
+        unsafe {
+            PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
+        }
+    }
+
+    fn waker(&self) -> WindowWaker {
+        WindowWaker(self.waker.clone())
+    }
+
+    fn opengl(&self) -> Result<&dyn PlatformOpenGl, OpenGlError> {
+        match &self.gl_context {
+            Ok(gl) => Ok(gl),
+            Err(err) => Err(err.clone()),
+        }
+    }
+
+    fn scale(&self) -> f64 {
+        self.state_dpi_scale.get() as f64 / USER_DEFAULT_SCREEN_DPI as f64
+    }
+
     fn set_title(&self, title: &str) {
         unsafe {
             let window_title = to_widestring(title);
             SetWindowTextW(self.window_hwnd, window_title.as_ptr() as _);
+        }
+    }
+
+    fn set_decorations(&self, decorations: bool) {
+        unsafe {
+            if matches!(self.open_mode, OpenMode::Embedded(..)) {
+                return;
+            }
+
+            let mut style = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
+            if decorations {
+                style |= WS_OVERLAPPEDWINDOW;
+                style &= !WS_POPUP;
+            } else {
+                style &= !WS_OVERLAPPEDWINDOW;
+                style |= WS_POPUP;
+            }
+
+            SetWindowLongW(self.window_hwnd, GWL_STYLE, style as _);
+
+            // force a resize (restyling keeps the outer size while changing the inner size,
+            // so we need to resize the window to keep the client size the same)
+            self.set_size(self.state_size.replace(Size::default()));
         }
     }
 
@@ -401,14 +471,14 @@ impl PlatformWindow for WindowImpl {
         }
     }
 
-    fn get_scale(&self) -> f64 {
-        self.state_dpi_scale.get() as f64 / USER_DEFAULT_SCREEN_DPI as f64
-    }
-
     fn set_size(&self, size: Size) {
         unsafe {
-            let size = window_size_from_client_size(size, self.window_hwnd);
+            // do nothing if the size doesnt change
+            if self.state_size.replace(size) == size {
+                return;
+            }
 
+            let size = window_size_from_client_size(size, self.window_hwnd);
             SetWindowPos(
                 self.window_hwnd,
                 self.window_hwnd,
@@ -549,16 +619,23 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe {
+        // get our userdata that we set in [`WindowImpl::open`]
         let window_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowImpl;
+
+        // sometimes we get messages before OR _after_ (?) the window is
+        // created/destroyed be defensive here
         if window_ptr.is_null() {
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
 
         if msg == WM_DESTROY {
-            if (*window_ptr).is_blocking {
+            // exit the event loop, if we are the owner of the event loop.
+            // in parented modes, the parent drives the pump.
+            if matches!((*window_ptr).open_mode, OpenMode::Blocking) {
                 PostQuitMessage(0);
             }
 
+            // drop the box, will call our [`WindowImpl::drop`].
             drop(Box::from_raw(window_ptr));
             return 0;
         }
@@ -569,15 +646,12 @@ unsafe extern "system" fn wnd_proc(
                 let x = ((lparam >> 0) & 0xFFFF) as i16 as f64;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f64;
 
-                window.send_event_defer(Event::WindowMove {
-                    point: Point { x, y },
-                });
-
+                window.post_deferred(Deferred::PositionChanged(Point { x, y }));
                 0
             }
 
             WM_CLOSE => {
-                window.send_event_defer(Event::WindowClose);
+                window.post_deferred(Deferred::CloseRequested);
                 0
             }
 
@@ -594,10 +668,9 @@ unsafe extern "system" fn wnd_proc(
             WM_SIZE => {
                 let width = ((lparam >> 0) & 0xFFFF) as u32;
                 let height = ((lparam >> 16) & 0xFFFF) as u32;
-                window.send_event_defer(Event::WindowResize {
-                    size: Size { width, height },
-                });
 
+                window.state_size.set(Size { width, height });
+                window.post_deferred(Deferred::SizeChanged);
                 0
             }
 
@@ -608,42 +681,12 @@ unsafe extern "system" fn wnd_proc(
                 // of the window unchanged, and let the application decide how to handle DPI
                 // changes.
                 window.state_dpi_scale.set(dpi);
-                window.send_event_defer(Event::WindowScale {
-                    scale: window.get_scale(),
-                });
+                window.post_deferred(Deferred::ScaleChanged);
                 0
             }
 
-            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
-                let button = match msg {
-                    WM_LBUTTONDOWN => Some(MouseButton::Left),
-                    WM_RBUTTONDOWN => Some(MouseButton::Right),
-                    WM_MBUTTONDOWN => Some(MouseButton::Middle),
-                    WM_XBUTTONDOWN => match ((wparam >> 16) & 0xffff) as u16 {
-                        XBUTTON1 => Some(MouseButton::Back),
-                        XBUTTON2 => Some(MouseButton::Forward),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-
-                if let Some(button) = button {
-                    window.send_event_defer(Event::MouseDown { button });
-                };
-
-                if window
-                    .state_mouse_capture
-                    .replace(window.state_mouse_capture.get() + 1)
-                    == 0
-                {
-                    SetFocus(hwnd);
-                    SetCapture(hwnd);
-                }
-
-                0
-            }
-
-            WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN | WM_LBUTTONUP
+            | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
                 let button = match msg {
                     WM_LBUTTONUP => Some(MouseButton::Left),
                     WM_RBUTTONUP => Some(MouseButton::Right),
@@ -656,42 +699,44 @@ unsafe extern "system" fn wnd_proc(
                     _ => None,
                 };
 
+                let down = matches!(
+                    msg,
+                    WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+                );
+
                 if let Some(button) = button {
-                    window.send_event_defer(Event::MouseUp { button });
+                    window.post_deferred(Deferred::MousePress(button, down));
                 }
 
-                if window
-                    .state_mouse_capture
-                    .replace(window.state_mouse_capture.get().saturating_sub(1))
-                    != 0
-                {
-                    SetCapture(null_mut());
+                if down {
+                    window.state_mouse_capture.update(|x| x + 1);
+                    if window.state_mouse_capture.get() == 1 {
+                        SetCapture(hwnd);
+                        SetFocus(hwnd);
+                    }
+                } else {
+                    window.state_mouse_capture.update(|x| x.saturating_sub(1));
+                    if window.state_mouse_capture.get() == 0 {
+                        ReleaseCapture();
+                    }
                 }
 
                 0
             }
 
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
-                let wheel_delta = (wparam >> 16) as i16;
-                let wheel_delta = wheel_delta as f64 / WHEEL_DELTA as f64;
+                let delta = (wparam >> 16) as i16;
+                let delta = delta as f64 / WHEEL_DELTA as f64;
 
-                window.send_event_defer(Event::MouseScroll {
-                    x: if msg == WM_MOUSEWHEEL {
-                        0.0
-                    } else {
-                        wheel_delta
-                    },
-                    y: if msg == WM_MOUSEWHEEL {
-                        -wheel_delta
-                    } else {
-                        0.0
-                    },
-                });
+                let x = if msg == WM_MOUSEWHEEL { 0.0 } else { delta };
+                let y = if msg == WM_MOUSEWHEEL { -delta } else { 0.0 };
+                window.post_deferred(Deferred::MouseScroll(x, y));
+
                 0
             }
 
             WM_MOUSELEAVE => {
-                window.send_event_defer(Event::MouseLeave);
+                window.post_deferred(Deferred::MouseLeave);
                 0
             }
 
@@ -704,23 +749,11 @@ unsafe extern "system" fn wnd_proc(
                 });
 
                 let (x, y) = (
-                    (lparam & 0xFFFF) as i16 as i32,
-                    ((lparam >> 16) & 0xFFFF) as i16 as i32,
+                    (lparam & 0xFFFF) as i16 as f64,
+                    ((lparam >> 16) & 0xFFFF) as i16 as f64,
                 );
 
-                let mut absolute = POINT { x, y };
-                ClientToScreen(hwnd, &mut absolute);
-
-                window.send_event_defer(Event::MouseMove {
-                    absolute: Point {
-                        x: absolute.x as f64,
-                        y: absolute.y as f64,
-                    },
-                    relative: Point {
-                        x: x as f64,
-                        y: y as f64,
-                    },
-                });
+                window.post_deferred(Deferred::MouseMove(Point { x, y }));
                 0
             }
 
@@ -753,7 +786,7 @@ unsafe extern "system" fn wnd_proc(
 
             WM_SETFOCUS => {
                 if !window.state_focused.replace(true) {
-                    window.send_event_defer(Event::WindowFocus { focus: true });
+                    window.post_deferred(Deferred::FocusChanged(true));
                 }
 
                 0
@@ -761,7 +794,7 @@ unsafe extern "system" fn wnd_proc(
 
             WM_KILLFOCUS => {
                 if window.state_focused.replace(false) {
-                    window.send_event_defer(Event::WindowFocus { focus: false });
+                    window.post_deferred(Deferred::FocusChanged(false));
                 }
 
                 0
@@ -770,12 +803,14 @@ unsafe extern "system" fn wnd_proc(
             WM_PAINT => {
                 let mut rect = RECT { ..zeroed() };
                 if GetUpdateRect(hwnd, &mut rect, 0) != 0 {
-                    window.send_event_defer(Event::WindowDamage {
-                        x: rect.left.try_into().unwrap_or(0),
-                        y: rect.top.try_into().unwrap_or(0),
-                        w: (rect.right - rect.left).try_into().unwrap_or(0),
-                        h: (rect.bottom - rect.top).try_into().unwrap_or(0),
-                    });
+                    let rect = Rect {
+                        left: rect.left,
+                        top: rect.top,
+                        right: rect.right,
+                        bottom: rect.bottom,
+                    };
+
+                    window.post_deferred(Deferred::DamageRegion(rect));
                     ValidateRgn(hwnd, null_mut());
                 }
 
@@ -788,14 +823,17 @@ unsafe extern "system" fn wnd_proc(
                     return 0;
                 }
 
-                window.send_event_defer(Event::DragEnter {
-                    data: DropTargetImpl::decode_data_object(wparam as _),
-                    point: Point {
-                        x: point.x as f64,
-                        y: point.y as f64,
-                    },
-                });
-                0
+                let data = DropTargetImpl::decode_data_object(wparam as _);
+                let point = Point {
+                    x: point.x as f64,
+                    y: point.y as f64,
+                };
+
+                let effect = window
+                    .non_reentrant_event(|e| e.drag_enter(data, point))
+                    .unwrap_or(DropEffect::Reject);
+
+                encode_dnd_effect(effect) as _
             }
 
             WM_USER_DND_HOVER => {
@@ -804,66 +842,66 @@ unsafe extern "system" fn wnd_proc(
                     return 0;
                 }
 
-                window.send_event_defer(Event::DragMove {
-                    point: Point {
-                        x: point.x as f64,
-                        y: point.y as f64,
-                    },
-                });
+                let point = Point {
+                    x: point.x as f64,
+                    y: point.y as f64,
+                };
 
-                0
+                let effect = window
+                    .non_reentrant_event(|e| e.drag_move(point))
+                    .unwrap_or(DropEffect::Reject);
+
+                encode_dnd_effect(effect) as _
             }
 
             WM_USER_DND_ACCEPT => {
-                window.send_event_defer(Event::DragAccept);
-                0
+                let effect = window
+                    .non_reentrant_event(|e| e.drag_accept())
+                    .unwrap_or(DropEffect::Reject);
+
+                encode_dnd_effect(effect) as _
             }
 
             WM_USER_DND_LEAVE => {
-                window.send_event_defer(Event::DragLeave);
+                window.non_reentrant_event(|e| e.drag_leave());
                 0
             }
 
             WM_USER_KEY_DOWN | WM_USER_KEY_UP => {
                 let scan_code = ((lparam & 0x1ff_0000) >> 16) as u32;
-                let mut capture = false;
+                let Some(key) = scan_code_to_key(scan_code) else {
+                    return 0;
+                };
 
-                if let Some(key) = scan_code_to_key(scan_code) {
-                    if msg == WM_USER_KEY_DOWN {
-                        window.send_event(Event::KeyDown {
-                            key,
-                            capture: &mut capture,
-                        });
-                    } else {
-                        window.send_event(Event::KeyUp {
-                            key,
-                            capture: &mut capture,
-                        });
-                    }
-                }
+                let capture = window
+                    .non_reentrant_event(|handler| handler.key_press(key, msg == WM_USER_KEY_DOWN))
+                    .unwrap_or(false);
 
                 if capture { 1 } else { 0 }
             }
 
             WM_USER_VSYNC => {
                 let modifiers = get_modifiers();
-                if window.state_current_modifiers.replace(modifiers) != modifiers {
-                    window.send_event_defer(Event::KeyModifiers { modifiers });
-                }
 
-                window.send_event(Event::WindowFrame);
-                window.vsync_thread.notify_frame_finished();
+                window.non_reentrant_event(|e| {
+                    if window.state_current_modifiers.replace(modifiers) != modifiers {
+                        e.key_modifiers(modifiers);
+                    }
+
+                    e.frame();
+                    window.vsync_thread.notify_frame_finished();
+                });
+
                 0
             }
 
             WM_USER_WAKEUP => {
-                window.send_event_defer(Event::Wakeup);
+                window.post_deferred(Deferred::WakeupRequested);
                 0
             }
 
             WM_USER_KILL_WINDOW => {
                 DestroyWindow(hwnd);
-
                 0
             }
 

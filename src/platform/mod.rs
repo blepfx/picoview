@@ -38,17 +38,6 @@ pub enum OpenMode {
 
 unsafe impl Send for OpenMode {}
 
-impl OpenMode {
-    #[allow(dead_code)]
-    pub fn handle(&self) -> Option<rwh_06::RawWindowHandle> {
-        match self {
-            OpenMode::Blocking => None,
-            OpenMode::Embedded(handle) => Some(*handle),
-            OpenMode::Transient(handle) => Some(*handle),
-        }
-    }
-}
-
 pub trait PlatformWindow /* : !Send + !Sync */ {
     fn window_handle(&self) -> rwh_06::RawWindowHandle;
     fn display_handle(&self) -> rwh_06::RawDisplayHandle;

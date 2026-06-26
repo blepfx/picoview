@@ -1,6 +1,6 @@
 use super::util::{generate_guid, hinstance, to_widestring};
 use crate::platform::PlatformOpenGl;
-use crate::{MakeCurrentError, SwapBuffersError, WindowError};
+use crate::{MakeCurrentError, OpenGlError, SwapBuffersError};
 use std::collections::HashSet;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{size_of, zeroed};
@@ -63,7 +63,7 @@ pub struct GlContext {
 }
 
 impl GlContext {
-    pub unsafe fn new(hwnd: HWND, config: crate::GlConfig) -> Result<Self, WindowError> {
+    pub unsafe fn new(hwnd: HWND, config: crate::GlConfig) -> Result<Self, OpenGlError> {
         unsafe {
             let ext = WglExtensions::get();
             let hdc = GetDC(hwnd);
@@ -74,7 +74,7 @@ impl GlContext {
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
-                    WindowError::OpenGl("Failed to find a matching pixel format".to_owned())
+                    OpenGlError("Failed to find a matching pixel format".to_owned())
                 })?;
 
             SetPixelFormat(hdc, format_id, &format_desc);
@@ -84,9 +84,7 @@ impl GlContext {
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
-                    WindowError::OpenGl(
-                        "Failed to create a context with given requirements".to_owned(),
-                    )
+                    OpenGlError("Failed to create a context with given requirements".to_owned())
                 })?;
 
             if ext.ext_swap_control

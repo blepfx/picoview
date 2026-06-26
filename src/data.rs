@@ -337,6 +337,7 @@ pub enum Exchange {
 /// The effect a drag-and-drop operation is expected to have
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+#[repr(u8)]
 pub enum DropEffect {
     /// Operation rejected.
     Reject,

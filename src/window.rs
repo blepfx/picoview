@@ -240,6 +240,8 @@ impl<'a> Window<'a> {
     }
 
     /// Set whether the window has decorations (title bar, borders, etc)
+    ///
+    /// Does nothing when opened with [`WindowBuilder::open_embedded`].
     pub fn set_decorations(&self, decorations: bool) {
         self.0.set_decorations(decorations);
     }
