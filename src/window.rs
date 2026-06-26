@@ -235,6 +235,9 @@ impl<'a> Window<'a> {
     }
 
     /// Set the cursor icon that is shown when hovering over the window.
+    ///
+    /// Safe to call every frame, the backend will only update the cursor if it
+    /// has changed.
     pub fn set_cursor_icon(&self, icon: MouseCursor) {
         self.0.set_cursor_icon(icon);
     }

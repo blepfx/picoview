@@ -6,6 +6,8 @@ use x11::xlib::*;
 
 /// Open the given URL with the default system handler. Returns `true` if we
 /// successfully started a process.
+///
+/// Tries a bunch of different `open` commands.
 pub fn open_url(path: &str) -> bool {
     /// Spawns a process in a detached state, so it won't be killed when the
     /// parent process exits.
@@ -698,6 +700,8 @@ mod input {
     #[allow(non_upper_case_globals)]
     pub const XI_GesturePinchEnd: i32 = 29;
 
+    /// Gesture pinch event, valid only for XInput 2.4+
+    /// Copied from https://codebrowser.dev/gtk/include/X11/extensions/XI2.h.html
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
     pub struct XIGesturePinchEvent {
@@ -893,7 +897,8 @@ mod info {
         }
     }
 
-    /// Get the current refresh rate of the default screen, if available.
+    /// Get the current refresh rate of the default screen by querying the
+    /// XRandR extension, if available.
     pub fn query_refresh_rate(conn: &Connection) -> Option<f64> {
         unsafe {
             let has_randr = XRRQueryExtension(conn.display(), &mut 0, &mut 0);

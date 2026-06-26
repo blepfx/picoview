@@ -24,13 +24,25 @@ type GlXCreateContextAttribsARB = unsafe extern "C" fn(
 
 unsafe impl Send for GlContext {}
 
+/// A GLX [`PlatformOpenGl`] implementation.
+/// Used for our X11 window implementation.
 pub struct GlContext {
+    /// The window the context was created for.
     window: c_ulong,
+
+    /// The GLX context itself.
     context: GLXContext,
+
+    /// The X11 connection, used for keeping it alive (some drivers crash if the
+    /// connection is closed before we destroy the GL context)
     connection: Connection,
 }
 
 impl GlContext {
+    /// Checks the GLX version and returns the major and minor version, as well
+    /// as a set of supported extensions.
+    ///
+    /// Returns `None` if the version could not be queried.
     pub unsafe fn get_version_info(
         connection: &Connection,
     ) -> Option<(u8, u8, HashSet<&'static str>)> {
@@ -53,6 +65,10 @@ impl GlContext {
         }
     }
 
+    /// Find the best available visual config for the given OpenGL
+    /// configuration.
+    ///
+    /// Returns `None` if no suitable config could be found.
     pub fn find_best_config(
         connection: &Connection,
         config: &GlConfig,
@@ -147,6 +163,7 @@ impl GlContext {
         }
     }
 
+    /// Creates a GLX context for the given window and visual config.
     #[allow(non_snake_case)]
     pub unsafe fn new(
         connection: Connection,
