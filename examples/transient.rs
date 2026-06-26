@@ -39,6 +39,10 @@ impl WindowHandler for Parent<'_> {
         self.window.close();
     }
 
+    fn focus_changed(&mut self, focus: bool) {
+        println!("parent.focus_changed({focus})");
+    }
+
     fn mouse_move(&mut self, point: Point) {
         if point.x < -10.0 {
             self.window.set_cursor_position((100.0, 100.0));
@@ -64,6 +68,10 @@ impl WindowHandler for Child<'_> {
 
     fn wakeup(&mut self) {
         println!("child.wakeup()");
+    }
+
+    fn focus_changed(&mut self, focus: bool) {
+        println!("child.focus_changed({focus})");
     }
 
     fn mouse_press(&mut self, button: MouseButton, pressed: bool) {
