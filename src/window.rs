@@ -203,7 +203,7 @@ pub struct Window<'a>(pub(crate) &'a dyn platform::PlatformWindow);
 
 impl<'a> Window<'a> {
     /// Get a [`WindowWaker`] that can be used to wake up the current event loop
-    /// by sending a [`Event::Wakeup`](`crate::Event::Wakeup`) event.
+    /// by calling [`WindowHandler::wakeup`].
     pub fn waker(&self) -> WindowWaker {
         self.0.waker()
     }
@@ -232,7 +232,7 @@ impl<'a> Window<'a> {
     /// Another reason to use the provided scale factor is more consistent user
     /// experience between different platforms/configurations/applications.
     ///
-    /// If changed, a call [`WindowHandler::window_scale`] will be emitted.
+    /// If changed, a call [`WindowHandler::scale_changed`] will be emitted.
     pub fn scale(&self) -> f64 {
         self.0.scale()
     }
@@ -331,7 +331,7 @@ impl<'a> Window<'a> {
 impl WindowWaker {
     /// Wake up the associated window in a fire-and-forget fashion (without
     /// waiting for the event handler to actually process the event). Emits a
-    /// [`Event::Wakeup`](`crate::Event::Wakeup`) event.
+    /// [`WindowHandler::wakeup`] call as soon as possible.
     ///
     /// Returns [`WakeupError`] if the window has already been
     /// closed.
