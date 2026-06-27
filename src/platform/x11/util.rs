@@ -566,6 +566,36 @@ mod input {
     use x11::xinput2::*;
     use x11::xlib::*;
 
+    /// Check if the given [`KeyRelease`] event is an auto-repeat and not a
+    /// physical release event.
+    pub fn is_autorepeat_release(conn: &Connection, event: &XKeyEvent) -> bool {
+        if event.type_ != KeyRelease {
+            return false;
+        }
+
+        unsafe {
+            let mut next = XEvent { type_: 0 };
+            if XEventsQueued(conn.display(), 0 /* QueuedAlready */) == 0 {
+                return false;
+            }
+
+            if XPeekEvent(conn.display(), &mut next) == 0 {
+                return false;
+            }
+
+            if next.type_ != KeyPress {
+                return false;
+            }
+
+            let next = next.key;
+            if next.keycode != event.keycode || next.time != event.time {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Convert event key code to a `Key` enum variant, if possible.
     pub fn keycode_to_key(code: c_uint) -> Option<Key> {
         Some(match code {

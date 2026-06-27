@@ -691,6 +691,12 @@ impl WindowImpl {
 
                     self.handle_event_modifiers(keymask_to_mods(event.state));
 
+                    // ignore auto-repeat release events, autorepeats will be reported as repeated
+                    // KeyPress events without corresponding KeyRelease events
+                    if is_autorepeat_release(&self.connection, &event) {
+                        return;
+                    }
+
                     if let Some(key) = keycode_to_key(event.keycode) {
                         let capture = self
                             .event(|e| e.key_press(key, event.type_ == KeyPress))
