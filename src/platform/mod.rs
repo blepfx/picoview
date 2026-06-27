@@ -1,7 +1,4 @@
-use crate::{
-    Exchange, MakeCurrentError, MouseCursor, Point, Size, SwapBuffersError, WakeupError,
-    WindowWaker, rwh_06,
-};
+use crate::*;
 use std::ffi::{CStr, c_void};
 
 cfg_select! {
@@ -41,31 +38,20 @@ pub enum OpenMode {
 
 unsafe impl Send for OpenMode {}
 
-impl OpenMode {
-    #[allow(dead_code)]
-    pub fn handle(&self) -> Option<rwh_06::RawWindowHandle> {
-        match self {
-            OpenMode::Blocking => None,
-            OpenMode::Embedded(handle) => Some(*handle),
-            OpenMode::Transient(handle) => Some(*handle),
-        }
-    }
-}
-
 pub trait PlatformWindow /* : !Send + !Sync */ {
     fn window_handle(&self) -> rwh_06::RawWindowHandle;
     fn display_handle(&self) -> rwh_06::RawDisplayHandle;
 
     fn close(&self);
     fn waker(&self) -> WindowWaker;
-    fn opengl(&self) -> Option<&dyn PlatformOpenGl>;
+    fn opengl(&self) -> Result<&dyn PlatformOpenGl, OpenGlError>;
+    fn scale(&self) -> f64;
 
     fn set_title(&self, title: &str);
+    fn set_decorations(&self, decorations: bool);
     fn set_cursor_icon(&self, icon: MouseCursor);
     fn set_cursor_position(&self, pos: Point);
     fn set_visible(&self, visible: bool);
-
-    fn get_scale(&self) -> f64;
     fn set_size(&self, size: Size);
     fn set_min_size(&self, size: Size);
     fn set_max_size(&self, size: Size);

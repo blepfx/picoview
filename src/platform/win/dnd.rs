@@ -11,9 +11,7 @@ use std::sync::Arc;
 use windows_sys::Win32::Foundation::{E_NOINTERFACE, HWND, POINT, S_OK};
 use windows_sys::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL};
 use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-use windows_sys::Win32::System::Ole::{
-    CF_HDROP, CF_UNICODETEXT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, ReleaseStgMedium,
-};
+use windows_sys::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT, ReleaseStgMedium};
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, SendMessageW};
 use windows_sys::core::{GUID, HRESULT};
 
@@ -93,14 +91,17 @@ impl DropTargetImpl {
 
             // we use SendMessage here because the data object _might_ expire and the point
             // is only valid during the call
-            SendMessageW(
+            //
+            // also we need the result of the event to determine the effect, so we can't use
+            // PostMessage
+            let effect = SendMessageW(
                 this.hwnd,
                 WM_USER_DND_ENTER,
                 data as usize,
                 &point as *const POINT as isize,
             );
 
-            pdw_effect.write(DROPEFFECT_LINK | DROPEFFECT_COPY | DROPEFFECT_MOVE);
+            pdw_effect.write(effect as _);
             S_OK
         }
     }
@@ -115,14 +116,14 @@ impl DropTargetImpl {
             let this = &*(this as *const Self);
 
             // same goes for this as in drag_enter
-            SendMessageW(
+            let effect = SendMessageW(
                 this.hwnd,
                 WM_USER_DND_HOVER,
                 0,
                 &point as *const POINT as isize,
             );
 
-            pdw_effect.write(DROPEFFECT_LINK | DROPEFFECT_COPY | DROPEFFECT_MOVE);
+            pdw_effect.write(effect as _);
             S_OK
         }
     }
@@ -144,8 +145,8 @@ impl DropTargetImpl {
     ) -> HRESULT {
         unsafe {
             let this = &*(this as *const Self);
-            PostMessageW(this.hwnd, WM_USER_DND_ACCEPT, 0, 0);
-            pdw_effect.write(DROPEFFECT_LINK | DROPEFFECT_COPY | DROPEFFECT_MOVE);
+            let effect = PostMessageW(this.hwnd, WM_USER_DND_ACCEPT, 0, 0);
+            pdw_effect.write(effect as _);
             S_OK
         }
     }

@@ -12,12 +12,21 @@ thread_local! {
     static HOOK: Cell<Weak<KeyboardHook>> = const { Cell::new(Weak::new()) };
 }
 
+/// A keyboard hook, used to capture key events in case a DAW
+/// tries to capture the events meant for us.
+///
+/// Note that this is a thread-local hook, so it will only capture events for
+/// windows created on the same thread.
 pub struct KeyboardHook {
+    // The hook handle, used to unhook the hook when it is no longer needed
     hhook: HHOOK,
-    windows: RefCell<HashSet<usize>>,
+    // The set of windows that this hook will capture events for.
+    windows: RefCell<HashSet<HWND>>,
 }
 
 impl KeyboardHook {
+    /// Gets the current hook for this thread if one exists, otherwise set up a
+    /// new one and return it.
     pub fn install() -> Rc<Self> {
         // take the hook
         let hook = match HOOK.replace(Weak::new()).upgrade() {
@@ -42,16 +51,24 @@ impl KeyboardHook {
         hook
     }
 
+    /// Adds a window to the list of windows that this hook will capture events
+    /// for.
+    ///
+    /// The hook will send us [`WM_USER_KEY_DOWN`] and [`WM_USER_KEY_UP`]
+    /// messages.
     pub fn add_window(&self, hwnd: HWND) {
-        self.windows.borrow_mut().insert(hwnd.addr());
+        self.windows.borrow_mut().insert(hwnd);
     }
 
+    /// Removes a window from the list of windows
     pub fn remove_window(&self, hwnd: HWND) {
-        self.windows.borrow_mut().remove(&hwnd.addr());
+        self.windows.borrow_mut().remove(&hwnd);
     }
 
+    /// Checks if a window is in the list of windows that this hook will capture
+    /// events for.
     pub fn has_window(&self, hwnd: HWND) -> bool {
-        self.windows.borrow().contains(&hwnd.addr())
+        self.windows.borrow().contains(&hwnd)
     }
 }
 
@@ -65,6 +82,7 @@ impl Drop for KeyboardHook {
     }
 }
 
+/// Our `winapi` hook procedure.
 unsafe extern "system" fn keyboard_hook_proc(
     n_code: i32,
     wparam: WPARAM,
@@ -78,8 +96,11 @@ unsafe extern "system" fn keyboard_hook_proc(
         if n_code == HC_ACTION as i32 && wparam == PM_REMOVE as usize {
             let message = lparam as *mut MSG;
 
+            // if its a key event...
             if matches!((*message).message, WM_KEYDOWN | WM_KEYUP) {
+                // if the window is one of ours...
                 while is_our_window((*message).hwnd) {
+                    // let our window handle it and see if it wants to capture it
                     let capture = SendMessageW(
                         (*message).hwnd,
                         if (*message).message == WM_KEYDOWN {
@@ -91,6 +112,8 @@ unsafe extern "system" fn keyboard_hook_proc(
                         (*message).lParam,
                     ) != 0;
 
+                    // if it does, we stop the message from being dispatched (replace it with a zero
+                    // message)
                     if capture {
                         *message = MSG {
                             message: WM_USER,
@@ -99,6 +122,8 @@ unsafe extern "system" fn keyboard_hook_proc(
 
                         return 0;
                     } else {
+                        // otherwise, we check the parent window to see if it wants to capture it
+                        // instead
                         let parent = GetParent((*message).hwnd);
                         if parent.is_null() {
                             break;
@@ -107,6 +132,8 @@ unsafe extern "system" fn keyboard_hook_proc(
                         }
                     }
                 }
+
+                // if it wasn't meant for us, we let it pass through
             }
         }
 

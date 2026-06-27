@@ -210,6 +210,7 @@ mod keyboard {
 }
 
 mod clipboard {
+    use crate::DropEffect;
     use std::ffi::{OsString, c_void};
     use std::marker::PhantomData;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -218,7 +219,18 @@ mod clipboard {
     use windows_sys::Win32::Foundation::{HWND, POINT};
     use windows_sys::Win32::System::DataExchange::*;
     use windows_sys::Win32::System::Memory::*;
+    use windows_sys::Win32::System::Ole::*;
     use windows_sys::Win32::UI::Shell::*;
+
+    pub fn encode_dnd_effect(effect: DropEffect) -> u32 {
+        match effect {
+            DropEffect::Reject => DROPEFFECT_NONE,
+            DropEffect::Copy => DROPEFFECT_COPY,
+            DropEffect::Move => DROPEFFECT_MOVE,
+            DropEffect::Link => DROPEFFECT_LINK,
+            DropEffect::Generic => DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK,
+        }
+    }
 
     pub unsafe fn decode_hdrop(hdrop: *mut c_void) -> Vec<PathBuf> {
         unsafe {

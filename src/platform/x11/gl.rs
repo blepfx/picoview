@@ -1,6 +1,6 @@
 use crate::platform::PlatformOpenGl;
 use crate::platform::x11::util::{Connection, VisualConfig};
-use crate::{GlConfig, GlVersion, MakeCurrentError, SwapBuffersError, WindowError};
+use crate::{GlConfig, GlVersion, MakeCurrentError, OpenGlError, SwapBuffersError};
 use std::collections::HashSet;
 use std::ffi::{CStr, c_void};
 use std::os::raw::{c_int, c_ulong};
@@ -24,20 +24,32 @@ type GlXCreateContextAttribsARB = unsafe extern "C" fn(
 
 unsafe impl Send for GlContext {}
 
+/// A GLX [`PlatformOpenGl`] implementation.
+/// Used for our X11 window implementation.
 pub struct GlContext {
+    /// The window the context was created for.
     window: c_ulong,
+
+    /// The GLX context itself.
     context: GLXContext,
+
+    /// The X11 connection, used for keeping it alive (some drivers crash if the
+    /// connection is closed before we destroy the GL context)
     connection: Connection,
 }
 
 impl GlContext {
+    /// Checks the GLX version and returns the major and minor version, as well
+    /// as a set of supported extensions.
+    ///
+    /// Returns `None` if the version could not be queried.
     pub unsafe fn get_version_info(
         connection: &Connection,
-    ) -> Result<(u8, u8, HashSet<&'static str>), WindowError> {
+    ) -> Option<(u8, u8, HashSet<&'static str>)> {
         unsafe {
             let (mut major, mut minor) = (0, 0);
             if glXQueryVersion(connection.display(), &mut major, &mut minor) == 0 {
-                return Err(WindowError::OpenGl("glXQueryVersion failed".into()));
+                return None;
             }
 
             let extensions = glXGetClientString(connection.display(), GLX_EXTENSIONS);
@@ -49,16 +61,19 @@ impl GlContext {
                 HashSet::new()
             };
 
-            connection.last_error().map_err(WindowError::OpenGl)?;
-            Ok((major as u8, minor as u8, extensions))
+            Some((major as u8, minor as u8, extensions))
         }
     }
 
+    /// Find the best available visual config for the given OpenGL
+    /// configuration.
+    ///
+    /// Returns `None` if no suitable config could be found.
     pub fn find_best_config(
         connection: &Connection,
         config: &GlConfig,
         transparent: bool,
-    ) -> Result<VisualConfig, WindowError> {
+    ) -> Option<VisualConfig> {
         unsafe {
             let (major, minor, extensions) = Self::get_version_info(connection)?;
             let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
@@ -117,7 +132,7 @@ impl GlContext {
             );
 
             if n_configs <= 0 || fb_config_list.is_null() {
-                return Err(WindowError::OpenGl("no matching config".into()));
+                return None;
             }
 
             let mut preferred_config = 0;
@@ -144,23 +159,25 @@ impl GlContext {
 
             XFree(visual as *mut _);
             XFree(fb_config_list as *mut _);
-            Ok(config)
+            Some(config)
         }
     }
 
+    /// Creates a GLX context for the given window and visual config.
     #[allow(non_snake_case)]
     pub unsafe fn new(
         connection: Connection,
         window: c_ulong,
         config: GlConfig,
         fb_config: GLXFBConfig,
-    ) -> Result<GlContext, WindowError> {
+    ) -> Result<GlContext, OpenGlError> {
         if fb_config.is_null() {
-            return Err(WindowError::OpenGl("no matching config".into()));
+            return Err(OpenGlError("no matching config".into()));
         }
 
         unsafe {
-            let (_, _, extensions) = Self::get_version_info(&connection)?;
+            let (_, _, extensions) = Self::get_version_info(&connection)
+                .ok_or_else(|| OpenGlError("call to glXQueryVersion failed".into()))?;
             let ext_es_support = extensions.contains("GLX_EXT_create_context_es2_profile")
                 || extensions.contains("GLX_EXT_create_context_es_profile");
             let ext_context = extensions.contains("GLX_ARB_create_context");
@@ -173,7 +190,7 @@ impl GlContext {
                 })
                 .flatten();
 
-            let context = if let Some(glXCreateContextAttribsARB) = glXCreateContextAttribsARB {
+            let mut context = if let Some(glXCreateContextAttribsARB) = glXCreateContextAttribsARB {
                 let ctx_attribs = match config.version {
                     GlVersion::Core(major, minor) => [
                         arb::GLX_CONTEXT_MAJOR_VERSION_ARB,
@@ -208,7 +225,11 @@ impl GlContext {
                         arb::GLX_CONTEXT_DEBUG_BIT_ARB * config.debug as i32,
                         0,
                     ],
-                    _ => return Err(WindowError::OpenGl("No ES support extension".into())),
+                    _ => {
+                        return Err(OpenGlError(
+                            "requested OpenGL ES version is not supported".into(),
+                        ));
+                    }
                 };
 
                 glXCreateContextAttribsARB(
@@ -219,21 +240,21 @@ impl GlContext {
                     ctx_attribs.as_ptr(),
                 )
             } else {
-                let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
-                if fb_visual.is_null() {
-                    return Err(WindowError::OpenGl(
-                        "glXGetVisualFromFBConfig returned null".into(),
-                    ));
-                }
-
-                let context =
-                    glXCreateContext(connection.display(), fb_visual, std::ptr::null_mut(), 1);
-                XFree(fb_visual as *mut _);
-                context
+                null_mut()
             };
 
             if context.is_null() {
-                return Err(WindowError::OpenGl("GLX context creation error".into()));
+                let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
+                if fb_visual.is_null() {
+                    return Err(OpenGlError("glXGetVisualFromFBConfig returned null".into()));
+                }
+
+                context = glXCreateContext(connection.display(), fb_visual, null_mut(), 1);
+                XFree(fb_visual as *mut _);
+            };
+
+            if context.is_null() {
+                return Err(OpenGlError("glXCreateContext returned null".into()));
             }
 
             if ext_swap_control {
@@ -250,7 +271,7 @@ impl GlContext {
             }
 
             XSync(connection.display(), 0);
-            connection.last_error().map_err(WindowError::OpenGl)?;
+            connection.last_error().map_err(OpenGlError)?;
 
             Ok(GlContext {
                 window,

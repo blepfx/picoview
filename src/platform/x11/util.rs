@@ -6,6 +6,8 @@ use x11::xlib::*;
 
 /// Open the given URL with the default system handler. Returns `true` if we
 /// successfully started a process.
+///
+/// Tries a bunch of different `open` commands.
 pub fn open_url(path: &str) -> bool {
     /// Spawns a process in a detached state, so it won't be killed when the
     /// parent process exits.
@@ -257,7 +259,7 @@ mod connection {
 
 mod selection {
     use super::Connection;
-    use crate::Exchange;
+    use crate::{DropEffect, Exchange};
     use std::array::from_fn;
     use std::ffi::{OsStr, OsString, c_char, c_int, c_ulong};
     use std::mem::zeroed;
@@ -453,7 +455,13 @@ mod selection {
         Err(SelectionError::Empty)
     }
 
-    pub fn send_xdnd_feedback(conn: &Connection, target: c_ulong, source: c_ulong, finished: bool) {
+    pub fn send_xdnd_feedback(
+        conn: &Connection,
+        target: c_ulong,
+        source: c_ulong,
+        finished: bool,
+        effect: DropEffect,
+    ) {
         unsafe {
             XSendEvent(
                 conn.display(),
@@ -476,8 +484,18 @@ mod selection {
                         data: {
                             let mut data = ClientMessageData::default();
                             data.set_long(0, target as _);
-                            data.set_long(1, 1); // success
-                            data.set_long(2, conn.atom(c"XdndActionPrivate") as _);
+                            data.set_long(1, if effect == DropEffect::Reject { 0 } else { 1 }); // success
+                            data.set_long(
+                                2,
+                                match effect {
+                                    DropEffect::Move => conn.atom(c"XdndActionMove") as _,
+                                    DropEffect::Link => conn.atom(c"XdndActionLink") as _,
+                                    DropEffect::Generic => conn.atom(c"XdndActionPrivate") as _,
+                                    DropEffect::Copy | DropEffect::Reject => {
+                                        conn.atom(c"XdndActionCopy") as _
+                                    }
+                                },
+                            );
                             data
                         },
                     },
@@ -547,6 +565,36 @@ mod input {
     use std::ffi::{c_int, c_uint};
     use x11::xinput2::*;
     use x11::xlib::*;
+
+    /// Check if the given [`KeyRelease`] event is an auto-repeat and not a
+    /// physical release event.
+    pub fn is_autorepeat_release(conn: &Connection, event: &XKeyEvent) -> bool {
+        if event.type_ != KeyRelease {
+            return false;
+        }
+
+        unsafe {
+            let mut next = XEvent { type_: 0 };
+            if XEventsQueued(conn.display(), 0 /* QueuedAlready */) == 0 {
+                return false;
+            }
+
+            if XPeekEvent(conn.display(), &mut next) == 0 {
+                return false;
+            }
+
+            if next.type_ != KeyPress {
+                return false;
+            }
+
+            let next = next.key;
+            if next.keycode != event.keycode || next.time != event.time {
+                return false;
+            }
+        }
+
+        true
+    }
 
     /// Convert event key code to a `Key` enum variant, if possible.
     pub fn keycode_to_key(code: c_uint) -> Option<Key> {
@@ -682,6 +730,8 @@ mod input {
     #[allow(non_upper_case_globals)]
     pub const XI_GesturePinchEnd: i32 = 29;
 
+    /// Gesture pinch event, valid only for XInput 2.4+
+    /// Copied from https://codebrowser.dev/gtk/include/X11/extensions/XI2.h.html
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
     pub struct XIGesturePinchEvent {
@@ -852,21 +902,16 @@ mod info {
                 return None;
             }
 
-            let mut type_ = null_mut();
             let mut value = XrmValue { ..zeroed() };
             let result = XrmGetResource(
                 db,
                 c"Xft.dpi".as_ptr(),
                 c"Xft.Dpi".as_ptr(),
-                &mut type_,
+                &mut null_mut(),
                 &mut value,
             );
 
-            if result == 0
-                || type_.is_null()
-                || CStr::from_ptr(type_) != c"String"
-                || value.addr.is_null()
-            {
+            if result == 0 || value.addr.is_null() {
                 XrmDestroyDatabase(db);
                 return None;
             }
@@ -882,7 +927,8 @@ mod info {
         }
     }
 
-    /// Get the current refresh rate of the default screen, if available.
+    /// Get the current refresh rate of the default screen by querying the
+    /// XRandR extension, if available.
     pub fn query_refresh_rate(conn: &Connection) -> Option<f64> {
         unsafe {
             let has_randr = XRRQueryExtension(conn.display(), &mut 0, &mut 0);

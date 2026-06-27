@@ -3,6 +3,125 @@ use std::path::PathBuf;
 #[allow(unused_imports)] // docs
 use crate::*;
 
+/// A fractional point in physical pixels with top-left origin
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
+pub struct Point {
+    /// The x coordinate
+    pub x: f64,
+
+    /// The y coordinate
+    pub y: f64,
+}
+
+/// A pixel-aligned size in physical pixels
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
+pub struct Size {
+    /// The width in physical pixels
+    pub width: u32,
+
+    /// The height in physical pixels
+    pub height: u32,
+}
+
+/// A pixel-aligned rectangle in physical pixels.
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
+pub struct Rect {
+    /// The Y coordinate of the top-left corner of the rectangle
+    pub top: i32,
+    /// The X coordinate of the top-left corner of the rectangle
+    pub left: i32,
+    /// The Y coordinate of the bottom-right corner of the rectangle
+    pub bottom: i32,
+    /// The X coordinate of the bottom-right corner of the rectangle
+    pub right: i32,
+}
+
+impl Size {
+    /// Minimum possible size (0, 0)
+    pub const MIN: Self = Self {
+        width: 0,
+        height: 0,
+    };
+
+    /// Maximum possible size
+    pub const MAX: Self = Self {
+        width: u32::MAX,
+        height: u32::MAX,
+    };
+
+    /// Create a new [`Size`] from logical pixels and a scale factor.
+    pub fn from_logical(width: f64, height: f64, scale: f64) -> Self {
+        Self {
+            width: (width * scale).round() as u32,
+            height: (height * scale).round() as u32,
+        }
+    }
+
+    /// Convert this [`Size`] to logical pixels using a scale factor.
+    pub fn to_logical(&self, scale: f64) -> (f64, f64) {
+        (self.width as f64 / scale, self.height as f64 / scale)
+    }
+}
+
+impl Rect {
+    /// Create a new [`Rect`] from the coordinates of its top-left corner and
+    /// its size.
+    pub fn xywh(x: i32, y: i32, width: u32, height: u32) -> Self {
+        Self {
+            top: y,
+            left: x,
+            bottom: y.saturating_add_unsigned(height),
+            right: x.saturating_add_unsigned(width),
+        }
+    }
+
+    /// Size of the rectangle.
+    pub fn size(&self) -> Size {
+        Size {
+            width: (self.right - self.left).try_into().unwrap_or(0),
+            height: (self.bottom - self.top).try_into().unwrap_or(0),
+        }
+    }
+}
+
+impl From<(u32, u32)> for Size {
+    fn from((width, height): (u32, u32)) -> Self {
+        Self { width, height }
+    }
+}
+
+impl From<(u32, u32)> for Point {
+    fn from((x, y): (u32, u32)) -> Self {
+        Self {
+            x: x as f64,
+            y: y as f64,
+        }
+    }
+}
+
+impl From<(f64, f64)> for Point {
+    fn from((x, y): (f64, f64)) -> Self {
+        Self { x, y }
+    }
+}
+
+/// A mouse button.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+#[non_exhaustive]
+pub enum MouseButton {
+    /// Left mouse button
+    Left = 0,
+    /// Right mouse button
+    Right,
+    /// Middle mouse button (usually the scroll wheel button)
+    Middle,
+    /// Forward mouse button (usually the 4th button)
+    Forward,
+    /// Back mouse button (usually the 5th button)
+    Back,
+}
+
 /// A mouse cursor icon that is predefined by the platform.
 ///
 /// Not all platforms support all cursor types, in which case a closest matching
@@ -57,6 +176,7 @@ pub enum MouseCursor {
 
 /// Key modifier flags that are tracked separately from key events
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub struct Modifiers {
     /// Alt key is held down (Option key on Mac)
     pub alt: bool,
@@ -72,90 +192,6 @@ pub struct Modifiers {
     pub num_lock: bool,
     /// Caps lock is active
     pub caps_lock: bool,
-}
-
-/// A fractional point in physical pixels with top-left origin
-#[derive(Copy, Clone, Debug, PartialEq, Default)]
-pub struct Point {
-    /// The x coordinate
-    pub x: f64,
-
-    /// The y coordinate
-    pub y: f64,
-}
-
-/// Integer size in physical pixels
-#[derive(Copy, Clone, Debug, PartialEq, Default)]
-pub struct Size {
-    /// The width in physical pixels
-    pub width: u32,
-
-    /// The height in physical pixels
-    pub height: u32,
-}
-
-impl Size {
-    /// Minimum possible size (0, 0)
-    pub const MIN: Self = Self {
-        width: 0,
-        height: 0,
-    };
-
-    /// Maximum possible size
-    pub const MAX: Self = Self {
-        width: u32::MAX,
-        height: u32::MAX,
-    };
-
-    /// Create a new [`Size`] from logical pixels and a scale factor.
-    pub fn from_logical(width: f64, height: f64, scale: f64) -> Self {
-        Self {
-            width: (width * scale).round() as u32,
-            height: (height * scale).round() as u32,
-        }
-    }
-
-    /// Convert this [`Size`] to logical pixels using a scale factor.
-    pub fn to_logical(&self, scale: f64) -> (f64, f64) {
-        (self.width as f64 / scale, self.height as f64 / scale)
-    }
-}
-
-impl From<(u32, u32)> for Size {
-    fn from((width, height): (u32, u32)) -> Self {
-        Self { width, height }
-    }
-}
-
-impl From<(u32, u32)> for Point {
-    fn from((x, y): (u32, u32)) -> Self {
-        Self {
-            x: x as f64,
-            y: y as f64,
-        }
-    }
-}
-
-impl From<(f64, f64)> for Point {
-    fn from((x, y): (f64, f64)) -> Self {
-        Self { x, y }
-    }
-}
-
-/// A mouse button.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum MouseButton {
-    /// Left mouse button
-    Left = 0,
-    /// Right mouse button
-    Right,
-    /// Middle mouse button (usually the scroll wheel button)
-    Middle,
-    /// Forward mouse button (usually the 4th button)
-    Forward,
-    /// Back mouse button (usually the 5th button)
-    Back,
 }
 
 /// A logical key of a keyboard.
@@ -286,6 +322,7 @@ pub enum Key {
 
 /// A data exchange format for clipboard and drag-and-drop operations.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Exchange {
     /// No data in the clipboard
     Empty,
@@ -297,197 +334,19 @@ pub enum Exchange {
     Files(Vec<PathBuf>),
 }
 
-/// An event generated by the windowing system and delivered to the event
-/// handler.
-#[derive(Debug)]
+/// The effect a drag-and-drop operation is expected to have
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Event<'a> {
-    /// A wakeup event triggered by a call to
-    /// [`WindowWaker::wakeup`]
-    Wakeup,
-
-    /// User requested to close the window (by clicking the close button, or
-    /// pressing Alt+F4, etc)
-    ///
-    /// To actually close the window, you have to call
-    /// [`Window::close`].
-    WindowClose,
-
-    /// The window gained or lost focus.
-    ///
-    /// By default, assume that the window is not focused.
-    WindowFocus {
-        /// `true` if the window gained focus, `false` if it lost focus
-        focus: bool,
-    },
-
-    /// The window was occluded or unoccluded (for example, by another
-    /// window or by minimizing).
-    ///
-    /// By default, assume that the window is not occluded.
-    WindowOccluded {
-        /// `true` if the window is now _fully_ occluded, `false` otherwise
-        occluded: bool,
-    },
-
-    /// The window scale factor changed (for example, when moved to a different
-    /// monitor).
-    ///
-    /// This is a hint that the application may want to adjust its rendering
-    /// scale.
-    ///
-    /// Does not affect the coordinate system of positions and sizes, which are
-    /// always in physical pixels.
-    WindowScale {
-        /// The new scale factor of the window
-        scale: f64,
-    },
-
-    /// The window was resized.
-    WindowResize {
-        /// The new physical size of the window's client area.
-        size: Size,
-    },
-
-    /// The window was moved.
-    WindowMove {
-        /// The new position of the window relative to the origin.
-        ///
-        /// See [`Window::set_position`] for
-        /// details on coordinate system.
-        point: Point,
-    },
-
-    /// Frame event. You should redraw the window in response to this event.
-    ///
-    /// This event is sent at the refresh rate of the display (typically 60 Hz),
-    /// on a best-effort basis (might use an unsynchronized timer depending on
-    /// the platform).
-    WindowFrame,
-
-    /// The area of the window that needs to be redrawn.
-    ///
-    /// This event may be sent multiple times before the next `WindowFrame`
-    /// event.
-    ///
-    /// You can ignore this event if you redraw the window continuously.
-    WindowDamage {
-        /// The `x` coordinate of the top-left corner of the damaged area.
-        x: u32,
-        /// The `y` coordinate of the top-left corner of the damaged area.
-        y: u32,
-        /// The width of the damaged area.
-        w: u32,
-        /// The height of the damaged area.
-        h: u32,
-    },
-
-    /// The mouse cursor left the window.
-    ///
-    /// Note that there is no corresponding event for when the mouse enters the
-    /// window, you can track that yourself by checking for
-    /// [`Event::MouseMove`] events.
-    MouseLeave,
-
-    /// The mouse cursor position has changed within the window.
-    MouseMove {
-        /// The position of the cursor relative to the window's client area.
-        relative: Point,
-
-        /// The position of the cursor relative to the entire screen.
-        absolute: Point,
-    },
-
-    /// A mouse button was pressed.
-    MouseDown {
-        /// Which mouse button was pressed
-        button: MouseButton,
-    },
-
-    /// A mouse button was released.
-    MouseUp {
-        /// Which mouse button was released
-        button: MouseButton,
-    },
-
-    /// The mouse wheel was scrolled (can also represent touchpad scrolling).
-    ///
-    /// `picoview` normalizes scroll events to a consistent unit across
-    /// platforms.
-    MouseScroll {
-        /// The amount scrolled in the horizontal direction (positive right)
-        x: f64,
-
-        /// The amount scrolled in the vertical direction (positive down)
-        y: f64,
-    },
-
-    /// The state of the modifier keys (Shift, Ctrl, Alt, etc.) changed.
-    KeyModifiers {
-        /// The new state of the modifier keys
-        modifiers: Modifiers,
-    },
-
-    /// A rotation gesture was performed (for example, a two-finger rotation on
-    /// a touchpad).
-    GestureRotate {
-        /// The rotation angle delta in degrees (positive clockwise)
-        angle: f64,
-    },
-
-    /// A zoom gesture was performed (for example, a two-finger pinch on a
-    /// touchpad).
-    GestureZoom {
-        /// The zoom scale multiplicative delta (>1 means zooming in, <1 means
-        /// zooming out)
-        scale: f64,
-    },
-
-    /// A key was pressed.
-    KeyDown {
-        /// Which key was pressed
-        key: Key,
-
-        /// Set to `true` to indicate that the event has been handled and should
-        /// not be propagated to the parent (if this window is embedded in
-        /// another window)
-        capture: &'a mut bool,
-    },
-
-    /// A key was released.
-    KeyUp {
-        /// Which key was released
-        key: Key,
-
-        /// Set to `true` to indicate that the event has been handled and should
-        /// not be propagated to the parent (if this window is embedded in
-        /// another window)
-        capture: &'a mut bool,
-    },
-
-    /// Drag-and-drop data was dragged into the window, the position will be
-    /// reported via [`Event::DragMove`] events until the drag-and-drop
-    /// operation is completed (via [`Event::DragAccept`]) or cancelled (via
-    /// [`Event::DragLeave`]).
-    DragEnter {
-        /// The data being dragged into the window
-        data: Exchange,
-        /// The position of the cursor relative to the window's client area.
-        point: Point,
-    },
-
-    /// Drag-and-drop data was dragged within the window
-    DragMove {
-        /// The position of the cursor relative to the window's client area.
-        point: Point,
-    },
-
-    /// Drag-and-drop data was dragged out of the window, or the drag-and-drop
-    /// operation was cancelled.
-    DragLeave,
-
-    /// Drag-and-drop data was released into the window at the last
-    /// [`Event::DragMove`] position with the data provided by the last
-    /// [`Event::DragEnter`].
-    DragAccept,
+#[repr(u8)]
+pub enum DropEffect {
+    /// Operation rejected.
+    Reject,
+    /// Copy.
+    Copy,
+    /// Move.
+    Move,
+    /// Link.
+    Link,
+    /// Operation accepted (generic).
+    Generic,
 }

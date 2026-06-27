@@ -96,6 +96,7 @@ impl Default for GlConfig {
 }
 
 /// OpenGL context belonging to a window
+#[derive(Clone, Copy)]
 pub struct GlContext<'a>(pub(crate) &'a dyn platform::PlatformOpenGl);
 
 impl<'a> GlContext<'a> {

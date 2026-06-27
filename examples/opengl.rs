@@ -1,10 +1,45 @@
-use picoview::{Event, GlConfig, GlVersion, Point, Size, WindowBuilder};
+use picoview::{
+    GlConfig, GlContext, GlVersion, Point, Rect, Size, Window, WindowBuilder, WindowHandler,
+};
 use std::mem::transmute;
 
 fn main() {
     WindowBuilder::new(|window| {
+        window.set_max_size((1000, 1000));
+        window.set_size((200, 200));
+        window.set_title("OpenGL Example");
+        window.set_visible(true);
+
+        Ok(Box::new(Handler {
+            window,
+            opengl: window.opengl()?,
+            scale: window.scale(),
+            size: Size {
+                width: 200,
+                height: 200,
+            },
+        }))
+    })
+    .with_opengl(GlConfig {
+        version: GlVersion::Compat(2, 1),
+        ..Default::default()
+    })
+    .with_transparency(true)
+    .open_blocking()
+    .expect("failed to open a window");
+}
+
+struct Handler<'a> {
+    window: Window<'a>,
+    opengl: GlContext<'a>,
+    size: Size,
+    scale: f64,
+}
+
+impl<'a> WindowHandler for Handler<'a> {
+    fn frame(&mut self) {
         // we just rawdogging opengl here lol
-        let gl = window.opengl().expect("failed to get OpenGL context");
+        let gl = self.opengl;
         let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
             unsafe { transmute(gl.get_proc_address(c"glClearColor")) };
         let clear: unsafe extern "system" fn(i32) =
@@ -19,83 +54,131 @@ fn main() {
         let color: unsafe extern "system" fn(f32, f32, f32, f32) =
             unsafe { transmute(gl.get_proc_address(c"glColor4f")) };
 
-        let mut size = Size {
-            width: 200,
-            height: 200,
-        };
+        gl.make_current(true).unwrap();
 
-        println!("scale: {}", window.get_scale());
-        println!("size: {:?}", size.to_logical(window.get_scale()));
+        unsafe {
+            (clear_color)(0.25, 0.25, 0.25, 0.5);
+            (clear)(0x00004000);
+            (viewport)(0, 0, self.size.width as i32, self.size.height as i32);
 
-        window.set_max_size((1000, 1000));
-        window.set_size((200, 200));
-        window.set_title("OpenGL Example");
-        window.set_visible(true);
+            let draw_line = |x1: f32, y1: f32, x2: f32, y2: f32| {
+                let x1 = (x1 / self.size.width as f32) * 2.0 - 1.0;
+                let y1 = 1.0 - (y1 / self.size.height as f32) * 2.0;
+                let x2 = (x2 / self.size.width as f32) * 2.0 - 1.0;
+                let y2 = 1.0 - (y2 / self.size.height as f32) * 2.0;
 
-        Box::new(move |event| match event {
-            Event::WindowFrame => unsafe {
-                gl.make_current(true).unwrap();
+                (vertex)(x1, y1, 0.0);
+                (vertex)(x2, y2, 0.0);
+            };
 
-                (clear_color)(0.25, 0.25, 0.25, 0.5);
-                (clear)(0x00004000);
-                (viewport)(0, 0, size.width as i32, size.height as i32);
+            (begin)(0x0001); // GL_LINES
 
-                let draw_line = |x1: f32, y1: f32, x2: f32, y2: f32| {
-                    let x1 = (x1 / size.width as f32) * 2.0 - 1.0;
-                    let y1 = 1.0 - (y1 / size.height as f32) * 2.0;
-                    let x2 = (x2 / size.width as f32) * 2.0 - 1.0;
-                    let y2 = 1.0 - (y2 / size.height as f32) * 2.0;
-
-                    (vertex)(x1, y1, 0.0);
-                    (vertex)(x2, y2, 0.0);
-                };
-
-                (begin)(0x0001); // GL_LINES
-
-                (color)(0.5, 0.5, 0.5, 0.5);
-                for i in (0..1000).step_by(25) {
-                    draw_line(i as f32, 0.0, i as f32, size.height as f32);
-                    draw_line(0.0, i as f32, size.width as f32, i as f32);
-                }
-
-                (color)(1.0, 1.0, 1.0, 1.0);
-                for i in (0..1000).step_by(100) {
-                    draw_line(i as f32, 0.0, i as f32, size.height as f32);
-                    draw_line(0.0, i as f32, size.width as f32, i as f32);
-                }
-
-                (end)();
-
-                gl.swap_buffers().unwrap();
-                gl.make_current(false).unwrap();
-            },
-
-            Event::MouseMove { relative, .. } => {
-                println!("{:?}", event);
-
-                if relative.x < -10.0 {
-                    window.set_cursor_position(Point { x: 100.0, y: 100.0 });
-                }
+            (color)(0.5, 0.5, 0.5, 0.5);
+            for i in (0..1000).step_by(25) {
+                draw_line(i as f32, 0.0, i as f32, self.size.height as f32);
+                draw_line(0.0, i as f32, self.size.width as f32, i as f32);
             }
 
-            Event::WindowClose => {
-                println!("{:?}", event);
-                window.close();
+            (color)(1.0, 1.0, 1.0, 1.0);
+            for i in (0..1000).step_by(100) {
+                draw_line(i as f32, 0.0, i as f32, self.size.height as f32);
+                draw_line(0.0, i as f32, self.size.width as f32, i as f32);
             }
 
-            Event::WindowResize { size: new_size } => {
-                println!("{:?}", event);
-                size = new_size;
+            (color)(1.0, 0.0, 0.0, 0.5);
+            for i in (0..1000).step_by((100.0 * self.scale) as usize) {
+                draw_line(i as f32, 0.0, i as f32, self.size.height as f32);
+                draw_line(0.0, i as f32, self.size.width as f32, i as f32);
             }
 
-            event => println!("{:?}", event),
-        })
-    })
-    .with_opengl(GlConfig {
-        version: GlVersion::Compat(2, 1),
-        ..Default::default()
-    })
-    .with_transparency(true)
-    .open_blocking()
-    .expect("failed to open a window");
+            (end)();
+        }
+
+        gl.swap_buffers().unwrap();
+        gl.make_current(false).unwrap();
+    }
+
+    fn mouse_move(&mut self, point: Point) {
+        println!("mouse_move({:?})", point);
+
+        if point.x < -10.0 {
+            self.window.set_cursor_position((100.0, 100.0));
+        }
+    }
+
+    fn close_requested(&mut self) {
+        self.window.close();
+    }
+
+    fn wakeup(&mut self) {}
+
+    fn damage(&mut self, rect: Rect) {
+        println!("damage({rect:?})");
+    }
+
+    fn focus_changed(&mut self, focus: bool) {
+        println!("focus_changed({focus})");
+    }
+
+    fn position_changed(&mut self, position: Point) {
+        println!("position_changed({position:?})");
+    }
+
+    fn size_changed(&mut self, size: Size) {
+        println!("size_changed({size:?})");
+        self.size = size;
+    }
+
+    fn scale_changed(&mut self, scale: f64) {
+        println!("scale_changed({scale})");
+        self.scale = scale;
+    }
+
+    fn mouse_leave(&mut self) {
+        println!("mouse_leave()");
+    }
+
+    fn mouse_press(&mut self, button: picoview::MouseButton, pressed: bool) {
+        println!("mouse_press({button:?}, {pressed})");
+    }
+
+    fn mouse_scroll(&mut self, x: f64, y: f64) {
+        println!("mouse_scroll({x}, {y})");
+    }
+
+    fn gesture_rotate(&mut self, angle: f64) {
+        println!("gesture_rotate({angle})");
+    }
+
+    fn gesture_zoom(&mut self, scale: f64) {
+        println!("gesture_zoom({scale})");
+    }
+
+    fn key_modifiers(&mut self, modifiers: picoview::Modifiers) {
+        println!("key_modifiers({modifiers:?})");
+    }
+
+    fn key_press(&mut self, key: picoview::Key, pressed: bool) -> bool {
+        println!("key_press({key:?}, {pressed})");
+        false
+    }
+
+    fn drag_enter(&mut self, data: picoview::Exchange, point: Point) -> picoview::DropEffect {
+        println!("drag_enter({data:?}, {point:?})");
+        picoview::DropEffect::Reject
+    }
+
+    fn drag_move(&mut self, point: Point) -> picoview::DropEffect {
+        println!("drag_move({point:?})");
+        picoview::DropEffect::Reject
+    }
+
+    fn drag_leave(&mut self) {
+        println!("drag_leave()");
+    }
+
+    fn drag_accept(&mut self) -> picoview::DropEffect {
+        println!("drag_accept()");
+        picoview::DropEffect::Reject
+    }
 }
