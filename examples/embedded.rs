@@ -53,7 +53,7 @@ struct Child<'a> {
 }
 
 impl WindowHandler for Parent<'_> {
-    fn close(&mut self) {
+    fn close_requested(&mut self) {
         self.window.close();
     }
 
@@ -77,7 +77,7 @@ impl WindowHandler for Parent<'_> {
 }
 
 impl WindowHandler for Child<'_> {
-    fn close(&mut self) {
+    fn close_requested(&mut self) {
         self.window.close();
     }
 

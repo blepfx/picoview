@@ -106,7 +106,7 @@ impl<'a> WindowHandler for Handler<'a> {
         }
     }
 
-    fn close(&mut self) {
+    fn close_requested(&mut self) {
         self.window.close();
     }
 

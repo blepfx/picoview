@@ -34,7 +34,7 @@ struct Handler<'a> {
 }
 
 impl WindowHandler for Handler<'_> {
-    fn close(&mut self) {
+    fn close_requested(&mut self) {
         self.window.close();
     }
 

@@ -1,3 +1,4 @@
+use crate::WindowError;
 use objc2_core_foundation::{
     CFRetained, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, kCFRunLoopCommonModes,
 };
@@ -5,8 +6,6 @@ use objc2_core_video::{CVDisplayLink, CVOptionFlags, CVReturn, CVTimeStamp};
 use std::ffi::c_void;
 use std::ptr::{NonNull, null_mut};
 use std::rc::Rc;
-
-use crate::WindowError;
 
 extern "C-unwind" fn callback(
     _display_link: NonNull<CVDisplayLink>,

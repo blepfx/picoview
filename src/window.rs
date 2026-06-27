@@ -17,18 +17,18 @@ pub trait WindowHandler {
     /// the platform).
     fn frame(&mut self) {}
 
-    /// User requested to close the window (by clicking the close button, or
-    /// pressing Alt+F4, etc)
-    ///
-    /// To actually close the window, you have to call
-    /// [`Window::close`].
-    fn close(&mut self) {}
-
     /// Damage event. Request to redraw the specificed region as soon as
     /// possible.
     fn damage(&mut self, region: Rect) {
         let _ = region;
     }
+
+    /// User requested to close the window (by clicking the close button, or
+    /// pressing Alt+F4, etc)
+    ///
+    /// To actually close the window, you have to call
+    /// [`Window::close`].
+    fn close_requested(&mut self) {}
 
     /// The window gained or lost focus.
     fn focus_changed(&mut self, focus: bool) {
@@ -56,6 +56,14 @@ pub trait WindowHandler {
     /// system (screen or parent window).
     fn position_changed(&mut self, position: Point) {
         let _ = position;
+    }
+
+    /// The visibility of a window has changed.
+    ///
+    /// Currently only implemented on MacOS, where it is triggered by the window
+    /// being occluded or unoccluded.
+    fn visible_changed(&mut self, visible: bool) {
+        let _ = visible;
     }
 
     /// The mouse cursor left the window.

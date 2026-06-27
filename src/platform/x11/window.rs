@@ -395,7 +395,7 @@ impl WindowImpl {
             //   the next event/until the frame timer runs out.
             let mut next_frame = Instant::now();
 
-            // stop the loop if [`WindowHandler::close`] is called, or if the window is
+            // stop the loop if [`Window::close`] is called, or if the window is
             // destroyed externally
             while !self.is_closing.get() {
                 let curr_frame = Instant::now();
@@ -544,7 +544,7 @@ impl WindowImpl {
                         && event.message_type == self.connection.atom(c"WM_PROTOCOLS") as _
                         && event.data.get_long(0) == self.connection.atom(c"WM_DELETE_WINDOW") as _
                     {
-                        self.event(|e| e.close());
+                        self.event(|e| e.close_requested());
                     }
 
                     if event.format == 32

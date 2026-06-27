@@ -651,8 +651,7 @@ unsafe extern "system" fn wnd_proc(
             }
 
             WM_CLOSE => {
-                window.deferred_event(|_, e| e.close());
-
+                window.deferred_event(|_, e| e.close_requested());
                 0
             }
 

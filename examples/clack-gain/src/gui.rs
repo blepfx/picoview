@@ -73,7 +73,7 @@ impl WindowHandler for Handler<'_> {
         gl.make_current(false).unwrap();
     }
 
-    fn close(&mut self) {
+    fn close_requested(&mut self) {
         self.window.close();
     }
 }

@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::SystemTime;
 
-pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
+pub fn best_cursor_icon_for(cursor: MouseCursor) -> Retained<NSCursor> {
     fn load(selector: Sel) -> Retained<NSCursor> {
         unsafe {
             let class = NSCursor::class();
@@ -23,8 +23,8 @@ pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
         }
     }
 
-    Some(match cursor {
-        MouseCursor::Hidden => return None,
+    match cursor {
+        MouseCursor::Hidden => NSCursor::arrowCursor(),
         MouseCursor::Default => NSCursor::arrowCursor(),
         MouseCursor::Help => load(sel!(_helpCursor)),
         MouseCursor::Working => load(sel!(_waitCursor)),
@@ -63,7 +63,7 @@ pub fn get_cursor(cursor: MouseCursor) -> Option<Retained<NSCursor>> {
         MouseCursor::AllScroll => NSCursor::openHandCursor(),
         MouseCursor::ZoomIn => NSCursor::zoomInCursor(),
         MouseCursor::ZoomOut => NSCursor::zoomOutCursor(),
-    })
+    }
 }
 
 pub fn random_id() -> u32 {
@@ -237,13 +237,13 @@ mod keyboard {
 }
 
 mod clipboard {
-    use crate::Exchange;
+    use crate::{DropEffect, Exchange};
     use objc2::ClassType;
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
     use objc2_app_kit::{
-        NSPasteboard, NSPasteboardTypeString, NSPasteboardURLReadingFileURLsOnlyKey,
-        NSPasteboardWriting,
+        NSDragOperation, NSPasteboard, NSPasteboardTypeString,
+        NSPasteboardURLReadingFileURLsOnlyKey, NSPasteboardWriting,
     };
     use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSURL};
     use std::path::PathBuf;
@@ -322,6 +322,16 @@ mod clipboard {
                     files
                 })
                 .filter(|files| !files.is_empty())
+        }
+    }
+
+    pub fn encode_drop_effect(effect: DropEffect) -> NSDragOperation {
+        match effect {
+            DropEffect::Reject => NSDragOperation::None,
+            DropEffect::Copy => NSDragOperation::Copy,
+            DropEffect::Move => NSDragOperation::Move,
+            DropEffect::Link => NSDragOperation::Link,
+            DropEffect::Generic => NSDragOperation::Generic,
         }
     }
 }

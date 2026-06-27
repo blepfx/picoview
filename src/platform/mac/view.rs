@@ -13,10 +13,11 @@ use objc2::{
     RefEncode, msg_send, sel,
 };
 use objc2_app_kit::{
-    NSApp, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor,
-    NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
-    NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowDelegate,
+    NSApp, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
+    NSBackingStoreType, NSCursor, NSDragOperation, NSDraggingInfo, NSEvent, NSEventMask,
+    NSEventModifierFlags, NSEventType, NSPasteboard, NSPasteboardTypeFileURL,
+    NSPasteboardTypeString, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSViewFrameDidChangeNotification, NSWindow, NSWindowDelegate,
     NSWindowDidChangeOcclusionStateNotification, NSWindowDidResignKeyNotification,
     NSWindowOcclusionState, NSWindowOrderingMode, NSWindowStyleMask,
 };
@@ -33,6 +34,11 @@ use std::ops::Deref;
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
 
+const STYLE_MASK_NORMAL: NSWindowStyleMask = NSWindowStyleMask::Titled
+    .union(NSWindowStyleMask::Closable)
+    .union(NSWindowStyleMask::Miniaturizable)
+    .union(NSWindowStyleMask::Resizable);
+
 #[repr(C)]
 pub struct WindowImpl {
     view: NSView,
@@ -40,18 +46,18 @@ pub struct WindowImpl {
 
 pub struct WindowImplInner {
     _display_link: DisplayLink,
-    gl_context: Option<GlContext>,
     key_event_monitor: Option<Retained<AnyObject>>,
-
     application: RefCell<Option<Retained<NSApplication>>>,
+
+    gl_context: Result<GlContext, OpenGlError>,
     waker: Arc<WindowWakerImpl>,
 
-    event_queue: RefCell<VecDeque<Event<'static>>>,
-    current_cursor: Cell<MouseCursor>,
-    current_size: Cell<Size>,
-
     #[allow(clippy::type_complexity)]
-    event_handler: RefCell<Option<Box<dyn FnMut(Event)>>>,
+    event_deferred: RefCell<VecDeque<Box<dyn FnOnce(&WindowImpl, &mut dyn WindowHandler)>>>,
+    event_handler: RefCell<Option<Box<dyn WindowHandler>>>,
+
+    last_cursor_icon: Cell<MouseCursor>,
+    last_window_size: Cell<Size>,
 
     is_closed: Cell<bool>,
     is_embedded: bool,
@@ -88,7 +94,7 @@ impl WindowImpl {
                 let app = NSApp(main_thread);
                 app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-                let window = Self::create_window(&options, main_thread)?;
+                let window = Self::create_window(main_thread)?;
                 let view = Self::create_view(&options, Some(app.clone()), false, main_thread)?;
 
                 window.setContentView(Some(&view.view));
@@ -96,7 +102,7 @@ impl WindowImpl {
                 window.setReleasedWhenClosed(true);
                 window.setDelegate(Some(view.as_ns_window_delegate()));
 
-                WindowImpl::init_handler(&view, options.factory);
+                WindowImpl::init_handler(&view, options.factory)?;
 
                 app.run();
                 Ok(WindowWaker::default())
@@ -105,21 +111,21 @@ impl WindowImpl {
             OpenMode::Transient(parent) => unsafe {
                 let parent_view = match parent {
                     rwh_06::RawWindowHandle::AppKit(window) => {
-                        window.ns_view.as_ptr() as *mut NSView
+                        &*(window.ns_view.as_ptr() as *mut NSView)
                     }
                     _ => return Err(WindowError::InvalidParent),
                 };
 
-                let window = Self::create_window(&options, main_thread)?;
+                let window = Self::create_window(main_thread)?;
                 let view = Self::create_view(&options, None, false, main_thread)?;
 
                 window.setContentView(Some(&view.view));
                 window.makeFirstResponder(Some(&view.view));
                 window.setDelegate(Some(view.as_ns_window_delegate()));
 
-                WindowImpl::init_handler(&view, options.factory);
+                WindowImpl::init_handler(&view, options.factory)?;
 
-                if let Some(parent_window) = (*parent_view).window() {
+                if let Some(parent_window) = parent_view.window() {
                     parent_window.addChildWindow_ordered(&window, NSWindowOrderingMode::Above);
                 }
 
@@ -135,7 +141,7 @@ impl WindowImpl {
                 };
 
                 let view = Self::create_view(&options, None, true, main_thread)?;
-                WindowImpl::init_handler(&view, options.factory);
+                WindowImpl::init_handler(&view, options.factory)?;
                 parent_view.addSubview(&view.view);
 
                 Ok(view.waker())
@@ -144,23 +150,14 @@ impl WindowImpl {
     }
 
     unsafe fn create_window(
-        options: &WindowBuilder,
         main_thread: MainThreadMarker,
     ) -> Result<Retained<NSWindow>, WindowError> {
         unsafe {
-            let mut style = NSWindowStyleMask::empty();
-            if options.decorations {
-                style |= NSWindowStyleMask::Titled
-                    | NSWindowStyleMask::Closable
-                    | NSWindowStyleMask::Miniaturizable
-                    | NSWindowStyleMask::Resizable;
-            }
-
             let window = NSWindow::alloc(main_thread);
             let window = NSWindow::initWithContentRect_styleMask_backing_defer(
                 window,
                 NSRect::new(CGPoint::default(), NSSize::new(1.0, 1.0)),
-                style,
+                STYLE_MASK_NORMAL,
                 NSBackingStoreType::Buffered,
                 false,
             );
@@ -197,6 +194,9 @@ impl WindowImpl {
             view.view.addTrackingArea(&tracking_area);
             view.view.registerForDraggedTypes(&dragged_types);
             view.view.setPostsFrameChangedNotifications(true);
+            view.view
+                .setAutoresizingMask(NSAutoresizingMaskOptions::empty());
+            view.view.setAutoresizesSubviews(false);
 
             if is_embedded {
                 NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
@@ -225,18 +225,17 @@ impl WindowImpl {
         };
 
         // opengl context if requested
-        let gl_context = if let Some(config) = options.opengl {
-            GlContext::new(&view.view, config, main_thread).ok()
-        } else {
-            None
-        };
+        let gl_context = options
+            .opengl
+            .map(|opts| GlContext::new(&view.view, opts, main_thread))
+            .unwrap_or_else(|| Err(OpenGlError("OpenGL not requested".to_string())));
 
         // vsync synced [`WindowFrame`] events
         let display_link = {
             let view = Weak::from_retained(&view);
             DisplayLink::new(Box::new(move || {
                 if let Some(view) = view.load() {
-                    view.send_event(Event::WindowFrame);
+                    view.non_reentrant_event(|e| e.frame());
                 }
             }))?
         };
@@ -248,23 +247,19 @@ impl WindowImpl {
                 NSEventMask::KeyDown | NSEventMask::KeyUp,
                 &RcBlock::new(move |event: NonNull<NSEvent>| {
                     let event = &*event.as_ptr();
-                    let mut capture = false;
 
-                    if let Some(view) = view.load()
-                        && let Some(key) = keycode_to_key(event.keyCode())
-                    {
-                        if event.r#type() == NSEventType::KeyDown {
-                            view.send_event(Event::KeyDown {
-                                key,
-                                capture: &mut capture,
-                            });
-                        } else {
-                            view.send_event(Event::KeyUp {
-                                key,
-                                capture: &mut capture,
-                            });
-                        }
-                    }
+                    let Some(view) = view.load() else {
+                        return NonNull::from(event).as_ptr();
+                    };
+
+                    let Some(key) = keycode_to_key(event.keyCode()) else {
+                        return NonNull::from(event).as_ptr();
+                    };
+
+                    let is_down = event.r#type() == NSEventType::KeyDown;
+                    let capture = view
+                        .non_reentrant_event(|e| e.key_press(key, is_down))
+                        .unwrap_or(false);
 
                     match capture {
                         true => null_mut(),
@@ -285,11 +280,11 @@ impl WindowImpl {
                 weak: Weak::from_retained(&view),
             }),
 
-            event_queue: RefCell::new(VecDeque::default()),
+            event_deferred: RefCell::new(VecDeque::new()),
             event_handler: RefCell::new(None),
 
-            current_cursor: Cell::new(MouseCursor::Default),
-            current_size: Cell::new(Size::default()),
+            last_cursor_icon: Cell::new(MouseCursor::Default),
+            last_window_size: Cell::new(Size::default()),
 
             is_closed: Cell::new(false),
             is_embedded,
@@ -298,7 +293,7 @@ impl WindowImpl {
         Ok(view)
     }
 
-    fn init_handler(this: &Retained<Self>, factory: WindowFactory) {
+    fn init_handler(this: &Retained<Self>, factory: WindowFactory) -> Result<(), WindowError> {
         // SAFETY: we erase the lifetime of our WindowImpl; it should be safe to do so
         // because:
         //  - because our window instance has a stable address for the whole lifetime of
@@ -308,50 +303,63 @@ impl WindowImpl {
         //  - we promise to not move the handler to a different thread as appkit api is
         //    expected to be single threaded (as that would violate the handler's !Send
         //    requirement)
-        unsafe {
-            this.event_handler
-                .replace(Some(factory(Window(&*Retained::as_ptr(this)))));
-        }
-    }
-
-    fn send_event(&self, event: Event) {
-        if let Ok(mut handler) = self.event_handler.try_borrow_mut() {
-            if let Some(handler) = handler.as_mut() {
-                (handler)(event);
-
-                while let Some(event) = self.event_queue.borrow_mut().pop_front() {
-                    (handler)(event);
-                }
+        let handler = unsafe {
+            match factory(Window(&*Retained::as_ptr(this))) {
+                Ok(handler) => handler,
+                Err(error) => return Err(WindowError::Factory(error)),
             }
+        };
+
+        this.event_handler.replace(Some(handler));
+        Ok(())
+    }
+
+    /// Run a closure with exclusive access to the window's event handler.
+    ///
+    /// Panics if [`Self::non_reentrant_event`] is called inside of another
+    /// [`Self::non_reentrant_event`]. To safely post a task, use
+    /// [`Self::post_deferred`].
+    fn non_reentrant_event<R>(&self, call: impl FnOnce(&mut dyn WindowHandler) -> R) -> Option<R> {
+        let mut handler = self
+            .event_handler
+            .try_borrow_mut()
+            .expect("unhandled callback reentrancy");
+
+        // handler might be None if the window is being dropped, in which case we return
+        // None
+        if let Some(handler) = handler.as_mut() {
+            let result = Some(call(&mut **handler));
+
+            loop {
+                // event_queue must NOT be borrowed while calling the handler, so we have to
+                // reborrow it every time
+                let Some(event) = self.event_deferred.borrow_mut().pop_front() else {
+                    break;
+                };
+
+                event(self, &mut **handler);
+            }
+
+            result
         } else {
-            debug_assert!(false, "event handler reentrancy: {:?}", event);
+            None
         }
     }
 
-    fn send_event_defer(&self, event: Event<'static>) {
+    /// Run a closure with exclusive access to the window's event handler.
+    ///
+    /// Unlike [`Self::non_reentrant_event`], this function will not panic if
+    /// called inside of another [`Self::non_reentrant_event`]. Instead, the
+    /// closure will be deferred and run later.
+    ///
+    /// For that reason it cannot return a value, and the closure must be
+    /// `'static`.
+    fn deferred_event(&self, task: impl FnOnce(&Self, &mut dyn WindowHandler) + 'static) {
         if self.event_handler.try_borrow_mut().is_ok() {
-            self.send_event(event);
+            self.non_reentrant_event(|handler| task(self, handler));
         } else {
-            self.event_queue.borrow_mut().push_back(event);
+            self.event_deferred.borrow_mut().push_back(Box::new(task));
         }
-    }
-
-    // `position` is in NSView coordinate space
-    fn send_event_mouse_move(&self, position: CGPoint) {
-        let relative = self.convert_point_to_picoview(position);
-        let absolute = self
-            .view
-            .window()
-            .map(|w| w.convertPointToBacking(position))
-            .unwrap_or(position);
-
-        self.send_event_defer(Event::MouseMove {
-            relative,
-            absolute: Point {
-                x: absolute.x,
-                y: absolute.y,
-            },
-        });
     }
 
     fn set_inner(&self, context: Option<Box<WindowImplInner>>) {
@@ -449,28 +457,26 @@ impl WindowImpl {
 
     unsafe extern "C" fn view_did_change_backing_properties(&self, _: Sel, _: Option<&AnyObject>) {
         // keep physical size
-        self.set_size(self.current_size.replace(Size::default()));
+        self.set_size(self.last_window_size.replace(Size::default()));
 
         // let the handler handle it now
-        self.send_event_defer(Event::WindowScale {
-            scale: self.get_scale(),
-        });
+        self.deferred_event(|this, e| e.scale_changed(this.scale()));
     }
 
     unsafe extern "C" fn window_should_close(&self, _: Sel, _: Option<&AnyObject>) -> Bool {
-        self.send_event_defer(Event::WindowClose);
+        self.deferred_event(|_, e| e.close_requested());
         Bool::NO
     }
 
     unsafe extern "C" fn window_did_move(&self, _: Sel, _: Option<&AnyObject>) {
         if let Some(window) = self.own_window() {
             let position = window.frame().origin;
-            self.send_event_defer(Event::WindowMove {
-                point: Point {
-                    x: position.x,
-                    y: position.y,
-                },
-            });
+            let position = Point {
+                x: position.x,
+                y: position.y,
+            };
+
+            self.deferred_event(move |_, e| e.position_changed(position));
         }
     }
 
@@ -482,11 +488,11 @@ impl WindowImpl {
 
     unsafe extern "C" fn window_did_change_occlusion_state(&self, _: Sel, _: &NSNotification) {
         if let Some(window) = self.view.window() {
-            let occluded = !window
+            let visible = window
                 .occlusionState()
                 .contains(NSWindowOcclusionState::Visible);
 
-            self.send_event_defer(Event::WindowOccluded { occluded });
+            self.deferred_event(move |_, e| e.visible_changed(visible));
         }
     }
 
@@ -496,19 +502,17 @@ impl WindowImpl {
         _notif: &NSNotification,
     ) {
         let logical = self.view.frame();
-        if let Some(gl) = &self.gl_context {
+        if let Ok(gl) = &self.gl_context {
             gl.resize(logical.size.width, logical.size.height);
         }
 
         let backing = self.view.convertRectToBacking(logical);
-        self.current_size.replace(Size {
+        self.last_window_size.replace(Size {
             width: backing.size.width as u32,
             height: backing.size.height as u32,
         });
 
-        self.send_event_defer(Event::WindowResize {
-            size: self.current_size.get(),
-        });
+        self.deferred_event(|this, e| e.size_changed(this.last_window_size.get()));
     }
 
     unsafe extern "C" fn accepts_first_mouse(&self, _: Sel, _event: &NSEvent) -> Bool {
@@ -520,12 +524,12 @@ impl WindowImpl {
     }
 
     unsafe extern "C" fn become_first_responder(&self, _: Sel) -> Bool {
-        self.send_event_defer(Event::WindowFocus { focus: true });
+        self.deferred_event(|_, e| e.focus_changed(true));
         Bool::YES
     }
 
     unsafe extern "C" fn resign_first_responder(&self, _: Sel) -> Bool {
-        self.send_event_defer(Event::WindowFocus { focus: false });
+        self.deferred_event(|_, e| e.focus_changed(false));
         Bool::YES
     }
 
@@ -534,50 +538,43 @@ impl WindowImpl {
     }
 
     unsafe extern "C" fn flags_changed(&self, _: Sel, event: &NSEvent) {
-        self.send_event_defer(Event::KeyModifiers {
-            modifiers: flags_to_modifiers((*event).modifierFlags()),
-        });
+        let modifiers = flags_to_modifiers((*event).modifierFlags());
+        self.deferred_event(move |_, e| e.key_modifiers(modifiers));
     }
 
     unsafe extern "C" fn mouse_moved(&self, _: Sel, event: &NSEvent) {
-        self.send_event_mouse_move(event.locationInWindow());
+        let point = self.convert_point_to_picoview(event.locationInWindow());
+        self.deferred_event(move |_, e| e.mouse_move(point));
     }
 
-    unsafe extern "C" fn mouse_down(&self, _: Sel, event: &NSEvent) {
-        if let Some(window) = self.view.window() {
+    unsafe extern "C" fn mouse_button(&self, _: Sel, event: &NSEvent) {
+        let is_down = event.r#type() == NSEventType::LeftMouseDown
+            || event.r#type() == NSEventType::RightMouseDown
+            || event.r#type() == NSEventType::OtherMouseDown;
+
+        let button = match event.buttonNumber() {
+            0 => MouseButton::Left,
+            1 => MouseButton::Right,
+            2 => MouseButton::Middle,
+            3 => MouseButton::Back,
+            4 => MouseButton::Forward,
+            _ => return,
+        };
+
+        if is_down && let Some(window) = self.view.window() {
             window.makeFirstResponder(Some(&self.view));
         }
 
-        self.send_event_mouse_move(event.locationInWindow());
-        self.send_event_defer(Event::MouseDown {
-            button: match (*event).buttonNumber() {
-                0 => MouseButton::Left,
-                1 => MouseButton::Right,
-                2 => MouseButton::Middle,
-                3 => MouseButton::Back,
-                4 => MouseButton::Forward,
-                _ => return,
-            },
+        let point = self.convert_point_to_picoview(event.locationInWindow());
+        self.deferred_event(move |_, e| {
+            e.mouse_move(point);
+            e.mouse_press(button, is_down);
         });
     }
 
-    unsafe extern "C" fn mouse_up(&self, _: Sel, event: &NSEvent) {
-        self.send_event_mouse_move(event.locationInWindow());
-        self.send_event_defer(Event::MouseUp {
-            button: match (*event).buttonNumber() {
-                0 => MouseButton::Left,
-                1 => MouseButton::Right,
-                2 => MouseButton::Middle,
-                3 => MouseButton::Back,
-                4 => MouseButton::Forward,
-                _ => return,
-            },
-        });
-    }
-
-    unsafe extern "C" fn mouse_exited(&self, _: Sel, event: &NSEvent) {
-        self.send_event_mouse_move(event.locationInWindow());
-        self.send_event_defer(Event::MouseLeave);
+    unsafe extern "C" fn mouse_exited(&self, _: Sel, _event: &NSEvent) {
+        self.deferred_event(|_, e| e.mouse_leave());
+        self.set_cursor_icon(MouseCursor::Default);
     }
 
     unsafe extern "C" fn scroll_wheel(&self, _: Sel, event: &NSEvent) {
@@ -589,34 +586,37 @@ impl WindowImpl {
             y /= 10.0;
         }
 
-        self.send_event_mouse_move(event.locationInWindow());
-        self.send_event_defer(Event::MouseScroll { x, y });
+        let point = self.convert_point_to_picoview(event.locationInWindow());
+        self.deferred_event(move |_, e| {
+            e.mouse_move(point);
+            e.mouse_scroll(x, y);
+        });
     }
 
     unsafe extern "C" fn magnify_with_event(&self, _: Sel, event: &NSEvent) {
-        self.send_event_defer(Event::GestureZoom {
-            scale: event.magnification(),
-        });
+        let delta = event.magnification();
+        self.deferred_event(move |_, e| e.gesture_zoom(delta));
     }
 
     unsafe extern "C" fn rotate_with_event(&self, _: Sel, event: &NSEvent) {
-        self.send_event_defer(Event::GestureRotate {
-            angle: event.rotation() as f64,
-        });
+        let delta = event.rotation() as f64;
+        self.deferred_event(move |_, e| e.gesture_rotate(delta));
     }
 
     unsafe extern "C" fn draw_rect(&self, _: Sel, rect: NSRect) {
         let frame = self.view.convertRectToBacking(rect);
-        self.send_event_defer(Event::WindowDamage {
-            x: frame.origin.x.floor() as u32,
-            y: frame.origin.y.floor() as u32,
-            w: frame.size.width.ceil() as u32,
-            h: frame.size.height.ceil() as u32,
-        });
+        let frame = Rect::xywh(
+            frame.origin.x.floor() as i32,
+            frame.origin.y.floor() as i32,
+            frame.size.width.ceil() as u32,
+            frame.size.height.ceil() as u32,
+        );
+
+        self.deferred_event(move |_, e| e.damage(frame));
     }
 
     unsafe extern "C" fn wakeup(&self, _: Sel) {
-        self.send_event_defer(Event::Wakeup);
+        self.deferred_event(|_, e| e.wakeup());
     }
 
     // NSDraggingDestination
@@ -631,8 +631,11 @@ impl WindowImpl {
     ) -> NSDragOperation {
         let data = get_pasteboard(&info.draggingPasteboard());
         let point = self.convert_point_to_picoview(info.draggingLocation());
-        self.send_event_defer(Event::DragEnter { data, point });
-        NSDragOperation::Generic
+        let effect = self
+            .non_reentrant_event(|e| e.drag_enter(data, point))
+            .unwrap_or(DropEffect::Reject);
+
+        encode_drop_effect(effect)
     }
 
     unsafe extern "C" fn dragging_updated(
@@ -641,8 +644,11 @@ impl WindowImpl {
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> NSDragOperation {
         let point = self.convert_point_to_picoview(info.draggingLocation());
-        self.send_event_defer(Event::DragMove { point });
-        NSDragOperation::Generic
+        let effect = self
+            .non_reentrant_event(|e| e.drag_move(point))
+            .unwrap_or(DropEffect::Reject);
+
+        encode_drop_effect(effect)
     }
 
     unsafe extern "C" fn dragging_exited(
@@ -650,7 +656,7 @@ impl WindowImpl {
         _: Sel,
         _sender: &ProtocolObject<dyn NSDraggingInfo>,
     ) {
-        self.send_event_defer(Event::DragLeave);
+        self.deferred_event(|_, e| e.drag_leave());
     }
 
     unsafe extern "C" fn prepare_for_drag_operation(
@@ -667,9 +673,21 @@ impl WindowImpl {
         info: &ProtocolObject<dyn NSDraggingInfo>,
     ) -> Bool {
         let point = self.convert_point_to_picoview(info.draggingLocation());
-        self.send_event_defer(Event::DragMove { point });
-        self.send_event_defer(Event::DragAccept);
-        Bool::YES
+        let accept = self
+            .non_reentrant_event(|e| {
+                if e.drag_move(point) == DropEffect::Reject {
+                    return false;
+                }
+
+                if e.drag_accept() == DropEffect::Reject {
+                    return false;
+                }
+
+                true
+            })
+            .unwrap_or(false);
+
+        accept.into()
     }
 
     fn register_class() -> Result<&'static AnyClass, WindowError> {
@@ -743,27 +761,27 @@ impl WindowImpl {
             );
             builder.add_method(
                 sel!(mouseDown:),
-                Self::mouse_down as unsafe extern "C" fn(_, _, _) -> _,
+                Self::mouse_button as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
                 sel!(mouseUp:),
-                Self::mouse_up as unsafe extern "C" fn(_, _, _) -> _,
+                Self::mouse_button as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
                 sel!(rightMouseDown:),
-                Self::mouse_down as unsafe extern "C" fn(_, _, _) -> _,
+                Self::mouse_button as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
                 sel!(rightMouseUp:),
-                Self::mouse_up as unsafe extern "C" fn(_, _, _) -> _,
+                Self::mouse_button as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
                 sel!(otherMouseDown:),
-                Self::mouse_down as unsafe extern "C" fn(_, _, _) -> _,
+                Self::mouse_button as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
                 sel!(otherMouseUp:),
-                Self::mouse_up as unsafe extern "C" fn(_, _, _) -> _,
+                Self::mouse_button as unsafe extern "C" fn(_, _, _) -> _,
             );
             builder.add_method(
                 sel!(mouseExited:),
@@ -894,10 +912,11 @@ impl PlatformWindow for WindowImpl {
         WindowWaker(self.waker.clone())
     }
 
-    fn opengl(&self) -> Option<&dyn PlatformOpenGl> {
-        self.gl_context
-            .as_ref()
-            .map(|ctx| ctx as &dyn PlatformOpenGl)
+    fn opengl(&self) -> Result<&dyn PlatformOpenGl, OpenGlError> {
+        match &self.gl_context {
+            Ok(gl) => Ok(gl),
+            Err(err) => Err(err.clone()),
+        }
     }
 
     fn set_title(&self, title: &str) {
@@ -906,20 +925,32 @@ impl PlatformWindow for WindowImpl {
         }
     }
 
+    fn set_decorations(&self, decorations: bool) {
+        if let Some(window) = self.own_window() {
+            let mut style = window.styleMask();
+
+            if decorations {
+                style.insert(STYLE_MASK_NORMAL);
+            } else {
+                style.remove(STYLE_MASK_NORMAL);
+            }
+
+            window.setStyleMask(style);
+        }
+    }
+
     fn set_cursor_icon(&self, cursor: MouseCursor) {
-        let old_cursor = self.current_cursor.replace(cursor);
+        let old_cursor = self.last_cursor_icon.replace(cursor);
         if old_cursor != cursor {
-            match get_cursor(cursor) {
-                Some(cursor) => {
-                    if old_cursor == MouseCursor::Hidden {
-                        NSCursor::unhide();
-                    }
+            if old_cursor == MouseCursor::Hidden {
+                NSCursor::unhide();
+            }
 
-                    cursor.set();
-                }
-
-                None => NSCursor::hide(),
-            };
+            if cursor == MouseCursor::Hidden {
+                NSCursor::hide();
+            } else {
+                best_cursor_icon_for(cursor).set();
+            }
         }
     }
 
@@ -936,7 +967,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_size(&self, size: Size) {
-        if self.current_size.replace(size) == size {
+        if self.last_window_size.replace(size) == size {
             return;
         }
 
@@ -945,7 +976,7 @@ impl PlatformWindow for WindowImpl {
             height: size.height as f64,
         });
 
-        if let Some(gl) = &self.gl_context {
+        if let Ok(gl) = &self.gl_context {
             gl.resize(size.width, size.height);
         }
 
@@ -1000,7 +1031,7 @@ impl PlatformWindow for WindowImpl {
         }
     }
 
-    fn get_scale(&self) -> f64 {
+    fn scale(&self) -> f64 {
         self.view
             .window()
             .map(|w| w.backingScaleFactor())
