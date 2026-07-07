@@ -67,15 +67,15 @@ pub struct WindowImpl {
     /// Last mouse cursor position provided by the server, used to check for
     /// changes.
     last_cursor_position: Cell<Option<Point>>,
-    /// Last window position provided by our window or the server, used to check
+    /// Last window position provided by the server, used to check
     /// for changes and for restoring the window state on a call to
     /// [`PlatformWindow::set_visible`].
     last_window_position: Cell<Option<Point>>,
-    /// Last window size provided by our window or the server, used to check for
+    /// Last window size provided by the server, used to check for
     /// changes and for restoring the window state on a call to
     /// [`PlatformWindow::set_visible`].
     last_window_size: Cell<Option<Size>>,
-    /// Last window visibility state provided by our window, used to check for
+    /// Last window visibility state provided by the server, used to check for
     /// changes.
     last_window_visible: Cell<bool>,
     /// Last window focus state provided by the server, used to check for
@@ -201,7 +201,6 @@ impl WindowImpl {
                     event_mask: ButtonPressMask
                         | ButtonReleaseMask
                         | StructureNotifyMask
-                        | PropertyChangeMask
                         | KeyPressMask
                         | KeyReleaseMask
                         | LeaveWindowMask
@@ -623,6 +622,25 @@ impl WindowImpl {
                     }
                 }
 
+                DestroyNotify => {
+                    self.is_closing.set(true);
+                    self.is_destroyed.set(true);
+                }
+
+                ReparentNotify => {
+                    let event = event.reparent;
+                    self.window_parent.set(event.parent);
+                }
+
+                MapNotify if !self.last_window_visible.replace(true) => {
+                    self.event(|e| e.visibility_changed(WindowVisibility::Normal));
+                }
+
+                UnmapNotify if self.last_window_visible.replace(false) => {
+                    // TODO: add minimize check
+                    self.event(|e| e.visibility_changed(WindowVisibility::Hidden));
+                }
+
                 ConfigureNotify => {
                     let event = event.configure;
                     let size = Size {
@@ -754,16 +772,6 @@ impl WindowImpl {
                     if self.last_window_focused.replace(focus) != focus {
                         self.event(|e| e.focus_changed(focus));
                     }
-                }
-
-                DestroyNotify => {
-                    self.is_closing.set(true);
-                    self.is_destroyed.set(true);
-                }
-
-                ReparentNotify => {
-                    let event = event.reparent;
-                    self.window_parent.set(event.parent);
                 }
 
                 Expose => {
@@ -937,6 +945,14 @@ impl Drop for WindowImpl {
 }
 
 impl PlatformWindow for WindowImpl {
+    fn window_handle(&self) -> rwh_06::RawWindowHandle {
+        rwh_06::RawWindowHandle::Xlib(rwh_06::XlibWindowHandle::new(self.window_id))
+    }
+
+    fn display_handle(&self) -> rwh_06::RawDisplayHandle {
+        rwh_06::RawDisplayHandle::Xlib(self.connection.display_handle())
+    }
+
     fn close(&self) {
         self.is_closing.set(true);
     }
@@ -954,14 +970,6 @@ impl PlatformWindow for WindowImpl {
 
     fn scale(&self) -> f64 {
         self.dpi_scale
-    }
-
-    fn window_handle(&self) -> rwh_06::RawWindowHandle {
-        rwh_06::RawWindowHandle::Xlib(rwh_06::XlibWindowHandle::new(self.window_id))
-    }
-
-    fn display_handle(&self) -> rwh_06::RawDisplayHandle {
-        rwh_06::RawDisplayHandle::Xlib(self.connection.display_handle())
     }
 
     fn set_title(&self, title: &str) {
@@ -1080,7 +1088,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_size(&self, size: Size) {
-        if self.last_window_size.replace(Some(size)) == Some(size) {
+        if self.last_window_size.get() == Some(size) {
             return;
         }
 
@@ -1140,7 +1148,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_position(&self, point: Point) {
-        if self.last_window_position.replace(Some(point)) == Some(point) {
+        if self.last_window_position.get() == Some(point) {
             return;
         }
 
@@ -1159,7 +1167,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_visible(&self, visible: bool) {
-        if self.last_window_visible.replace(visible) == visible {
+        if self.last_window_visible.get() == visible {
             return;
         }
 

@@ -105,6 +105,21 @@ impl From<(f64, f64)> for Point {
     }
 }
 
+/// The visibility state of a window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WindowVisibility {
+    /// The window is in its normal state (not minimized or maximized)
+    Normal,
+    /// The window is hidden (unmapped)
+    Hidden,
+    /// The window is minimized (iconified)
+    Minimized,
+    /// The window is occluded (hidden under another window or not visible on
+    /// the screen)
+    Occluded,
+}
+
 /// A mouse button.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]

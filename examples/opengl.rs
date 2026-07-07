@@ -1,6 +1,4 @@
-use picoview::{
-    GlConfig, GlContext, GlVersion, Point, Rect, Size, Window, WindowBuilder, WindowHandler,
-};
+use picoview::*;
 use std::mem::transmute;
 
 fn main() {
@@ -124,6 +122,10 @@ impl<'a> WindowHandler for Handler<'a> {
         println!("position_changed({position:?})");
     }
 
+    fn visibility_changed(&mut self, state: WindowVisibility) {
+        println!("visibility_changed({state:?})");
+    }
+
     fn size_changed(&mut self, size: Size) {
         println!("size_changed({size:?})");
         self.size = size;
@@ -138,8 +140,12 @@ impl<'a> WindowHandler for Handler<'a> {
         println!("mouse_leave()");
     }
 
-    fn mouse_press(&mut self, button: picoview::MouseButton, pressed: bool) {
+    fn mouse_press(&mut self, button: MouseButton, pressed: bool) {
         println!("mouse_press({button:?}, {pressed})");
+
+        if button == MouseButton::Right && pressed {
+            self.window.set_size((500, 500));
+        }
     }
 
     fn mouse_scroll(&mut self, x: f64, y: f64) {
@@ -154,31 +160,31 @@ impl<'a> WindowHandler for Handler<'a> {
         println!("gesture_zoom({scale})");
     }
 
-    fn key_modifiers(&mut self, modifiers: picoview::Modifiers) {
+    fn key_modifiers(&mut self, modifiers: Modifiers) {
         println!("key_modifiers({modifiers:?})");
     }
 
-    fn key_press(&mut self, key: picoview::Key, pressed: bool) -> bool {
+    fn key_press(&mut self, key: Key, pressed: bool) -> bool {
         println!("key_press({key:?}, {pressed})");
         false
     }
 
-    fn drag_enter(&mut self, data: picoview::Exchange, point: Point) -> picoview::DropEffect {
+    fn drag_enter(&mut self, data: Exchange, point: Point) -> DropEffect {
         println!("drag_enter({data:?}, {point:?})");
-        picoview::DropEffect::Reject
+        DropEffect::Reject
     }
 
-    fn drag_move(&mut self, point: Point) -> picoview::DropEffect {
+    fn drag_move(&mut self, point: Point) -> DropEffect {
         println!("drag_move({point:?})");
-        picoview::DropEffect::Reject
+        DropEffect::Reject
     }
 
     fn drag_leave(&mut self) {
         println!("drag_leave()");
     }
 
-    fn drag_accept(&mut self) -> picoview::DropEffect {
+    fn drag_accept(&mut self) -> DropEffect {
         println!("drag_accept()");
-        picoview::DropEffect::Reject
+        DropEffect::Reject
     }
 }

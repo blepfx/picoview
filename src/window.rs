@@ -58,12 +58,9 @@ pub trait WindowHandler {
         let _ = position;
     }
 
-    /// The visibility of a window has changed.
-    ///
-    /// Currently only implemented on MacOS, where it is triggered by the window
-    /// being occluded or unoccluded.
-    fn visible_changed(&mut self, visible: bool) {
-        let _ = visible;
+    /// The visibility status of a window has changed.
+    fn visibility_changed(&mut self, state: WindowVisibility) {
+        let _ = state;
     }
 
     /// The mouse cursor left the window.
@@ -104,7 +101,7 @@ pub trait WindowHandler {
         let _ = scale;
     }
 
-    /// The state of the modifier keys (Shift, Ctrl, Alt, etc.) changed.
+    /// The state of the modifier keys (Shift, Ctrl, Alt, etc.) has changed.
     fn key_modifiers(&mut self, modifiers: Modifiers) {
         let _ = modifiers;
     }
@@ -261,23 +258,28 @@ impl<'a> Window<'a> {
     ///
     /// Position is in physical pixels, with (0, 0) being the top-left corner of
     /// the client area.
+    ///
+    /// Will result in a [`WindowHandler::mouse_move`] or
+    /// [`WindowHandler::mouse_leave`] event being emitted.
     pub fn set_cursor_position(&self, pos: impl Into<Point>) {
         self.0.set_cursor_position(pos.into());
     }
 
     /// Set the size of the client area in physical pixels.
+    ///
+    /// Will result in a [`WindowHandler::size_changed`] event being emitted.
     pub fn set_size(&self, size: impl Into<Size>) {
         self.0.set_size(size.into());
     }
 
-    /// Sets the minimum size of the window in physical pixels.
+    /// Sets the minimum size of the window's client area in physical pixels.
     ///
     /// Used to restrict the user from resizing the window below a certain size.
     pub fn set_min_size(&self, min: impl Into<Size>) {
         self.0.set_min_size(min.into());
     }
 
-    /// Sets the maximum size of the window in physical pixels.
+    /// Sets the maximum size of the window's client area in physical pixels.
     ///
     /// Used to restrict the user from resizing the window above a certain size.
     pub fn set_max_size(&self, max: impl Into<Size>) {
@@ -299,11 +301,17 @@ impl<'a> Window<'a> {
     /// window (or positioned at (0, 0) if embedded)
     ///
     /// The coordinate system is X+ right, Y+ down
+    ///
+    /// Will result in a [`WindowHandler::position_changed`] event being
+    /// emitted.
     pub fn set_position(&self, pos: impl Into<Point>) {
         self.0.set_position(pos.into());
     }
 
     /// Set whether the window is visible.
+    ///
+    /// Will result in a [`WindowHandler::visibility_changed`] event being
+    /// emitted.
     pub fn set_visible(&self, visible: bool) {
         self.0.set_visible(visible);
     }
