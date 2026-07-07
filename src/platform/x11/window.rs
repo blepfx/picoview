@@ -528,6 +528,12 @@ impl WindowImpl {
                                 if event.delta_angle != 0.0 {
                                     self.event(|e| e.gesture_rotate(event.delta_angle));
                                 }
+
+                                if event.delta_x != 0.0 || event.delta_y != 0.0 {
+                                    self.event(|e| {
+                                        e.mouse_scroll(event.delta_x * 0.05, event.delta_y * 0.05)
+                                    });
+                                }
                             }
 
                             _ => {}
@@ -1199,9 +1205,11 @@ impl PlatformWindow for WindowImpl {
                     );
                 }
 
-                XMapWindow(self.connection.display(), self.window_id);
+                XMapRaised(self.connection.display(), self.window_id);
+                XSync(self.connection.display(), 0);
             } else {
                 XUnmapWindow(self.connection.display(), self.window_id);
+                XSync(self.connection.display(), 0);
             }
         }
     }
