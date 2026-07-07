@@ -69,7 +69,7 @@ pub fn best_cursor_icon_for(cursor: MouseCursor) -> Retained<NSCursor> {
 pub fn random_id() -> u32 {
     static STATE: AtomicU32 = AtomicU32::new(1);
     STATE
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |r| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |r| {
             let time = SystemTime::now()
                 .duration_since(SystemTime::now())
                 .unwrap_or_default()

@@ -144,7 +144,9 @@ impl<'a> WindowHandler for Handler<'a> {
         println!("mouse_press({button:?}, {pressed})");
 
         if button == MouseButton::Right && pressed {
+            self.window.set_visible(false);
             self.window.set_size((500, 500));
+            self.window.set_visible(true);
         }
     }
 

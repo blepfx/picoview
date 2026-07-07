@@ -31,7 +31,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::{CString, c_void};
 use std::ops::Deref;
-use std::ptr::{NonNull, null_mut};
+use std::ptr::{NonNull, null, null_mut};
 use std::sync::Arc;
 
 const STYLE_MASK_NORMAL: NSWindowStyleMask = NSWindowStyleMask::Titled
@@ -58,6 +58,7 @@ pub struct WindowImplInner {
 
     last_cursor_icon: Cell<MouseCursor>,
     last_window_size: Cell<Size>,
+    last_view_hidden: Cell<bool>,
 
     is_closed: Cell<bool>,
     is_embedded: bool,
@@ -285,6 +286,7 @@ impl WindowImpl {
 
             last_cursor_icon: Cell::new(MouseCursor::Default),
             last_window_size: Cell::new(Size::default()),
+            last_view_hidden: Cell::new(false),
 
             is_closed: Cell::new(false),
             is_embedded,
@@ -457,7 +459,7 @@ impl WindowImpl {
 
     unsafe extern "C" fn view_did_change_backing_properties(&self, _: Sel, _: Option<&AnyObject>) {
         // keep physical size
-        self.set_size(self.last_window_size.replace(Size::default()));
+        self.set_size(self.last_window_size.get());
 
         // let the handler handle it now
         self.deferred_event(|this, e| e.scale_changed(this.scale()));
@@ -486,13 +488,37 @@ impl WindowImpl {
         }
     }
 
-    unsafe extern "C" fn window_did_change_occlusion_state(&self, _: Sel, _: &NSNotification) {
-        if let Some(window) = self.view.window() {
-            let visible = window
-                .occlusionState()
-                .contains(NSWindowOcclusionState::Visible);
+    unsafe extern "C" fn window_did_change_occlusion_state(&self, sel: Sel, _: &NSNotification) {
+        if self.last_view_hidden.get() {
+            return;
+        }
 
-            self.deferred_event(move |_, e| e.visible_changed(visible));
+        unsafe {
+            self.view_did_unhide(sel);
+        }
+    }
+
+    unsafe extern "C" fn view_did_hide(&self, _: Sel) {
+        self.last_view_hidden.set(true);
+        self.deferred_event(|_, e| e.visibility_changed(WindowVisibility::Hidden));
+    }
+
+    unsafe extern "C" fn view_did_unhide(&self, _: Sel) {
+        self.last_view_hidden.set(false);
+
+        if let Some(window) = self.view.window() {
+            let visibility = if window
+                .occlusionState()
+                .contains(NSWindowOcclusionState::Visible)
+            {
+                WindowVisibility::Normal
+            } else if window.isMiniaturized() {
+                WindowVisibility::Minimized
+            } else {
+                WindowVisibility::Occluded
+            };
+
+            self.deferred_event(move |_, e| e.visibility_changed(visibility));
         }
     }
 
@@ -502,15 +528,19 @@ impl WindowImpl {
         _notif: &NSNotification,
     ) {
         let logical = self.view.frame();
+        let backing = self.view.convertRectToBacking(logical);
+        let size = Size {
+            width: backing.size.width as u32,
+            height: backing.size.height as u32,
+        };
+
+        if self.last_window_size.replace(size) == size {
+            return;
+        }
+
         if let Ok(gl) = &self.gl_context {
             gl.resize(logical.size.width, logical.size.height);
         }
-
-        let backing = self.view.convertRectToBacking(logical);
-        self.last_window_size.replace(Size {
-            width: backing.size.width as u32,
-            height: backing.size.height as u32,
-        });
 
         self.deferred_event(|this, e| e.size_changed(this.last_window_size.get()));
     }
@@ -603,16 +633,30 @@ impl WindowImpl {
         self.deferred_event(move |_, e| e.gesture_rotate(delta));
     }
 
-    unsafe extern "C" fn draw_rect(&self, _: Sel, rect: NSRect) {
-        let frame = self.view.convertRectToBacking(rect);
-        let frame = Rect::xywh(
-            frame.origin.x.floor() as i32,
-            frame.origin.y.floor() as i32,
-            frame.size.width.ceil() as u32,
-            frame.size.height.ceil() as u32,
-        );
+    unsafe extern "C" fn draw_rect(&self, _: Sel, _: NSRect) {
+        let mut buffer = [null(); 64];
+        let mut count = 0;
 
-        self.deferred_event(move |_, e| e.damage(frame));
+        unsafe {
+            self.view
+                .getRectsBeingDrawn_count(buffer.as_mut_ptr(), &mut count);
+
+            for rect in buffer.into_iter().take(count as usize) {
+                if rect.is_null() {
+                    continue;
+                }
+
+                let rect = *rect;
+                let rect = Rect::xywh(
+                    rect.origin.x.floor() as i32,
+                    rect.origin.y.floor() as i32,
+                    rect.size.width.ceil() as u32,
+                    rect.size.height.ceil() as u32,
+                );
+
+                self.deferred_event(move |_, e| e.damage(rect));
+            }
+        }
     }
 
     unsafe extern "C" fn wakeup(&self, _: Sel) {
@@ -804,13 +848,26 @@ impl WindowImpl {
                 Self::draw_rect as unsafe extern "C" fn(_, _, _) -> _,
             );
 
+            builder.add_method(
+                sel!(viewFrameDidChange:),
+                Self::view_frame_did_change_notification as unsafe extern "C" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(viewDidHide),
+                Self::view_did_hide as unsafe extern "C" fn(_, _) -> _,
+            );
+            builder.add_method(
+                sel!(viewDidUnhide),
+                Self::view_did_unhide as unsafe extern "C" fn(_, _) -> _,
+            );
+
             // custom
             builder.add_method(
                 sel!(picoview_wakeup),
                 Self::wakeup as unsafe extern "C" fn(_, _) -> _,
             );
 
-            // NSWindowDelegate methods &  NSNotification handlers
+            // NSWindowDelegate methods & NSNotification handlers
             builder.add_method(
                 sel!(windowShouldClose:),
                 Self::window_should_close as unsafe extern "C" fn(_, _, _) -> _,
@@ -830,10 +887,6 @@ impl WindowImpl {
             builder.add_method(
                 sel!(windowDidChangeOcclusionState:),
                 Self::window_did_change_occlusion_state as unsafe extern "C" fn(_, _, _) -> _,
-            );
-            builder.add_method(
-                sel!(viewFrameDidChange:),
-                Self::view_frame_did_change_notification as unsafe extern "C" fn(_, _, _) -> _,
             );
 
             // NSDraggingDestination
@@ -967,7 +1020,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_size(&self, size: Size) {
-        if self.last_window_size.replace(size) == size {
+        if self.last_window_size.get() == size {
             return;
         }
 
@@ -1026,9 +1079,9 @@ impl PlatformWindow for WindowImpl {
             } else {
                 window.orderOut(None);
             }
-        } else {
-            self.view.setHidden(!visible);
         }
+
+        self.view.setHidden(!visible);
     }
 
     fn scale(&self) -> f64 {
