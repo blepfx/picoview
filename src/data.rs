@@ -66,7 +66,7 @@ impl Size {
 impl Rect {
     /// Create a new [`Rect`] from the coordinates of its top-left corner and
     /// its size.
-    pub fn xywh(x: i32, y: i32, width: u32, height: u32) -> Self {
+    pub fn from_xywh(x: i32, y: i32, width: u32, height: u32) -> Self {
         Self {
             top: y,
             left: x,
@@ -75,11 +75,39 @@ impl Rect {
         }
     }
 
+    /// Create a new [`Rect`] with the origin at (0, 0) and the given size.
+    pub fn from_size(size: Size) -> Self {
+        Self {
+            top: 0,
+            left: 0,
+            bottom: size.height as i32,
+            right: size.width as i32,
+        }
+    }
+
     /// Size of the rectangle.
     pub fn size(&self) -> Size {
         Size {
             width: (self.right - self.left).try_into().unwrap_or(0),
             height: (self.bottom - self.top).try_into().unwrap_or(0),
+        }
+    }
+
+    /// Origin of the rectangle (top-left corner).
+    pub fn origin(&self) -> Point {
+        Point {
+            x: self.left as f64,
+            y: self.top as f64,
+        }
+    }
+
+    /// Offset the rectangle by the given amounts in the x and y directions.
+    pub fn offset(&self, dx: i32, dy: i32) -> Self {
+        Self {
+            top: self.top.saturating_add(dy),
+            left: self.left.saturating_add(dx),
+            bottom: self.bottom.saturating_add(dy),
+            right: self.right.saturating_add(dx),
         }
     }
 }

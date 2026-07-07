@@ -95,10 +95,18 @@ pub struct WindowImpl {
 
     /// The last size of the window, used to detect size changes
     current_window_size: Cell<Size>,
+    /// The last window position, used to detect position changes
+    current_window_position: Cell<Point>,
+    /// The current window style, used for window client area calculations.
+    ///
+    /// Stored as (DW_STYLE, DW_EXSTYLE)
+    current_window_style: Cell<(u32, u32)>,
+    /// The last window visibility state.
+    current_window_visibility: Cell<WindowVisibility>,
     /// The current maximum size of the window, used to enforce size constraints
-    current_max_window_size: Cell<POINT>,
+    current_max_window_size: Cell<Size>,
     /// The current minimum size of the window, used to enforce size constraints
-    current_min_window_size: Cell<POINT>,
+    current_min_window_size: Cell<Size>,
     /// The current focus state of the window, used to detect focus changes
     current_window_focused: Cell<bool>,
     /// The current modifiers state of the window, used to detect modifier
@@ -237,7 +245,7 @@ impl WindowImpl {
 
             // construct our window data, here we store all our state and the event handler
             // to be called later
-            let window = Box::new(Self {
+            let window = Rc::new(Self {
                 waker: Arc::new(WindowWakerImpl {
                     window_hwnd: hwnd,
                     window_open: AtomicBool::new(true),
@@ -252,11 +260,11 @@ impl WindowImpl {
                 current_window_focused: Cell::new(false),
 
                 current_window_size: Cell::new(Size::default()),
-                current_min_window_size: Cell::new(POINT { x: 0, y: 0 }),
-                current_max_window_size: Cell::new(POINT {
-                    x: i32::MAX,
-                    y: i32::MAX,
-                }),
+                current_window_position: Cell::new(Point::default()),
+                current_window_style: Cell::new((dwstyle, 0)),
+                current_window_visibility: Cell::new(WindowVisibility::Normal),
+                current_min_window_size: Cell::new(Size::MIN),
+                current_max_window_size: Cell::new(Size::MAX),
 
                 window_class,
                 window_hwnd: hwnd,
@@ -274,10 +282,13 @@ impl WindowImpl {
                 vsync_thread: VSyncThread::new(hwnd),
             });
 
+            // store our window data as the userdata for later retrieval
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(window.clone()) as _);
+
             // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so
             // because:
-            //  - because our window instance is boxed, it has a stable address for the
-            //    whole lifetime of the window
+            //  - because our window instance is rc'd, it has a stable address for the whole
+            //    lifetime of the window
             //  - we manually dispose of our handler before WindowImpl gets dropped (see
             //    drop impl)
             //  - we promise to not move WindowImpl (and by extension the handler) to a
@@ -290,12 +301,8 @@ impl WindowImpl {
 
             // start accepting events
             window.event_handler.replace(Some(handler));
-
-            // get our waker
-            let waker = window.waker();
-
-            // store our window data as the userdata for later retrieval
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(window) as _);
+            // pull any events that were queued during initialization
+            window.deferred_event(|_, _| {});
 
             // restore previous dpi awareness, has to be done here because the event handler
             // may call set_size and friends, and they have to run in dpi-aware mode
@@ -312,7 +319,7 @@ impl WindowImpl {
                 }
             }
 
-            Ok(waker)
+            Ok(window.waker())
         }
     }
 
@@ -320,7 +327,7 @@ impl WindowImpl {
     ///
     /// Panics if [`Self::non_reentrant_event`] is called inside of another
     /// [`Self::non_reentrant_event`]. To safely post a task, use
-    /// [`Self::post_deferred`].
+    /// [`Self::deferred_event`].
     fn non_reentrant_event<R>(&self, call: impl FnOnce(&mut dyn WindowHandler) -> R) -> Option<R> {
         let mut handler = self
             .event_handler
@@ -357,10 +364,42 @@ impl WindowImpl {
     /// For that reason it cannot return a value, and the closure must be
     /// `'static`.
     fn deferred_event(&self, task: impl FnOnce(&Self, &mut dyn WindowHandler) + 'static) {
-        if self.event_handler.try_borrow_mut().is_ok() {
+        if self
+            .event_handler
+            .try_borrow_mut()
+            .is_ok_and(|x| x.is_some())
+        {
             self.non_reentrant_event(|handler| task(self, handler));
         } else {
             self.event_deferred.borrow_mut().push_back(Box::new(task));
+        }
+    }
+
+    /// Convert a client size to a window size or vice-versa, taking into
+    /// account the current window style and extended style.
+    pub fn convert_client(&self, input: Rect, from_client: bool) -> Rect {
+        unsafe {
+            let mut rect = RECT { ..zeroed() };
+            let (dwstyle, dwexstyle) = self.current_window_style.get();
+            if AdjustWindowRectEx(&mut rect, dwstyle, 0, dwexstyle) == 0 {
+                return input;
+            }
+
+            if from_client {
+                Rect {
+                    top: input.top.saturating_add(rect.top),
+                    left: input.left.saturating_add(rect.left),
+                    bottom: input.bottom.saturating_add(rect.bottom),
+                    right: input.right.saturating_add(rect.right),
+                }
+            } else {
+                Rect {
+                    top: input.top.saturating_sub(rect.top),
+                    left: input.left.saturating_sub(rect.left),
+                    bottom: input.bottom.saturating_sub(rect.bottom),
+                    right: input.right.saturating_sub(rect.right),
+                }
+            }
         }
     }
 }
@@ -435,7 +474,7 @@ impl PlatformWindow for WindowImpl {
                 return;
             }
 
-            let mut style = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
+            let mut style = self.current_window_style.get().0;
             if decorations {
                 style |= WS_OVERLAPPEDWINDOW;
                 style &= !WS_POPUP;
@@ -445,6 +484,8 @@ impl PlatformWindow for WindowImpl {
             }
 
             SetWindowLongW(self.window_hwnd, GWL_STYLE, style as _);
+            self.current_window_style
+                .update(|(_, exstyle)| (style, exstyle));
 
             // force a resize (restyling keeps the outer size while changing the inner size,
             // so we need to resize the window to keep the client size the same)
@@ -473,35 +514,31 @@ impl PlatformWindow for WindowImpl {
     fn set_size(&self, size: Size) {
         unsafe {
             // do nothing if the size doesnt change
-            if self.current_window_size.replace(size) == size {
+            if self.current_window_size.get() == size {
                 return;
             }
 
-            let size = window_size_from_client_size(size, self.window_hwnd);
+            let size = self.convert_client(Rect::from_size(size), true).size();
             SetWindowPos(
                 self.window_hwnd,
                 self.window_hwnd,
                 0,
                 0,
-                size.x,
-                size.y,
+                size.width as i32,
+                size.height as i32,
                 SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE,
             );
         }
     }
 
     fn set_min_size(&self, size: Size) {
-        unsafe {
-            let size = window_size_from_client_size(size, self.window_hwnd);
-            self.current_min_window_size.set(size);
-        }
+        let size = self.convert_client(Rect::from_size(size), true).size();
+        self.current_min_window_size.set(size);
     }
 
     fn set_max_size(&self, size: Size) {
-        unsafe {
-            let size = window_size_from_client_size(size, self.window_hwnd);
-            self.current_max_window_size.set(size);
-        }
+        let size = self.convert_client(Rect::from_size(size), true).size();
+        self.current_max_window_size.set(size);
     }
 
     fn set_position(&self, point: Point) {
@@ -634,49 +671,76 @@ unsafe extern "system" fn wnd_proc(
                 PostQuitMessage(0);
             }
 
-            // drop the box, will call our [`WindowImpl::drop`].
-            drop(Box::from_raw(window_ptr));
+            // drop the rc, will call our [`WindowImpl::drop`].
+            drop(Rc::from_raw(window_ptr));
             return 0;
         }
 
         let window = &*window_ptr;
         match msg {
-            WM_MOVE => {
-                let x = ((lparam >> 0) & 0xFFFF) as i16 as f64;
-                let y = ((lparam >> 16) & 0xFFFF) as i16 as f64;
-
-                window.deferred_event(move |_, e| e.position_changed(Point { x, y }));
-
-                0
-            }
-
             WM_CLOSE => {
                 window.deferred_event(|_, e| e.close_requested());
-                0
-            }
-
-            WM_SHOWWINDOW => {
-                window.vsync_thread.notify_display_change();
-                0
+                return 0;
             }
 
             WM_DISPLAYCHANGE => {
                 window.vsync_thread.notify_display_change();
-                0
             }
 
-            WM_SIZE => {
-                let width = ((lparam >> 0) & 0xFFFF) as u32;
-                let height = ((lparam >> 16) & 0xFFFF) as u32;
+            WM_WINDOWPOSCHANGED => {
+                let info = lparam as *const WINDOWPOS;
 
-                let size = Size { width, height };
-                if window.current_window_size.replace(size) != size {
-                    window.deferred_event(|window, e| {
-                        e.size_changed(window.current_window_size.get())
+                if (*info).flags & SWP_SHOWWINDOW != 0 {
+                    // just in case, we might be on a new display
+                    window.vsync_thread.notify_display_change();
+                }
+
+                let visibility = if (*info).flags & SWP_HIDEWINDOW != 0 {
+                    WindowVisibility::Hidden
+                } else if (*info).flags & SWP_SHOWWINDOW != 0 {
+                    WindowVisibility::Normal
+                } else if (*info).x == -32000 && (*info).y == -32000 {
+                    WindowVisibility::Minimized
+                } else if window.current_window_visibility.get() == WindowVisibility::Hidden {
+                    WindowVisibility::Hidden
+                } else {
+                    WindowVisibility::Normal
+                };
+
+                let rect = window.convert_client(
+                    Rect {
+                        left: (*info).x,
+                        top: (*info).y,
+                        right: (*info).x.saturating_add((*info).cx),
+                        bottom: (*info).y.saturating_add((*info).cy),
+                    },
+                    false,
+                );
+
+                // update window visibility
+                if window.current_window_visibility.replace(visibility) != visibility {
+                    window.deferred_event(move |_, e| {
+                        e.visibility_changed(visibility); // dont wanna miss any updates
                     });
                 }
 
-                0
+                // update window position
+                if visibility != WindowVisibility::Minimized
+                    && window.current_window_position.replace(rect.origin()) != rect.origin()
+                {
+                    window.deferred_event(move |window, e| {
+                        e.position_changed(window.current_window_position.get()) // fine if we get a new value instead
+                    });
+                }
+
+                // update window size
+                if window.current_window_size.replace(rect.size()) != rect.size() {
+                    window.deferred_event(move |window, e| {
+                        e.size_changed(window.current_window_size.get()) // same as with position
+                    });
+                }
+
+                return 0;
             }
 
             WM_DPICHANGED => {
@@ -689,16 +753,23 @@ unsafe extern "system" fn wnd_proc(
                 // on the new dpi, they can do so.
                 window.set_size(window.current_window_size.replace(Size::default()));
                 window.deferred_event(|window, e| e.scale_changed(window.scale()));
-                0
+
+                return 0;
+            }
+
+            WM_STYLECHANGED => {
+                let dwstyle = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+                let dwexstyle = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                window.current_window_style.set((dwstyle, dwexstyle));
             }
 
             WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN | WM_LBUTTONUP
             | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
                 let button = match msg {
-                    WM_LBUTTONUP => Some(MouseButton::Left),
-                    WM_RBUTTONUP => Some(MouseButton::Right),
-                    WM_MBUTTONUP => Some(MouseButton::Middle),
-                    WM_XBUTTONUP => match ((wparam >> 16) & 0xffff) as u16 {
+                    WM_LBUTTONUP | WM_LBUTTONDOWN => Some(MouseButton::Left),
+                    WM_RBUTTONUP | WM_RBUTTONDOWN => Some(MouseButton::Right),
+                    WM_MBUTTONUP | WM_MBUTTONDOWN => Some(MouseButton::Middle),
+                    WM_XBUTTONUP | WM_XBUTTONDOWN => match ((wparam >> 16) & 0xffff) as u16 {
                         XBUTTON1 => Some(MouseButton::Back),
                         XBUTTON2 => Some(MouseButton::Forward),
                         _ => None,
@@ -727,8 +798,6 @@ unsafe extern "system" fn wnd_proc(
                         ReleaseCapture();
                     }
                 }
-
-                0
             }
 
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
@@ -739,11 +808,11 @@ unsafe extern "system" fn wnd_proc(
                 let y = if msg == WM_MOUSEWHEEL { -delta } else { 0.0 };
 
                 window.deferred_event(move |_, e| e.mouse_scroll(x, y));
-
-                0
             }
 
-            WM_MOUSELEAVE => 0,
+            WM_MOUSELEAVE => {
+                window.deferred_event(move |_, e| e.mouse_leave());
+            }
 
             WM_MOUSEMOVE => {
                 let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
@@ -759,50 +828,43 @@ unsafe extern "system" fn wnd_proc(
                 );
 
                 window.deferred_event(move |_, e| e.mouse_move(Point { x, y }));
-                0
             }
 
-            WM_SETCURSOR => {
-                if lparam as u32 & 0xffff == HTCLIENT {
-                    let cursor = window.current_mouse_cursor.get();
+            WM_SETCURSOR if lparam as u32 & 0xffff == HTCLIENT => {
+                let cursor = window.current_mouse_cursor.get();
 
-                    if cursor.is_null() {
-                        ShowCursor(0);
-                    } else {
-                        SetCursor(cursor);
-                        ShowCursor(1);
-                    }
-
-                    1
+                if cursor.is_null() {
+                    ShowCursor(0);
                 } else {
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                    SetCursor(cursor);
+                    ShowCursor(1);
                 }
+
+                return 1;
             }
 
             WM_GETMINMAXINFO => {
                 let info = lparam as *mut MINMAXINFO;
-                let min_size = window.current_min_window_size.get();
-                let max_size = window.current_max_window_size.get();
-                (*info).ptMinTrackSize = min_size;
-                (*info).ptMaxTrackSize = max_size;
-                (*info).ptMaxSize = max_size;
-                0
+                let min = window.current_min_window_size.get();
+                let max = window.current_max_window_size.get();
+                (*info).ptMinTrackSize = POINT {
+                    x: min.width.try_into().unwrap_or(i32::MAX),
+                    y: min.height.try_into().unwrap_or(i32::MAX),
+                };
+                (*info).ptMaxTrackSize = POINT {
+                    x: max.width.try_into().unwrap_or(i32::MAX),
+                    y: max.height.try_into().unwrap_or(i32::MAX),
+                };
+                (*info).ptMaxSize = (*info).ptMaxTrackSize;
+                return 0;
             }
 
-            WM_SETFOCUS => {
-                if !window.current_window_focused.replace(true) {
-                    window.deferred_event(|_, e| e.focus_changed(true));
-                }
-
-                0
+            WM_SETFOCUS if !window.current_window_focused.replace(true) => {
+                window.deferred_event(|_, e| e.focus_changed(true));
             }
 
-            WM_KILLFOCUS => {
-                if window.current_window_focused.replace(false) {
-                    window.deferred_event(|_, e| e.focus_changed(false));
-                }
-
-                0
+            WM_KILLFOCUS if window.current_window_focused.replace(false) => {
+                window.deferred_event(|_, e| e.focus_changed(false));
             }
 
             WM_PAINT => {
@@ -819,7 +881,7 @@ unsafe extern "system" fn wnd_proc(
                     ValidateRgn(hwnd, null_mut());
                 }
 
-                0
+                return 0;
             }
 
             WM_USER_DND_ENTER => {
@@ -838,7 +900,7 @@ unsafe extern "system" fn wnd_proc(
                     .non_reentrant_event(|e| e.drag_enter(data, point))
                     .unwrap_or(DropEffect::Reject);
 
-                encode_dnd_effect(effect) as _
+                return encode_dnd_effect(effect) as _;
             }
 
             WM_USER_DND_HOVER => {
@@ -856,7 +918,7 @@ unsafe extern "system" fn wnd_proc(
                     .non_reentrant_event(|e| e.drag_move(point))
                     .unwrap_or(DropEffect::Reject);
 
-                encode_dnd_effect(effect) as _
+                return encode_dnd_effect(effect) as _;
             }
 
             WM_USER_DND_ACCEPT => {
@@ -864,12 +926,12 @@ unsafe extern "system" fn wnd_proc(
                     .non_reentrant_event(|e| e.drag_accept())
                     .unwrap_or(DropEffect::Reject);
 
-                encode_dnd_effect(effect) as _
+                return encode_dnd_effect(effect) as _;
             }
 
             WM_USER_DND_LEAVE => {
                 window.non_reentrant_event(|e| e.drag_leave());
-                0
+                return 0;
             }
 
             WM_USER_KEY_DOWN | WM_USER_KEY_UP => {
@@ -882,7 +944,7 @@ unsafe extern "system" fn wnd_proc(
                     .non_reentrant_event(|handler| handler.key_press(key, msg == WM_USER_KEY_DOWN))
                     .unwrap_or(false);
 
-                if capture { 1 } else { 0 }
+                return if capture { 1 } else { 0 };
             }
 
             WM_USER_VSYNC => {
@@ -897,20 +959,22 @@ unsafe extern "system" fn wnd_proc(
                     window.vsync_thread.notify_frame_finished();
                 });
 
-                0
+                return 0;
             }
 
             WM_USER_WAKEUP => {
                 window.deferred_event(|_, e| e.wakeup());
-                0
+                return 0;
             }
 
             WM_USER_KILL_WINDOW => {
                 DestroyWindow(hwnd);
-                0
+                return 0;
             }
 
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            _ => {}
         }
+
+        DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 }

@@ -459,7 +459,7 @@ impl WindowImpl {
 
     unsafe extern "C" fn view_did_change_backing_properties(&self, _: Sel, _: Option<&AnyObject>) {
         // keep physical size
-        self.set_size(self.last_window_size.get());
+        self.set_size(self.last_window_size.replace(Size::default()));
 
         // let the handler handle it now
         self.deferred_event(|this, e| e.scale_changed(this.scale()));
