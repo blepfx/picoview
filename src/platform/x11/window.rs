@@ -777,7 +777,7 @@ impl WindowImpl {
                 Expose => {
                     let event = event.expose;
                     self.event(|e| {
-                        e.damage(Rect::xywh(
+                        e.damage(Rect::from_xywh(
                             event.x,
                             event.y,
                             event.width.try_into().unwrap_or(0),

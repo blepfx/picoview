@@ -647,7 +647,7 @@ impl WindowImpl {
                 }
 
                 let rect = *rect;
-                let rect = Rect::xywh(
+                let rect = Rect::from_xywh(
                     rect.origin.x.floor() as i32,
                     rect.origin.y.floor() as i32,
                     rect.size.width.ceil() as u32,
