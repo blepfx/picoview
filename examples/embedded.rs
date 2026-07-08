@@ -57,6 +57,10 @@ impl WindowHandler for Parent<'_> {
         self.window.close();
     }
 
+    fn visibility_changed(&mut self, state: picoview::WindowVisibility) {
+        println!("parent.visibility_changed({:?})", state);
+    }
+
     fn focus_changed(&mut self, focus: bool) {
         println!("parent.focus_changed({focus})");
     }
@@ -83,6 +87,10 @@ impl WindowHandler for Child<'_> {
 
     fn focus_changed(&mut self, focus: bool) {
         println!("{}.focus_changed({focus})", self.name);
+    }
+
+    fn visibility_changed(&mut self, state: picoview::WindowVisibility) {
+        println!("{}.visibility_changed({:?})", self.name, state);
     }
 
     fn mouse_press(&mut self, button: picoview::MouseButton, pressed: bool) {

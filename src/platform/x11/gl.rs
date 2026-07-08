@@ -309,6 +309,12 @@ impl PlatformOpenGl for GlContext {
 
     fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         unsafe {
+            let context = glXGetCurrentContext();
+            if (current && context == self.context) || (!current && context != self.context) {
+                // already in the requested state, we okay!
+                return Ok(());
+            }
+
             let result = {
                 if current {
                     glXMakeCurrent(self.connection.display(), self.window, self.context)

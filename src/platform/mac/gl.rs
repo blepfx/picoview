@@ -134,6 +134,15 @@ impl GlContext {
 
 impl PlatformOpenGl for GlContext {
     fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
+        let context = NSOpenGLContext::currentContext();
+
+        if (context.as_ref() == Some(&self.context) && current)
+            || (context.as_ref() != Some(&self.context) && !current)
+        {
+            // already in the requested state, we okay!
+            return Ok(());
+        }
+
         if current {
             self.context.makeCurrentContext();
         } else {

@@ -100,7 +100,9 @@ impl Default for GlConfig {
 pub struct GlContext<'a>(pub(crate) &'a dyn platform::PlatformOpenGl);
 
 impl<'a> GlContext<'a> {
-    /// Make this OpenGL context current or not current
+    /// Make this OpenGL context current or not current.
+    ///
+    /// Does nothing if the context is already in the requested state.
     pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         self.0.make_current(current)
     }

@@ -11,7 +11,8 @@ use windows_sys::Win32::Graphics::Gdi::{GetDC, HDC, ReleaseDC};
 use windows_sys::Win32::Graphics::OpenGL::{
     ChoosePixelFormat, DescribePixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW,
     PFD_MAIN_PLANE, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR, SetPixelFormat,
-    SwapBuffers, wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent,
+    SwapBuffers, wglCreateContext, wglDeleteContext, wglGetCurrentContext, wglGetProcAddress,
+    wglMakeCurrent,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -118,13 +119,21 @@ impl PlatformOpenGl for GlContext {
     }
 
     fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
-        let result =
-            unsafe { wglMakeCurrent(self.hdc, if current { self.hglrc } else { null_mut() }) != 0 };
+        unsafe {
+            let context = wglGetCurrentContext();
+            if (current && context == self.hglrc) || (!current && context != self.hglrc) {
+                // already in the requested state, we okay!
+                return Ok(());
+            }
 
-        if result {
-            Ok(())
-        } else {
-            Err(MakeCurrentError)
+            let result =
+                wglMakeCurrent(self.hdc, if current { self.hglrc } else { null_mut() }) != 0;
+
+            if result {
+                Ok(())
+            } else {
+                Err(MakeCurrentError)
+            }
         }
     }
 }
