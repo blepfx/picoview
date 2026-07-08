@@ -50,6 +50,8 @@ impl Size {
     };
 
     /// Create a new [`Size`] from logical pixels and a scale factor.
+    #[must_use]
+    #[inline]
     pub fn from_logical(width: f64, height: f64, scale: f64) -> Self {
         Self {
             width: (width * scale).round() as u32,
@@ -58,6 +60,8 @@ impl Size {
     }
 
     /// Convert this [`Size`] to logical pixels using a scale factor.
+    #[must_use]
+    #[inline]
     pub fn to_logical(&self, scale: f64) -> (f64, f64) {
         (self.width as f64 / scale, self.height as f64 / scale)
     }
@@ -66,6 +70,8 @@ impl Size {
 impl Rect {
     /// Create a new [`Rect`] from the coordinates of its top-left corner and
     /// its size.
+    #[must_use]
+    #[inline]
     pub fn from_xywh(x: i32, y: i32, width: u32, height: u32) -> Self {
         Self {
             top: y,
@@ -76,6 +82,8 @@ impl Rect {
     }
 
     /// Create a new [`Rect`] with the origin at (0, 0) and the given size.
+    #[must_use]
+    #[inline]
     pub fn from_size(size: Size) -> Self {
         Self {
             top: 0,
@@ -86,6 +94,8 @@ impl Rect {
     }
 
     /// Size of the rectangle.
+    #[must_use]
+    #[inline]
     pub fn size(&self) -> Size {
         Size {
             width: (self.right - self.left).try_into().unwrap_or(0),
@@ -94,6 +104,8 @@ impl Rect {
     }
 
     /// Origin of the rectangle (top-left corner).
+    #[must_use]
+    #[inline]
     pub fn origin(&self) -> Point {
         Point {
             x: self.left as f64,
@@ -102,6 +114,8 @@ impl Rect {
     }
 
     /// Offset the rectangle by the given amounts in the x and y directions.
+    #[must_use]
+    #[inline]
     pub fn offset(&self, dx: i32, dy: i32) -> Self {
         Self {
             top: self.top.saturating_add(dy),
@@ -113,12 +127,14 @@ impl Rect {
 }
 
 impl From<(u32, u32)> for Size {
+    #[inline]
     fn from((width, height): (u32, u32)) -> Self {
         Self { width, height }
     }
 }
 
 impl From<(u32, u32)> for Point {
+    #[inline]
     fn from((x, y): (u32, u32)) -> Self {
         Self {
             x: x as f64,
@@ -128,6 +144,7 @@ impl From<(u32, u32)> for Point {
 }
 
 impl From<(f64, f64)> for Point {
+    #[inline]
     fn from((x, y): (f64, f64)) -> Self {
         Self { x, y }
     }

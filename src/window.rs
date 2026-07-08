@@ -6,16 +6,16 @@ use std::sync::Arc;
 /// A window handler, the object that processes all incoming events for a single
 /// window.
 pub trait WindowHandler {
-    /// A wakeup event triggered by a call to
-    /// [`WindowWaker::wakeup`]
-    fn wakeup(&mut self) {}
-
     /// Frame event. You should redraw the window in response to this event.
     ///
     /// This event is sent at the refresh rate of the display (typically 60 Hz),
     /// on a best-effort basis (might use an unsynchronized timer depending on
     /// the platform).
     fn frame(&mut self) {}
+
+    /// A wakeup event triggered by a call to
+    /// [`WindowWaker::wakeup`]
+    fn wakeup(&mut self) {}
 
     /// Damage event. Request to redraw the specificed region as soon as
     /// possible.
@@ -201,16 +201,20 @@ pub struct Window<'a>(pub(crate) &'a dyn platform::PlatformWindow);
 impl<'a> Window<'a> {
     /// Get a [`WindowWaker`] that can be used to wake up the current event loop
     /// by calling [`WindowHandler::wakeup`].
+    #[must_use]
+    #[inline]
     pub fn waker(&self) -> WindowWaker {
         self.0.waker()
     }
 
     /// Get the OpenGL context associated with the window, if present.
+    #[inline]
     pub fn opengl(&self) -> Result<GlContext<'a>, OpenGlError> {
         self.0.opengl().map(GlContext)
     }
 
     /// Close the window and exit its event loop.
+    #[inline]
     pub fn close(&self) {
         self.0.close();
     }
@@ -230,11 +234,14 @@ impl<'a> Window<'a> {
     /// experience between different platforms/configurations/applications.
     ///
     /// If changed, a call [`WindowHandler::scale_changed`] will be emitted.
+    #[must_use]
+    #[inline]
     pub fn scale(&self) -> f64 {
         self.0.scale()
     }
 
     /// Set the window title.
+    #[inline]
     pub fn set_title(&self, title: &str) {
         self.0.set_title(title);
     }
@@ -243,6 +250,7 @@ impl<'a> Window<'a> {
     ///
     /// Safe to call every frame, the backend will only update the cursor if it
     /// has changed.
+    #[inline]
     pub fn set_cursor_icon(&self, icon: MouseCursor) {
         self.0.set_cursor_icon(icon);
     }
@@ -250,6 +258,7 @@ impl<'a> Window<'a> {
     /// Set whether the window has decorations (title bar, borders, etc)
     ///
     /// Does nothing when opened with [`WindowBuilder::open_embedded`].
+    #[inline]
     pub fn set_decorations(&self, decorations: bool) {
         self.0.set_decorations(decorations);
     }
@@ -261,6 +270,7 @@ impl<'a> Window<'a> {
     ///
     /// Will result in a [`WindowHandler::mouse_move`] or
     /// [`WindowHandler::mouse_leave`] event being emitted.
+    #[inline]
     pub fn set_cursor_position(&self, pos: impl Into<Point>) {
         self.0.set_cursor_position(pos.into());
     }
@@ -268,6 +278,7 @@ impl<'a> Window<'a> {
     /// Set the size of the client area in physical pixels.
     ///
     /// Will result in a [`WindowHandler::size_changed`] event being emitted.
+    #[inline]
     pub fn set_size(&self, size: impl Into<Size>) {
         self.0.set_size(size.into());
     }
@@ -275,6 +286,7 @@ impl<'a> Window<'a> {
     /// Sets the minimum size of the window's client area in physical pixels.
     ///
     /// Used to restrict the user from resizing the window below a certain size.
+    #[inline]
     pub fn set_min_size(&self, min: impl Into<Size>) {
         self.0.set_min_size(min.into());
     }
@@ -282,6 +294,7 @@ impl<'a> Window<'a> {
     /// Sets the maximum size of the window's client area in physical pixels.
     ///
     /// Used to restrict the user from resizing the window above a certain size.
+    #[inline]
     pub fn set_max_size(&self, max: impl Into<Size>) {
         self.0.set_max_size(max.into());
     }
@@ -304,6 +317,7 @@ impl<'a> Window<'a> {
     ///
     /// Will result in a [`WindowHandler::position_changed`] event being
     /// emitted.
+    #[inline]
     pub fn set_position(&self, pos: impl Into<Point>) {
         self.0.set_position(pos.into());
     }
@@ -312,6 +326,7 @@ impl<'a> Window<'a> {
     ///
     /// Will result in a [`WindowHandler::visibility_changed`] event being
     /// emitted.
+    #[inline]
     pub fn set_visible(&self, visible: bool) {
         self.0.set_visible(visible);
     }
@@ -319,6 +334,7 @@ impl<'a> Window<'a> {
     /// Open the given URL or file path in the system's default application.
     ///
     /// Returns `true` if the action was handled by the OS
+    #[inline]
     pub fn open_url(&self, url: &str) -> bool {
         self.0.open_url(url)
     }
@@ -326,11 +342,14 @@ impl<'a> Window<'a> {
     /// Set the current text contents of the system clipboard.
     ///
     /// Returns `true` if the action was handled by the OS
+    #[inline]
     pub fn set_clipboard(&self, data: Exchange) -> bool {
         self.0.set_clipboard(data)
     }
 
     /// Get the current text contents of the system clipboard, if any.
+    #[must_use]
+    #[inline]
     pub fn get_clipboard(&self) -> Exchange {
         self.0.get_clipboard()
     }
