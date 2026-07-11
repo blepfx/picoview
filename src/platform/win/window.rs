@@ -231,7 +231,7 @@ impl WindowImpl {
             let gl_context = options
                 .opengl
                 .map(|config| GlContext::new(hwnd, config))
-                .unwrap_or_else(|| Err(OpenGlError("no OpenGl config was provided".to_string())));
+                .unwrap_or_else(|| Err(OpenGlError::NotRequested));
 
             // install the keyboard hook and register our window to it, so we could capture
             // key events even when the window is not focused. keyboard hooks are shared on

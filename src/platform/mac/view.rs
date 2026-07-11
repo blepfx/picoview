@@ -229,7 +229,7 @@ impl WindowImpl {
         let gl_context = options
             .opengl
             .map(|opts| GlContext::new(&view.view, opts, main_thread))
-            .unwrap_or_else(|| Err(OpenGlError("OpenGL not requested".to_string())));
+            .unwrap_or_else(|| Err(OpenGlError::NotRequested));
 
         // vsync synced [`WindowFrame`] events
         let display_link = {

@@ -1,9 +1,18 @@
 #![doc = include_str!("../README.md")]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(clippy::identity_op)]
-#![deny(clippy::unwrap_used)]
-#![warn(clippy::todo, clippy::unimplemented)]
-#![warn(missing_debug_implementations)]
-#![warn(missing_docs)]
+#![deny(clippy::unwrap_used, clippy::unimplemented, clippy::indexing_slicing)]
+#![warn(
+    missing_docs,
+    missing_copy_implementations,
+    missing_debug_implementations,
+    rust_2018_idioms,
+    clippy::missing_panics_doc,
+    clippy::missing_errors_doc,
+    clippy::missing_safety_doc,
+    clippy::transmute_ptr_to_ptr,
+    clippy::invalid_upcast_comparisons
+)]
 
 mod data;
 mod error;

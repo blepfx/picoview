@@ -6,13 +6,13 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlVersion {
     /// Core profile
-    Core(u32, u32),
+    Core(u8, u8),
 
     /// Compatibility profile
-    Compat(u32, u32),
+    Compat(u8, u8),
 
     /// OpenGL ES
-    ES(u32, u32),
+    ES(u8, u8),
 }
 
 /// A requested OpenGL format for the window framebuffer
@@ -78,7 +78,7 @@ pub struct GlConfig {
 
     /// Number of samples for multisample anti-aliasing, set to 0 to disable
     /// MSAA
-    pub msaa_count: u32,
+    pub msaa_count: u8,
 }
 
 impl Default for GlConfig {
@@ -103,6 +103,10 @@ impl<'a> GlContext<'a> {
     /// Make this OpenGL context current or not current.
     ///
     /// Does nothing if the context is already in the requested state.
+    ///
+    /// # Errors    
+    ///
+    /// Returns [`MakeCurrentError`] if the context could not be made current.
     pub fn make_current(&self, current: bool) -> Result<(), MakeCurrentError> {
         self.0.make_current(current)
     }
@@ -113,6 +117,10 @@ impl<'a> GlContext<'a> {
     ///
     /// It might be a good idea to skip drawing if the window has a size of 0
     /// (some drivers do not handle this well).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SwapBuffersError`] if the buffers could not be swapped.
     pub fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         self.0.swap_buffers()
     }

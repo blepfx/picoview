@@ -242,13 +242,15 @@ mod connection {
 
             unsafe {
                 let mut buf = [0 as c_char; 255];
+
                 XGetErrorText(
                     (*err).display,
                     (*err).error_code.into(),
                     buf.as_mut_ptr(),
-                    (buf.len() - 1) as i32,
+                    254, // leave space for null terminator
                 );
-                buf[254] = 0;
+
+                buf[254] = 0; // force null terminator just in case
                 conn.replace(CStr::from_ptr(buf.as_mut_ptr()).to_string_lossy().into());
             }
 
@@ -406,7 +408,11 @@ mod selection {
                 return Err(SelectionError::Empty);
             }
 
-            let result = f(std::slice::from_raw_parts(data as *const u8, size as usize));
+            let result = f(std::slice::from_raw_parts(
+                data as *const u8,
+                size.try_into().unwrap_or(usize::MAX),
+            ));
+
             XFree(data as *mut _);
             Ok(result)
         }
@@ -481,6 +487,7 @@ mod selection {
                             conn.atom(c"XdndStatus")
                         },
                         format: 32,
+
                         data: {
                             let mut data = ClientMessageData::default();
                             data.set_long(0, target as _);
@@ -1096,8 +1103,8 @@ mod events {
     pub fn wait_for_events(conn: &Connection, timeout: Option<Duration>) -> Result<u32, String> {
         unsafe {
             let timespec = timeout.map(|timeout| libc::timespec {
-                tv_sec: timeout.as_secs() as _,
-                tv_nsec: timeout.subsec_nanos() as _,
+                tv_sec: timeout.as_secs().try_into().unwrap_or(i64::MAX),
+                tv_nsec: timeout.subsec_nanos().into(),
             });
 
             let result = libc::ppoll(

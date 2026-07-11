@@ -208,6 +208,16 @@ impl<'a> Window<'a> {
     }
 
     /// Get the OpenGL context associated with the window, if present.
+    ///
+    /// # Errors
+    /// - [`OpenGlError::NotRequested`] if OpenGL context was not requested via
+    ///   [`WindowBuilder::with_opengl`].
+    /// - [`OpenGlError::FormatUnsupported`] if the requested framebuffer format
+    ///   is not supported on this device.
+    /// - [`OpenGlError::VersionUnsupported`] if the requested OpenGL version is
+    ///   not supported on this device.
+    /// - [`OpenGlError::CreateFailed`] if the context could not be created for
+    ///   a platform-specific reason.
     #[inline]
     pub fn opengl(&self) -> Result<GlContext<'a>, OpenGlError> {
         self.0.opengl().map(GlContext)
@@ -360,8 +370,8 @@ impl WindowWaker {
     /// waiting for the event handler to actually process the event). Emits a
     /// [`WindowHandler::wakeup`] call as soon as possible.
     ///
-    /// Returns [`WakeupError`] if the window has already been
-    /// closed.
+    /// # Errors
+    /// - [`WakeupError`] if the window has already been closed.
     pub fn wakeup(&self) -> Result<(), WakeupError> {
         self.0.wakeup()
     }
@@ -408,6 +418,10 @@ impl WindowBuilder {
     ///
     /// Returns `Err` if the window could not be created or if an error occurred
     /// during the lifetime of the window.
+    ///
+    /// # Errors
+    /// - [`WindowError::Factory`] if the factory function returned an error.
+    /// - [`WindowError::Platform`] if a platform-specific error occurred.
     pub fn open_blocking(self) -> Result<(), WindowError> {
         unsafe { platform::open_window(self, platform::OpenMode::Blocking).map(|_| ()) }
     }
@@ -424,6 +438,11 @@ impl WindowBuilder {
     /// Returns `Err` if the window could not be created or if the parent window
     /// handle is invalid, otherwise returns a [`WindowWaker`] associated with
     /// the newly created window.
+    ///
+    /// # Errors
+    /// - [`WindowError::InvalidParent`] if the parent window handle is invalid.
+    /// - [`WindowError::Platform`] if a platform-specific error occurred.
+    /// - [`WindowError::Factory`] if the factory function returned an error.
     pub fn open_transient<W>(self, parent: W) -> Result<WindowWaker, WindowError>
     where
         W: rwh_06::HasWindowHandle,
@@ -447,6 +466,11 @@ impl WindowBuilder {
     /// Returns `Err` if the window could not be created or if the parent window
     /// handle is invalid, otherwise returns a [`WindowWaker`] associated with
     /// the newly created window.
+    ///
+    /// # Errors
+    /// - [`WindowError::InvalidParent`] if the parent window handle is invalid.
+    /// - [`WindowError::Platform`] if a platform-specific error occurred.
+    /// - [`WindowError::Factory`] if the factory function returned an error.
     pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, WindowError>
     where
         W: rwh_06::HasWindowHandle,

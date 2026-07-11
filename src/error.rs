@@ -3,7 +3,19 @@ use std::fmt;
 
 /// An error that can occur when creating an OpenGL context.
 #[derive(Debug, Clone)]
-pub struct OpenGlError(pub String);
+pub enum OpenGlError {
+    /// OpenGL context creation was not requested for this window.
+    NotRequested,
+
+    /// Requested framebuffer format is not supported.
+    FormatUnsupported,
+
+    /// Requested OpenGL version is not supported.
+    VersionUnsupported,
+
+    /// A platform-specific error occurred.
+    CreateFailed(String),
+}
 
 /// An error that can occur when making an OpenGL context current or
 /// not-current.
@@ -29,7 +41,7 @@ pub enum WindowError {
 }
 
 /// An error that can occur when waking up a event loop from another thread.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct WakeupError;
 
 impl Error for WindowError {}
@@ -67,6 +79,15 @@ impl fmt::Display for MakeCurrentError {
 impl Error for OpenGlError {}
 impl fmt::Display for OpenGlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to create opengl context: {}", self.0)
+        match self {
+            OpenGlError::NotRequested => write!(f, "opengl context was not requested"),
+            OpenGlError::FormatUnsupported => {
+                write!(f, "requested framebuffer format is unsupported")
+            }
+            OpenGlError::VersionUnsupported => {
+                write!(f, "requested opengl version is unsupported")
+            }
+            OpenGlError::CreateFailed(err) => write!(f, "failed to create opengl context: {}", err),
+        }
     }
 }

@@ -88,8 +88,8 @@ impl Rect {
         Self {
             top: 0,
             left: 0,
-            bottom: size.height as i32,
-            right: size.width as i32,
+            bottom: size.height.try_into().unwrap_or(i32::MAX),
+            right: size.width.try_into().unwrap_or(i32::MAX),
         }
     }
 

@@ -24,9 +24,7 @@ impl GlContext {
         let version = match config.version {
             GlVersion::Core(major, minor) => {
                 if (major, minor) > (4, 1) {
-                    return Err(OpenGlError(
-                        "macOS only supports OpenGL up to version 4.1".into(),
-                    ));
+                    return Err(OpenGlError::VersionUnsupported);
                 } else if (major, minor) > (3, 2) {
                     objc2_app_kit::NSOpenGLProfileVersion4_1Core
                 } else {
@@ -34,11 +32,7 @@ impl GlContext {
                 }
             }
             GlVersion::Compat(_, _) => objc2_app_kit::NSOpenGLProfileVersionLegacy,
-            GlVersion::ES(_, _) => {
-                return Err(OpenGlError(
-                    "macOS does not support OpenGL ES contexts".into(),
-                ));
-            }
+            GlVersion::ES(_, _) => return Err(OpenGlError::VersionUnsupported),
         };
 
         let attrs = {
@@ -83,7 +77,7 @@ impl GlContext {
                 NSOpenGLPixelFormat::alloc(),
                 NonNull::new_unchecked(attrs.as_ptr() as *mut _),
             )
-            .ok_or_else(|| OpenGlError("Failed to create NSOpenGLPixelFormat".into()))?
+            .ok_or_else(|| OpenGlError::FormatUnsupported)?
         };
 
         let view = {
@@ -92,7 +86,7 @@ impl GlContext {
                 parent.frame(),
                 Some(&pixel_format),
             )
-            .ok_or_else(|| OpenGlError("Failed to create NSOpenGLView".into()))?
+            .ok_or_else(|| OpenGlError::FormatUnsupported)?
         };
 
         view.setWantsBestResolutionOpenGLSurface(true);
@@ -101,9 +95,9 @@ impl GlContext {
 
         parent.addSubview(&view);
 
-        let context = view
-            .openGLContext()
-            .ok_or_else(|| OpenGlError("Failed to get NSOpenGLContext from NSOpenGLView".into()))?;
+        let context = view.openGLContext().ok_or_else(|| {
+            OpenGlError::CreateFailed("Failed to get NSOpenGLContext from NSOpenGLView".into())
+        })?;
 
         unsafe {
             context
@@ -112,7 +106,9 @@ impl GlContext {
 
         let bundle = {
             CFBundle::bundle_with_identifier(Some(&CFString::from_static_str("com.apple.opengl")))
-                .ok_or_else(|| OpenGlError("Failed to get the 'com.apple.opengl' CFBundle".into()))?
+                .ok_or_else(|| {
+                OpenGlError::CreateFailed("Failed to get the 'com.apple.opengl' CFBundle".into())
+            })?
         };
 
         Ok(Self {

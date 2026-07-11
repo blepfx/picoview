@@ -289,7 +289,7 @@ impl WindowImpl {
                         visual_info.fb_config,
                     )
                 })
-                .unwrap_or_else(|| Err(OpenGlError("No config was provided".into())));
+                .unwrap_or_else(|| Err(OpenGlError::NotRequested));
 
             // get a refresh interval for our frame updates, default to 60hz if all else
             // fails

@@ -172,12 +172,13 @@ impl GlContext {
         fb_config: GLXFBConfig,
     ) -> Result<GlContext, OpenGlError> {
         if fb_config.is_null() {
-            return Err(OpenGlError("no matching config".into()));
+            return Err(OpenGlError::FormatUnsupported);
         }
 
         unsafe {
-            let (_, _, extensions) = Self::get_version_info(&connection)
-                .ok_or_else(|| OpenGlError("call to glXQueryVersion failed".into()))?;
+            let (_, _, extensions) = Self::get_version_info(&connection).ok_or_else(|| {
+                OpenGlError::CreateFailed("call to glXQueryVersion failed".into())
+            })?;
             let ext_es_support = extensions.contains("GLX_EXT_create_context_es2_profile")
                 || extensions.contains("GLX_EXT_create_context_es_profile");
             let ext_context = extensions.contains("GLX_ARB_create_context");
@@ -226,9 +227,7 @@ impl GlContext {
                         0,
                     ],
                     _ => {
-                        return Err(OpenGlError(
-                            "requested OpenGL ES version is not supported".into(),
-                        ));
+                        return Err(OpenGlError::VersionUnsupported);
                     }
                 };
 
@@ -246,7 +245,9 @@ impl GlContext {
             if context.is_null() {
                 let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
                 if fb_visual.is_null() {
-                    return Err(OpenGlError("glXGetVisualFromFBConfig returned null".into()));
+                    return Err(OpenGlError::CreateFailed(
+                        "glXGetVisualFromFBConfig returned null".into(),
+                    ));
                 }
 
                 context = glXCreateContext(connection.display(), fb_visual, null_mut(), 1);
@@ -254,7 +255,9 @@ impl GlContext {
             };
 
             if context.is_null() {
-                return Err(OpenGlError("glXCreateContext returned null".into()));
+                return Err(OpenGlError::CreateFailed(
+                    "glXCreateContext returned null".into(),
+                ));
             }
 
             if ext_swap_control {
@@ -271,7 +274,7 @@ impl GlContext {
             }
 
             XSync(connection.display(), 0);
-            connection.last_error().map_err(OpenGlError)?;
+            connection.last_error().map_err(OpenGlError::CreateFailed)?;
 
             Ok(GlContext {
                 window,

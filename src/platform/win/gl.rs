@@ -76,7 +76,7 @@ impl GlContext {
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
-                    OpenGlError("Failed to find a matching pixel format".to_owned())
+                    OpenGlError::FormatUnsupported
                 })?;
 
             SetPixelFormat(hdc, format_id, &format_desc);
@@ -86,7 +86,7 @@ impl GlContext {
                 .ok_or_else(|| {
                     FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
-                    OpenGlError("Failed to create a context with given requirements".to_owned())
+                    OpenGlError::VersionUnsupported
                 })?;
 
             try_set_swap_interval(hdc, hglrc, 0);
