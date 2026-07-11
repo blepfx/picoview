@@ -77,7 +77,7 @@ impl GlContext {
                 NSOpenGLPixelFormat::alloc(),
                 NonNull::new_unchecked(attrs.as_ptr() as *mut _),
             )
-            .ok_or_else(|| OpenGlError::FormatUnsupported)?
+            .ok_or(OpenGlError::FormatUnsupported)?
         };
 
         let view = {
@@ -86,7 +86,7 @@ impl GlContext {
                 parent.frame(),
                 Some(&pixel_format),
             )
-            .ok_or_else(|| OpenGlError::FormatUnsupported)?
+            .ok_or(OpenGlError::FormatUnsupported)?
         };
 
         view.setWantsBestResolutionOpenGLSurface(true);

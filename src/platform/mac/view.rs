@@ -419,7 +419,10 @@ impl WindowImpl {
         // SAFETY: this is safe, this is the same thing as [`ProtocolObject::from_ref`],
         // and we ensure that we implement the NSWindowDelegate protocol (see
         // [`Self::register_class`])
-        unsafe { std::mem::transmute::<&Self, &ProtocolObject<dyn NSWindowDelegate>>(self) }
+        #[allow(clippy::transmute_ptr_to_ptr)]
+        unsafe {
+            std::mem::transmute::<&Self, &ProtocolObject<dyn NSWindowDelegate>>(self)
+        }
     }
 }
 
