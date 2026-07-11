@@ -218,7 +218,8 @@ mod clipboard {
                     let len = DragQueryFileW(hdrop, i, null_mut(), 0) + 1;
                     let mut buf = vec![0u16; len as usize];
                     let len = DragQueryFileW(hdrop, i, buf.as_mut_ptr(), len);
-                    PathBuf::from(OsString::from_wide(&buf[..len as usize]))
+                    let buf = buf.get(..len as usize).unwrap_or(buf.as_slice());
+                    PathBuf::from(OsString::from_wide(buf))
                 })
                 .collect::<Vec<_>>()
         }
