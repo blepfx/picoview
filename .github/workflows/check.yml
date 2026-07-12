@@ -5,6 +5,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: EmbarkStudios/cargo-deny-action@v2
+      with:
+        command: check bans licenses sources
+    - uses: EmbarkStudios/cargo-deny-action@v2
+      continue-on-error: ${{ matrix.checks == 'advisories' }}
+      with:
+        command: check advisories
+
   build:
     strategy:
       matrix:
