@@ -432,12 +432,11 @@ impl WindowBuilder {
     ///
     /// A transient window is a window that can be moved independently of its
     /// parent window (like a popup or a dialog) and does not get clipped by it.
-    /// It is always on top of its parent window and is hidden when the
-    /// parent window is minimized or closed.
+    /// It is always on top of its parent window and is hidden with the parent
+    /// window.
     ///
-    /// Returns `Err` if the window could not be created or if the parent window
-    /// handle is invalid, otherwise returns a [`WindowWaker`] associated with
-    /// the newly created window.
+    /// If the parent window is closed, the transient window will also be
+    /// closed, even without explicitly calling [`Window::close`].
     ///
     /// # Errors
     /// - [`WindowError::InvalidParent`] if the parent window handle is invalid.
@@ -463,9 +462,8 @@ impl WindowBuilder {
     /// plugins). The embedded window is clipped to the bounds of the parent
     /// window and moves with it.
     ///
-    /// Returns `Err` if the window could not be created or if the parent window
-    /// handle is invalid, otherwise returns a [`WindowWaker`] associated with
-    /// the newly created window.
+    /// If the parent window is closed, the embedded window will also be closed,
+    /// even without explicitly calling [`Window::close`].
     ///
     /// # Errors
     /// - [`WindowError::InvalidParent`] if the parent window handle is invalid.

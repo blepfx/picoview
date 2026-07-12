@@ -3,6 +3,7 @@ use std::fmt;
 
 /// An error that can occur when creating an OpenGL context.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum OpenGlError {
     /// OpenGL context creation was not requested for this window.
     NotRequested,
@@ -20,10 +21,12 @@ pub enum OpenGlError {
 /// An error that can occur when making an OpenGL context current or
 /// not-current.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct MakeCurrentError;
 
 /// An error that can occur when swapping the OpenGL buffers.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct SwapBuffersError;
 
 /// An error that can occur during the creation or lifetime of a window.
@@ -42,6 +45,7 @@ pub enum WindowError {
 
 /// An error that can occur when waking up a event loop from another thread.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct WakeupError;
 
 impl Error for WindowError {}

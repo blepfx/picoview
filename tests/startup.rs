@@ -1,4 +1,4 @@
-use picoview::{Window, WindowBuilder, WindowHandler};
+use picoview::{Exchange, MouseCursor, Window, WindowBuilder, WindowHandler};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -30,6 +30,22 @@ fn test_startup_blocking() {
         }
     }
 
+    impl Drop for Handler<'_> {
+        // do a bunch of stuff here to test that the window is still valid when dropped
+        // (or at least that it doesn't crash or cause UB to call into window)
+        fn drop(&mut self) {
+            let _ = self.window.get_clipboard();
+            self.window.set_clipboard(Exchange::Text("test".into()));
+            self.window.set_decorations(false);
+            self.window.set_position((100, 200));
+            self.window.set_size((512, 512));
+            self.window.set_title("picoview test - blocking (closed)");
+            self.window.set_cursor_icon(MouseCursor::Hand);
+            self.window.set_visible(false);
+            self.window.close();
+        }
+    }
+
     WindowBuilder::new(|window| {
         window.set_title("picoview test - blocking");
         window.set_size((512, 256));
@@ -56,6 +72,23 @@ fn test_startup_blocking_undecorated() {
             if self.instant.elapsed() > Duration::from_millis(500) {
                 self.window.close();
             }
+        }
+    }
+
+    impl Drop for Handler<'_> {
+        // do a bunch of stuff here to test that the window is still valid when dropped
+        // (or at least that it doesn't crash or cause UB to call into window)
+        fn drop(&mut self) {
+            let _ = self.window.get_clipboard();
+            self.window.set_clipboard(Exchange::Text("test".into()));
+            self.window.set_decorations(false);
+            self.window.set_position((100, 200));
+            self.window.set_size((512, 512));
+            self.window
+                .set_title("picoview test - blocking undecorated (closed)");
+            self.window.set_cursor_icon(MouseCursor::Hand);
+            self.window.set_visible(false);
+            self.window.close();
         }
     }
 
@@ -101,6 +134,22 @@ fn test_startup_transient() {
             }
 
             self.frames += 1;
+        }
+    }
+
+    impl Drop for Handler<'_> {
+        // do a bunch of stuff here to test that the window is still valid when dropped
+        // (or at least that it doesn't crash or cause UB to call into window)
+        fn drop(&mut self) {
+            let _ = self.window.get_clipboard();
+            self.window.set_clipboard(Exchange::Text("test".into()));
+            self.window.set_decorations(false);
+            self.window.set_position((100, 200));
+            self.window.set_size((512, 512));
+            self.window.set_title("picoview test - transient (closed)");
+            self.window.set_cursor_icon(MouseCursor::Hand);
+            self.window.set_visible(false);
+            self.window.close();
         }
     }
 
@@ -162,6 +211,22 @@ fn test_startup_embedded() {
             }
 
             self.frames += 1;
+        }
+    }
+
+    impl Drop for Handler<'_> {
+        // do a bunch of stuff here to test that the window is still valid when dropped
+        // (or at least that it doesn't crash or cause UB to call into window)
+        fn drop(&mut self) {
+            let _ = self.window.get_clipboard();
+            self.window.set_clipboard(Exchange::Text("test".into()));
+            self.window.set_decorations(false);
+            self.window.set_position((100, 200));
+            self.window.set_size((512, 512));
+            self.window.set_title("picoview test - embed (closed)");
+            self.window.set_cursor_icon(MouseCursor::Hand);
+            self.window.set_visible(false);
+            self.window.close();
         }
     }
 

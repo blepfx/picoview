@@ -425,6 +425,11 @@ impl WindowImpl {
 
                     if XNextEvent(self.connection.display(), &mut event) == 0 {
                         self.handle_event(event);
+
+                        // if we get a DestroyNotify event, exit immediately
+                        if self.is_destroyed.get() {
+                            break;
+                        }
                     }
                 }
             }
