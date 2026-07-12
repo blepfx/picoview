@@ -1,5 +1,10 @@
 # picoview
-Smol low-level windowing abstraction with a focus on audio plugin development 
+
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/blepfx/picoview/check.yml)
+![Crates.io Version](https://img.shields.io/crates/v/picoview)
+![docs.rs](https://img.shields.io/docsrs/picoview)
+
+Smol low-level windowing abstraction with a focus on audio plugin development
 
 > [!WARNING]
 > This project is currently in development and the API is not final! Please do not rely on `picoview` in production. MacOS backend is still broken!
