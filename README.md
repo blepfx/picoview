@@ -1,8 +1,8 @@
 # picoview
 
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/blepfx/picoview/check.yml)
-![Crates.io Version](https://img.shields.io/crates/v/picoview)
-![docs.rs](https://img.shields.io/docsrs/picoview)
+[![crates.io](https://img.shields.io/crates/v/picoview)](https://crates.io/crates/picoview)
+[![docs.rs](https://img.shields.io/docsrs/picoview)](https://docs.rs/picoview/latest/picoview/)
 
 Smol low-level windowing abstraction with a focus on audio plugin development
 
