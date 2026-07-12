@@ -5,8 +5,12 @@ edition = "2024"
 rust-version = "1.95.0"
 license = "MIT OR Apache-2.0"
 description = "a smol cross-platform windowing abstraction for audio plugins"
-keywords = ["windowing"]
+keywords = ["windowing", "cross-platform", "audio", "plugin"]
+categories = ["gui", "os"]
 authors = ["blep <blep@amee.ee>", "DRACONIUM <hello@murl.digital>"] # @murl-digital change if needed
+readme = "README.md"
+documentation = "https://docs.rs/picoview"
+repository = "https://github.com/blepfx/picoview"
 
 [dependencies]
 raw-window-handle = "0.6"
