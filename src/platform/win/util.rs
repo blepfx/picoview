@@ -1,29 +1,23 @@
+/// DPI awareness management.
+pub mod dpi;
+/// Keyboard utilities and event capture.
+pub mod keyboard;
+/// Vertical synchronization thread.
+pub mod vsync;
+/// WGL utilities for OpenGL context creation.
+pub mod wgl;
+/// Window and class creation and management.
+pub mod window;
+
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
-use windows_sys::Win32::System::Com::CoCreateGuid;
-use windows_sys::core::GUID;
-
-pub fn generate_guid() -> String {
-    unsafe {
-        let mut guid = std::mem::zeroed::<GUID>();
-        CoCreateGuid(&mut guid);
-
-        format!(
-            "{:0X}-{:0X}-{:0X}-{:0X}{:0X}-{:0X}{:0X}{:0X}{:0X}{:0X}{:0X}",
-            guid.data1,
-            guid.data2,
-            guid.data3,
-            guid.data4[0],
-            guid.data4[1],
-            guid.data4[2],
-            guid.data4[3],
-            guid.data4[4],
-            guid.data4[5],
-            guid.data4[6],
-            guid.data4[7]
-        )
-    }
-}
+use std::ptr::null_mut;
+use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::System::Diagnostics::Debug::{
+    FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
+    FormatMessageW,
+};
+use windows_sys::core::PWSTR;
 
 pub fn to_widestring(str: &str) -> Vec<u16> {
     OsString::from(str).encode_wide().chain([0]).collect()
@@ -46,146 +40,9 @@ pub unsafe fn from_widestring(wide: *const u16) -> String {
 pub use clipboard::*;
 pub use cursor::*;
 pub use dpi::*;
-pub use keyboard::*;
 pub use win32_bullshit::*;
 
-mod keyboard {
-    use crate::{Key, Modifiers};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
-
-    pub unsafe fn get_modifiers() -> Modifiers {
-        fn is_held(key: VIRTUAL_KEY) -> bool {
-            unsafe { GetKeyState(key as _) & !0x1 != 0 }
-        }
-
-        fn is_toggled(key: VIRTUAL_KEY) -> bool {
-            unsafe { GetKeyState(key as _) & 0x1 != 0 }
-        }
-
-        Modifiers {
-            shift: is_held(VK_SHIFT),
-            ctrl: is_held(VK_CONTROL),
-            alt: is_held(VK_MENU),
-            meta: is_held(VK_LWIN) || is_held(VK_RWIN),
-            caps_lock: is_toggled(VK_CAPITAL),
-            num_lock: is_toggled(VK_NUMLOCK),
-            scroll_lock: is_toggled(VK_SCROLL),
-        }
-    }
-
-    pub fn scan_code_to_key(scan_code: u32) -> Option<Key> {
-        use Key::*;
-        Some(match scan_code {
-            0x1 => Escape,
-            0x2 => D1,
-            0x3 => D2,
-            0x4 => D3,
-            0x5 => D4,
-            0x6 => D5,
-            0x7 => D6,
-            0x8 => D7,
-            0x9 => D8,
-            0xA => D9,
-            0xB => D0,
-            0xC => Minus,
-            0xD => Equal,
-            0xE => Backspace,
-            0xF => Tab,
-            0x10 => Q,
-            0x11 => W,
-            0x12 => E,
-            0x13 => R,
-            0x14 => T,
-            0x15 => Y,
-            0x16 => U,
-            0x17 => I,
-            0x18 => O,
-            0x19 => P,
-            0x1A => BracketLeft,
-            0x1B => BracketRight,
-            0x1C => Enter,
-            0x1D => ControlLeft,
-            0x1E => A,
-            0x1F => S,
-            0x20 => D,
-            0x21 => F,
-            0x22 => G,
-            0x23 => H,
-            0x24 => J,
-            0x25 => K,
-            0x26 => L,
-            0x27 => Semicolon,
-            0x28 => Quote,
-            0x29 => Backquote,
-            0x2A => ShiftLeft,
-            0x2B => Backslash,
-            0x2C => Z,
-            0x2D => X,
-            0x2E => C,
-            0x2F => V,
-            0x30 => B,
-            0x31 => N,
-            0x32 => M,
-            0x33 => Comma,
-            0x34 => Period,
-            0x35 => Slash,
-            0x36 => ShiftRight,
-            0x37 => NumpadMultiply,
-            0x38 => AltLeft,
-            0x39 => Space,
-            0x3A => CapsLock,
-            0x3B => F1,
-            0x3C => F2,
-            0x3D => F3,
-            0x3E => F4,
-            0x3F => F5,
-            0x40 => F6,
-            0x41 => F7,
-            0x42 => F8,
-            0x43 => F9,
-            0x44 => F10,
-            0x46 => ScrollLock,
-            0x47 => Numpad7,
-            0x48 => Numpad8,
-            0x49 => Numpad9,
-            0x4A => NumpadSubtract,
-            0x4B => Numpad4,
-            0x4C => Numpad5,
-            0x4D => Numpad6,
-            0x4E => NumpadAdd,
-            0x4F => Numpad1,
-            0x50 => Numpad2,
-            0x51 => Numpad3,
-            0x52 => Numpad0,
-            0x53 => NumpadDecimal,
-            0x54 => PrintScreen,
-            0x57 => F11,
-            0x58 => F12,
-            0x59 => NumpadEqual,
-            0x7E => NumpadComma,
-            0x11C => NumpadEnter,
-            0x11D => ControlRight,
-            0x135 => NumpadDivide,
-            0x137 => PrintScreen,
-            0x138 => AltRight,
-            0x145 => NumLock,
-            0x147 => Home,
-            0x148 => ArrowUp,
-            0x149 => PageUp,
-            0x14B => ArrowLeft,
-            0x14D => ArrowRight,
-            0x14F => End,
-            0x150 => ArrowDown,
-            0x151 => PageDown,
-            0x152 => Insert,
-            0x153 => Delete,
-            0x15B => MetaLeft,
-            0x15C => MetaRight,
-            0x15D => ContextMenu,
-            _ => return None,
-        })
-    }
-}
+use crate::WindowError;
 
 mod clipboard {
     use crate::DropEffect;
@@ -407,51 +264,23 @@ mod cursor {
     }
 }
 
-mod dpi {
+mod win32_bullshit {
     use std::ffi::CStr;
-    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Foundation::HINSTANCE;
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+    use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
 
-    pub const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE: isize = -3;
-
-    unsafe fn proc_address<A, R>(module: &CStr, function: &CStr) -> Option<unsafe fn(A) -> R> {
+    pub unsafe fn proc_address<T>(module: &CStr, function: &CStr) -> Option<T> {
         unsafe {
             let lib = LoadLibraryA(module.as_ptr() as *const _);
             if lib.is_null() {
                 None
             } else {
                 let proc = GetProcAddress(lib, function.as_ptr() as *const _);
-                proc.map(|x| std::mem::transmute(x))
+                proc.map(|x| std::mem::transmute_copy(&x))
             }
         }
     }
-
-    pub unsafe fn try_set_thread_dpi_awareness(awareness: isize) -> Option<isize> {
-        unsafe {
-            Some((proc_address::<isize, isize>(
-                c"user32.dll",
-                c"SetThreadDpiAwarenessContext",
-            )?)(awareness))
-        }
-    }
-
-    pub unsafe fn try_get_dpi_for_window(window: HWND) -> Option<u32> {
-        unsafe {
-            Some((proc_address::<HWND, u32>(
-                c"user32.dll",
-                c"GetDpiForWindow",
-            )?)(window))
-        }
-    }
-}
-
-mod win32_bullshit {
-    use crate::WindowError;
-    use std::ptr::null_mut;
-    use windows_sys::Win32::Foundation::{GetLastError, HINSTANCE};
-    use windows_sys::Win32::System::Diagnostics::Debug::*;
-    use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
-    use windows_sys::core::PWSTR;
 
     pub fn hinstance() -> HINSTANCE {
         unsafe extern "C" {
@@ -460,38 +289,69 @@ mod win32_bullshit {
 
         unsafe { &__ImageBase as *const IMAGE_DOS_HEADER as _ }
     }
+}
 
-    pub fn check_error(assert: bool, message: &'static str) -> Result<(), crate::WindowError> {
-        if !assert {
-            unsafe {
-                let error = GetLastError();
-                let mut buffer = null_mut::<u16>();
-                let chars = FormatMessageW(
-                    FORMAT_MESSAGE_ALLOCATE_BUFFER
-                        | FORMAT_MESSAGE_FROM_SYSTEM
-                        | FORMAT_MESSAGE_IGNORE_INSERTS,
-                    null_mut(),
-                    error,
-                    0,
-                    &mut buffer as *mut PWSTR as *mut _,
-                    0,
-                    null_mut(),
-                );
+#[derive(Debug)]
+pub struct Win32Error {
+    /// The error code returned by the Windows API.
+    pub code: u32,
+    /// A human-readable description of the error provided by the Windows API.
+    pub message: Option<String>,
+    /// The context/function where the error occurred, if available.
+    pub context: Option<String>,
+}
 
-                let extra = if chars == 0 || buffer.is_null() {
-                    None
-                } else {
-                    let parts = std::slice::from_raw_parts(buffer, chars as _);
-                    Some(String::from_utf16_lossy(parts))
-                };
+impl Win32Error {
+    /// Creates a new error by querying the last error from the Windows API.
+    pub fn last_error() -> Self {
+        unsafe {
+            let code = GetLastError();
+            let mut buffer = null_mut::<u16>();
+            let chars = FormatMessageW(
+                FORMAT_MESSAGE_ALLOCATE_BUFFER
+                    | FORMAT_MESSAGE_FROM_SYSTEM
+                    | FORMAT_MESSAGE_IGNORE_INSERTS,
+                null_mut(),
+                code,
+                0,
+                &mut buffer as *mut PWSTR as *mut _,
+                0,
+                null_mut(),
+            );
 
-                return Err(WindowError::Platform(match extra {
-                    Some(desc) => format!("{}: {:X} - {}", message, error, desc),
-                    None => format!("{}: {:X}", message, error),
-                }));
+            let message = if chars == 0 || buffer.is_null() {
+                None
+            } else {
+                let parts = std::slice::from_raw_parts(buffer, chars as _);
+                Some(String::from_utf16_lossy(parts))
+            };
+
+            Self {
+                code,
+                message,
+                context: None,
             }
         }
+    }
 
-        Ok(())
+    /// Sets the context for the error, which can be useful for debugging.
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        self.context = Some(context.into());
+        self
+    }
+}
+
+impl From<Win32Error> for WindowError {
+    fn from(err: Win32Error) -> Self {
+        match (err.message, err.context) {
+            (Some(message), Some(context)) => {
+                WindowError::Platform(format!("{}: {} ({})", context, message, err.code))
+            }
+            (Some(message), None) => WindowError::Platform(format!("{} ({})", message, err.code)),
+            (None, Some(context)) => {
+                WindowError::Platform(format!("{}: error code {}", context, err.code))
+            }
+            (None, None) => WindowError::Platform(format!("Win32 error: code {}", err.code)),
+        }
     }
 }

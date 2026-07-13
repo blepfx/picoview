@@ -1,8 +1,10 @@
+/// Drag and drop COM interface implementation.
 mod dnd;
+/// OpenGL context creation and management.
 mod gl;
-mod hook;
+/// Various utility functions.
 mod util;
-mod vsync;
+/// Our main window implementation.
 mod window;
 
 pub unsafe fn open_window(

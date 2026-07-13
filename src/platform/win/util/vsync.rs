@@ -1,4 +1,3 @@
-use crate::platform::win::window::WM_USER_VSYNC;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{JoinHandle, sleep};
@@ -6,13 +5,14 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Dwm::{DwmFlush, DwmIsCompositionEnabled};
 use windows_sys::Win32::Graphics::Gdi::{
-    DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR,
+    DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW,
     MONITOR_DEFAULTTOPRIMARY, MONITORINFOEXW, MonitorFromWindow,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::SendNotifyMessageW;
 
-/// A thread that waits for VSync blanks and sends a message to the window to
-/// trigger [`WindowHandler::frame`](crate::WindowHandler::frame) event.
+use crate::platform::win::window::WM_USER_VSYNC;
+
+/// A thread that waits for VSync blanks and sends a message to the window.
 ///
 /// Uses DWM flush ([`DwmFlush`]) if available, otherwise falls back to a timer
 /// based on the refresh rate of the monitor (queried using
@@ -23,17 +23,22 @@ pub struct VSyncThread {
 }
 
 impl VSyncThread {
+    /// Starts a new VSync thread.
+    ///
+    /// # Safety
+    /// - The `hwnd` must be a valid window handle for the lifetime of the
+    ///   thread.
     pub unsafe fn new(hwnd: HWND) -> Self {
         let inner = Arc::new(Inner {
-            hwnd: hwnd as usize,
-            active: AtomicBool::new(true),
+            hwnd: hwnd as usize, // smuggling across thread boundaries.
+            notify_thread_destroy: AtomicBool::new(false),
             notify_display_change: AtomicBool::new(true),
             notify_frame_finished: AtomicBool::new(true),
         });
 
         let thread = std::thread::spawn({
             let inner = inner.clone();
-            move || unsafe { run_vsync_thread(inner) }
+            move || unsafe { inner.run_thread() }
         });
 
         Self {
@@ -42,7 +47,7 @@ impl VSyncThread {
         }
     }
 
-    /// Notifies the vsync thread that the display has changed and we should
+    /// Notifies the thread that the display might have changed and we should
     /// recalculate the refresh rate for the fallback timer.
     pub fn notify_display_change(&self) {
         self.inner
@@ -50,7 +55,7 @@ impl VSyncThread {
             .store(true, Ordering::Relaxed);
     }
 
-    /// Notifies the vsync thread that the frame has finished and we are ready
+    /// Notifies the thread that the frame has finished and we are ready
     /// for the next frame.
     pub fn notify_frame_finished(&self) {
         self.inner
@@ -62,7 +67,9 @@ impl VSyncThread {
 impl Drop for VSyncThread {
     fn drop(&mut self) {
         // asks the vsync thread to exit and waits for it to finish.
-        self.inner.active.store(false, Ordering::Relaxed);
+        self.inner
+            .notify_thread_destroy
+            .store(true, Ordering::Relaxed);
 
         // wait for the thread to finish, if it panicked we rethrow
         if let Some(thread) = self.thread.take()
@@ -74,10 +81,11 @@ impl Drop for VSyncThread {
 }
 
 struct Inner {
-    /// The window we send the messages to
+    /// The window we send the messages to (usize because we smuggle it across
+    /// thread boundaries, and HWND is !Send).
     hwnd: usize,
     /// Whether the thread is still active, if not we should exit the thread.
-    active: AtomicBool,
+    notify_thread_destroy: AtomicBool,
     /// Whether the display has changed and we should recalculate the refresh
     /// rate for the fallback timer.
     notify_display_change: AtomicBool,
@@ -86,38 +94,40 @@ struct Inner {
     notify_frame_finished: AtomicBool,
 }
 
-unsafe fn run_vsync_thread(sync: Arc<Inner>) {
-    unsafe {
-        let hwnd = sync.hwnd as HWND;
-        let mut fallback_next_frame = Instant::now();
-        let mut fallback_interval = Duration::from_millis(15);
+impl Inner {
+    unsafe fn run_thread(self: Arc<Self>) {
+        unsafe {
+            let hwnd = self.hwnd as HWND;
+            let mut fallback_next_frame = Instant::now();
+            let mut fallback_interval = Duration::from_millis(15);
 
-        while sync.active.load(Ordering::Relaxed) {
-            if sync.notify_display_change.swap(false, Ordering::Relaxed) {
-                fallback_interval = Duration::from_secs_f32(
-                    1.0 / get_refresh_rate(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY))
-                        .unwrap_or(60) as f32,
-                );
-            };
+            while !self.notify_thread_destroy.load(Ordering::Relaxed) {
+                if self.notify_display_change.swap(false, Ordering::Relaxed) {
+                    fallback_interval = Duration::from_secs_f32(
+                        1.0 / get_refresh_rate(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY))
+                            .unwrap_or(60) as f32,
+                    );
+                };
 
-            if !wait_dwm_flush() {
-                wait_fallback(&mut fallback_next_frame, fallback_interval);
-            }
+                if !wait_dwm_flush() {
+                    wait_fallback(&mut fallback_next_frame, fallback_interval);
+                }
 
-            // this is so we do not get overlapping messages if the window is too slow to
-            // process them (otherwise we would enter a death spiral of sending more
-            // messages than we can process)
-            if sync.notify_frame_finished.swap(false, Ordering::Relaxed) {
-                // same as SendMessage but does not block the thread
-                //
-                // why not PostMessage?: does not clog the main-thread message queue, has higher
-                // priority than posted messages (i think, dont quote me on
-                // that)
-                //
-                // why not SendMessage?: blocks the vsync thread until the main thread processes
-                // the message, which can cause a deadlock if the main thread is waiting for the
-                // vsync thread to finish.
-                SendNotifyMessageW(hwnd, WM_USER_VSYNC, 0, 0);
+                // this is so we do not get overlapping messages if the window is too slow to
+                // process them (otherwise we would enter a death spiral of sending more
+                // messages than we can process)
+                if self.notify_frame_finished.swap(false, Ordering::Relaxed) {
+                    // same as SendMessage but does not block the thread
+                    //
+                    // why not PostMessage?: does not clog the main-thread message queue, has higher
+                    // priority than posted messages (i think, dont quote me on
+                    // that)
+                    //
+                    // why not SendMessage?: blocks the vsync thread until the main thread processes
+                    // the message, which can cause a deadlock if the main thread is waiting for the
+                    // vsync thread to finish.
+                    SendNotifyMessageW(hwnd, WM_USER_VSYNC, 0, 0);
+                }
             }
         }
     }
@@ -147,13 +157,22 @@ fn wait_fallback(next_frame: &mut Instant, interval: Duration) {
     }
 }
 
-/// Returns the refresh rate of the monitor in Hz, or None if it could not be
-/// determined. This is used to determine the fallback interval for VSync when
-/// DWM is not available (should be rare, but it can happen on some systems).
-unsafe fn get_refresh_rate(monitor: HMONITOR) -> Option<u32> {
+/// Returns the refresh rate of the monitor the window is currently in, in Hz,
+/// or None if it could not be determined. This is used to determine the
+/// fallback interval for VSync when DWM is not available (should be rare, but
+/// it can happen on some systems).
+///
+/// # Safety
+/// - The `hwnd` must be a valid window handle at the time of the call.
+unsafe fn get_refresh_rate(hwnd: HWND) -> Option<u32> {
     unsafe {
         let mut info = MONITORINFOEXW::default();
         info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as _;
+
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+        if monitor.is_null() {
+            return None;
+        }
 
         if GetMonitorInfoW(monitor, &mut info as *mut _ as *mut _) == 0 {
             return None;

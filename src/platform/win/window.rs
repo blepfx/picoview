@@ -1,8 +1,9 @@
 use super::gl::GlContext;
-use super::hook::KeyboardHook;
 use super::util::*;
-use super::vsync::VSyncThread;
 use crate::platform::win::dnd::DropTargetImpl;
+use crate::platform::win::util::keyboard::{KeyboardHook, query_modifiers, scan_code_to_key};
+use crate::platform::win::util::vsync::VSyncThread;
+use crate::platform::win::util::window::{WindowProc, create_window};
 use crate::platform::*;
 use raw_window_handle::RawWindowHandle;
 use std::cell::{Cell, RefCell};
@@ -34,26 +35,29 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 pub const WM_USER_VSYNC: u32 = WM_USER + 1;
 /// Sent by [`PlatformWindow::close`] and received in the wnd_proc, closes the
 /// window
-pub const WM_USER_KILL_WINDOW: u32 = WM_USER + 2;
+pub const WM_USER_CLOSE_WINDOW: u32 = WM_USER + 2;
 /// Sent by the [`KeyboardHook`] when a key event is captured
 /// Same wParam/lParam data as in native WM_KEYDOWN/WM_KEYUP messages
 pub const WM_USER_KEY_DOWN: u32 = WM_USER + 3;
 /// See [`WM_USER_KEY_DOWN`]
 pub const WM_USER_KEY_UP: u32 = WM_USER + 4;
+/// Sent by the [`KeyboardHook`] when a modifier key state _maybe_ changes,
+/// used for [`WindowHandler::key_modifiers`] event.
+pub const WM_USER_KEY_MODIFIERS: u32 = WM_USER + 5;
 /// Sent by [`WindowWakerImpl::wakeup`] to wake up the event loop
-pub const WM_USER_WAKEUP: u32 = WM_USER + 5;
+pub const WM_USER_WAKEUP: u32 = WM_USER + 6;
 /// Sent by [`DropTargetImpl`] when a drop enters the window, triggers
 /// [`WindowHandler::drag_enter`] event.
-pub const WM_USER_DND_ENTER: u32 = WM_USER + 6;
+pub const WM_USER_DND_ENTER: u32 = WM_USER + 7;
 /// Sent by [`DropTargetImpl`] when a drop hovers over the window, triggers
 /// [`WindowHandler::drag_move`] event.
-pub const WM_USER_DND_HOVER: u32 = WM_USER + 7;
+pub const WM_USER_DND_HOVER: u32 = WM_USER + 8;
 /// Sent by [`DropTargetImpl`] when a drop leaves the window, triggers
 /// [`WindowHandler::drag_leave`] event.
-pub const WM_USER_DND_LEAVE: u32 = WM_USER + 8;
+pub const WM_USER_DND_LEAVE: u32 = WM_USER + 9;
 /// Sent by [`DropTargetImpl`] when a drop is performed, triggers
 /// [`WindowHandler::drag_accept`] event.
-pub const WM_USER_DND_ACCEPT: u32 = WM_USER + 9;
+pub const WM_USER_DND_ACCEPT: u32 = WM_USER + 10;
 
 /// A Win32 implementation of a [`PlatformWindow`].
 pub struct WindowImpl {
@@ -77,15 +81,12 @@ pub struct WindowImpl {
 
     /// The HWND for this window
     window_hwnd: HWND,
-    /// The unique class we created just for this window, so we can unregister
-    /// it when the window is closed
-    window_class: u16,
 
     /// COM based drag-and-drop handler, needed to access the new DnD API,
     /// unfortunately..
     _drop_target: Arc<DropTargetImpl>,
     /// Thread-local keyboard hook for this window.
-    keyboard_hook: Rc<KeyboardHook>,
+    _keyboard_hook: KeyboardHook,
     /// Thread that waits for VSync blanks and sends a message to the window to
     /// trigger [`WindowHandler::frame`] event.
     vsync_thread: VSyncThread,
@@ -117,6 +118,8 @@ pub struct WindowImpl {
     /// The number of mouse button pressed - mouse button releases, used for
     /// automatic cursor capture and release.
     current_mouse_capture: Cell<u32>,
+    /// The current mouse position of the window, used to detect mouse movement
+    current_mouse_position: Cell<Option<Point>>,
     /// The current system scale for the window (in DPI).
     current_dpi_scale: Cell<u32>,
 
@@ -146,28 +149,6 @@ impl WindowImpl {
                 _ => return Err(WindowError::InvalidParent),
             };
 
-            // S_FALSE is okay here if OleInitialize was already called on the current
-            // thread. OleInitialize is needed for things like Drag and Drop.
-            let ole_result = OleInitialize(null());
-            let ole_success = ole_result != OLE_E_WRONGCOMPOBJ && ole_result != RPC_E_CHANGED_MODE;
-
-            // register a new window class for our window with unique id
-            let class_name = to_widestring(&format!("picoview-{}", generate_guid()));
-            let window_class = RegisterClassW(&WNDCLASSW {
-                style: 0,
-                lpfnWndProc: Some(wnd_proc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: hinstance(),
-                hIcon: null_mut(),
-                hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-                hbrBackground: null_mut(),
-                lpszMenuName: null(),
-                lpszClassName: class_name.as_ptr(),
-            });
-
-            check_error(window_class != 0, "RegisterClassW")?;
-
             let dwstyle = {
                 let mut dwstyle = 0;
 
@@ -184,106 +165,89 @@ impl WindowImpl {
                 dwstyle
             };
 
+            // S_FALSE is okay here if OleInitialize was already called on the current
+            // thread. OleInitialize is needed for things like Drag and Drop.
+            let ole_result = OleInitialize(null());
+            let ole_success = ole_result != OLE_E_WRONGCOMPOBJ && ole_result != RPC_E_CHANGED_MODE;
+
             // set dpi awareness for the window (well restore it later)
-            let prev_dpi_awareness =
-                try_set_thread_dpi_awareness(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+            // we need it here so the window becomes DPI aware and window factory runs in
+            // DPI aware mode (so calls to set_size and friends work correctly)
+            let _dpi_awareness = ThreadDpiAwareness::per_monitor_aware();
 
-            // new window! zero size for now
-            let hwnd = CreateWindowExW(
-                0,
-                window_class as _,
-                [0].as_ptr() as _,
-                dwstyle,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                0,
-                0,
-                parent as _,
-                null_mut(),
-                hinstance(),
-                null(),
-            );
+            let window = create_window(dwstyle, parent, |hwnd| {
+                // enable transparency if requested
+                if options.transparent {
+                    let region = CreateRectRgn(0, 0, -1, -1);
+                    let bb = DWM_BLURBEHIND {
+                        dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+                        fEnable: true.into(),
+                        hRgnBlur: region,
+                        fTransitionOnMaximized: false.into(),
+                    };
 
-            check_error(!hwnd.is_null(), "CreateWindowExW")?;
+                    if !region.is_null() {
+                        DwmEnableBlurBehindWindow(hwnd, &bb);
+                        DeleteObject(region);
+                    }
+                }
 
-            // enable transparency if requested
-            if options.transparent {
-                let region = CreateRectRgn(0, 0, -1, -1);
-                let bb = DWM_BLURBEHIND {
-                    dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
-                    fEnable: true.into(),
-                    hRgnBlur: region,
-                    fTransitionOnMaximized: false.into(),
-                };
+                // accept drag and drop
+                let drop_target = DropTargetImpl::new(hwnd);
+                if ole_success {
+                    let result = RegisterDragDrop(hwnd, DropTargetImpl::as_raw(&drop_target) as _);
+                    if result != 0 {
+                        return Err(Win32Error::last_error().with_context("RegisterDragDrop"));
+                    }
+                }
 
-                DwmEnableBlurBehindWindow(hwnd, &bb);
-                DeleteObject(region);
-            }
+                // new gl context if requested
+                let gl_context = options
+                    .opengl
+                    .map(|config| GlContext::new(hwnd, config))
+                    .unwrap_or_else(|| Err(OpenGlError::NotRequested));
 
-            // accept drag and drop
-            let drop_target = DropTargetImpl::new(hwnd);
-            if ole_success {
-                let result = RegisterDragDrop(hwnd, DropTargetImpl::as_raw(&drop_target) as _);
-                check_error(result == 0, "RegisterDragDrop")?;
-            }
+                // preload our cursors
+                let cursor_cache = CursorCache::load();
 
-            // new gl context if requested
-            let gl_context = options
-                .opengl
-                .map(|config| GlContext::new(hwnd, config))
-                .unwrap_or_else(|| Err(OpenGlError::NotRequested));
+                // construct our window data, here we store all our state accessible from
+                // [`WindowProc::window_proc`]
+                Ok(Rc::new(Self {
+                    waker: Arc::new(WindowWakerImpl {
+                        window_hwnd: hwnd,
+                        window_open: AtomicBool::new(true),
+                    }),
 
-            // install the keyboard hook and register our window to it, so we could capture
-            // key events even when the window is not focused. keyboard hooks are shared on
-            // a per-thread basis and gets deregistered when all [`KeyboardHook`] instances
-            // gets dropped
-            let keyboard_hook = KeyboardHook::install();
-            keyboard_hook.add_window(hwnd);
+                    current_dpi_scale: Cell::new(
+                        try_get_dpi_for_window(hwnd).unwrap_or(USER_DEFAULT_SCREEN_DPI),
+                    ),
+                    current_mouse_capture: Cell::new(0),
+                    current_mouse_cursor: Cell::new(cursor_cache.get_closest(MouseCursor::Default)),
+                    current_key_modifiers: Cell::new(Modifiers::default()),
+                    current_window_focused: Cell::new(false),
 
-            // preload our cursors
-            let cursor_cache = CursorCache::load();
+                    current_window_size: Cell::new(Size::default()),
+                    current_window_position: Cell::new(Point::default()),
+                    current_window_style: Cell::new((dwstyle, 0)),
+                    current_window_visibility: Cell::new(WindowVisibility::Normal),
+                    current_min_window_size: Cell::new(Size::MIN),
+                    current_max_window_size: Cell::new(Size::MAX),
+                    current_mouse_position: Cell::new(None),
 
-            // construct our window data, here we store all our state and the event handler
-            // to be called later
-            let window = Rc::new(Self {
-                waker: Arc::new(WindowWakerImpl {
                     window_hwnd: hwnd,
-                    window_open: AtomicBool::new(true),
-                }),
+                    open_mode: mode,
 
-                current_dpi_scale: Cell::new(
-                    try_get_dpi_for_window(hwnd).unwrap_or(USER_DEFAULT_SCREEN_DPI),
-                ),
-                current_mouse_capture: Cell::new(0),
-                current_mouse_cursor: Cell::new(cursor_cache.get_closest(MouseCursor::Default)),
-                current_key_modifiers: Cell::new(Modifiers::default()),
-                current_window_focused: Cell::new(false),
+                    gl_context,
+                    cursor_cache,
 
-                current_window_size: Cell::new(Size::default()),
-                current_window_position: Cell::new(Point::default()),
-                current_window_style: Cell::new((dwstyle, 0)),
-                current_window_visibility: Cell::new(WindowVisibility::Normal),
-                current_min_window_size: Cell::new(Size::MIN),
-                current_max_window_size: Cell::new(Size::MAX),
+                    event_handler: RefCell::new(None),
+                    event_deferred: RefCell::new(VecDeque::new()),
 
-                window_class,
-                window_hwnd: hwnd,
-
-                open_mode: mode,
-
-                gl_context,
-                cursor_cache,
-
-                event_handler: RefCell::new(None),
-                event_deferred: RefCell::new(VecDeque::new()),
-
-                _drop_target: drop_target,
-                keyboard_hook,
-                vsync_thread: VSyncThread::new(hwnd),
-            });
-
-            // store our window data as the userdata for later retrieval
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(window.clone()) as _);
+                    _drop_target: drop_target,
+                    _keyboard_hook: KeyboardHook::new(hwnd),
+                    vsync_thread: VSyncThread::new(hwnd),
+                }))
+            })?;
 
             // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so
             // because:
@@ -304,11 +268,9 @@ impl WindowImpl {
             // pull any events that were queued during initialization
             window.deferred_event(|_, _| {});
 
-            // restore previous dpi awareness, has to be done here because the event handler
-            // may call set_size and friends, and they have to run in dpi-aware mode
-            if let Some(prev_dpi_awareness) = prev_dpi_awareness {
-                try_set_thread_dpi_awareness(prev_dpi_awareness);
-            }
+            // emit initial events: key modifiers
+            window.current_key_modifiers.set(query_modifiers());
+            window.deferred_event(|window, e| e.key_modifiers(window.current_key_modifiers.get()));
 
             if let OpenMode::Blocking = mode {
                 // our favorite - win32 event pump
@@ -413,14 +375,351 @@ impl Drop for WindowImpl {
         // will ignore any events sent after this point, as the handler is gone
         self.event_handler.take();
 
-        // remove the window from the keyboard hook
-        self.keyboard_hook.remove_window(self.window_hwnd);
-
         // winapi cleanup stuff
         unsafe {
             RevokeDragDrop(self.window_hwnd);
-            SetWindowLongPtrW(self.window_hwnd, GWLP_USERDATA, 0);
-            UnregisterClassW(self.window_class as _, hinstance());
+        }
+    }
+}
+
+impl WindowProc for WindowImpl {
+    unsafe fn window_proc(&self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        // enter DPI aware context, who knows what the host thread is doing.
+        let _dpi_awareness = ThreadDpiAwareness::per_monitor_aware();
+
+        unsafe {
+            match msg {
+                WM_DESTROY => {
+                    // exit the event loop if we are in blocking mode
+                    if let OpenMode::Blocking = self.open_mode {
+                        PostQuitMessage(0);
+                    }
+
+                    return 0;
+                }
+
+                WM_CLOSE => {
+                    self.deferred_event(|_, e| e.close_requested());
+                    return 0;
+                }
+
+                WM_DISPLAYCHANGE => {
+                    self.vsync_thread.notify_display_change();
+                }
+
+                WM_WINDOWPOSCHANGED => {
+                    let info = lparam as *const WINDOWPOS;
+
+                    if (*info).flags & SWP_SHOWWINDOW != 0 {
+                        // just in case, we might be on a new display
+                        self.vsync_thread.notify_display_change();
+                    }
+
+                    let visibility = if (*info).flags & SWP_HIDEWINDOW != 0 {
+                        WindowVisibility::Hidden
+                    } else if (*info).flags & SWP_SHOWWINDOW != 0 {
+                        WindowVisibility::Normal
+                    } else if (*info).x == -32000 && (*info).y == -32000 {
+                        WindowVisibility::Minimized
+                    } else if self.current_window_visibility.get() == WindowVisibility::Hidden {
+                        WindowVisibility::Hidden
+                    } else {
+                        WindowVisibility::Normal
+                    };
+
+                    let rect = self.convert_client(
+                        Rect {
+                            left: (*info).x,
+                            top: (*info).y,
+                            right: (*info).x.saturating_add((*info).cx),
+                            bottom: (*info).y.saturating_add((*info).cy),
+                        },
+                        false,
+                    );
+
+                    // update window visibility
+                    if self.current_window_visibility.replace(visibility) != visibility {
+                        self.deferred_event(move |_, e| {
+                            e.visibility_changed(visibility); // dont wanna miss any updates
+                        });
+                    }
+
+                    // update window position
+                    if visibility != WindowVisibility::Minimized
+                        && self.current_window_position.replace(rect.origin()) != rect.origin()
+                    {
+                        self.deferred_event(move |window, e| {
+                            // fine if we miss an update and get a new value instead
+                            // because we do not capture anything, the closure will be zero-sized
+                            // and not allocate
+                            e.position_changed(window.current_window_position.get())
+                        });
+                    }
+
+                    // update window size
+                    if self.current_window_size.replace(rect.size()) != rect.size() {
+                        self.deferred_event(move |window, e| {
+                            e.size_changed(window.current_window_size.get()) // same as with position
+                        });
+                    }
+
+                    return 0;
+                }
+
+                WM_DPICHANGED => {
+                    let dpi = (wparam & 0xFFFF) as u32;
+                    self.current_dpi_scale.set(dpi);
+
+                    // force a resize to update the client size, as the window size is not changed
+                    // dpi change _can_ cause a border size change, so we have to update the client
+                    // size to reflect that. if the user wants to resize the window afterwards based
+                    // on the new dpi, they can do so.
+                    self.set_size(self.current_window_size.replace(Size::default()));
+                    self.deferred_event(|window, e| e.scale_changed(window.scale()));
+
+                    return 0;
+                }
+
+                WM_STYLECHANGED => {
+                    let dwstyle = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
+                    let dwexstyle = GetWindowLongW(self.window_hwnd, GWL_EXSTYLE) as u32;
+                    self.current_window_style.set((dwstyle, dwexstyle));
+                }
+
+                WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN
+                | WM_XBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
+                    if self.current_mouse_position.get().is_none() {
+                        // mouse just entered the window, start tracking mouse leave events
+                        let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE,
+                            hwndTrack: self.window_hwnd,
+                            dwHoverTime: 0,
+                        });
+                    }
+
+                    let point = Point {
+                        x: (lparam & 0xFFFF) as i16 as f64,
+                        y: ((lparam >> 16) & 0xFFFF) as i16 as f64,
+                    };
+
+                    // update cursor position
+                    if self.current_mouse_position.replace(Some(point)) != Some(point) {
+                        self.deferred_event(move |window, e| {
+                            if let Some(point) = window.current_mouse_position.get() {
+                                // fine if we miss an update and get a new value instead
+                                // because we do not capture anything, the closure will be
+                                // zero-sized and not allocate
+                                e.mouse_move(point)
+                            };
+                        });
+                    }
+
+                    // if its a click event
+                    if msg != WM_MOUSEMOVE {
+                        let button = match msg {
+                            WM_LBUTTONUP | WM_LBUTTONDOWN => Some(MouseButton::Left),
+                            WM_RBUTTONUP | WM_RBUTTONDOWN => Some(MouseButton::Right),
+                            WM_MBUTTONUP | WM_MBUTTONDOWN => Some(MouseButton::Middle),
+                            WM_XBUTTONUP | WM_XBUTTONDOWN => match ((wparam >> 16) & 0xffff) as u16
+                            {
+                                XBUTTON1 => Some(MouseButton::Back),
+                                XBUTTON2 => Some(MouseButton::Forward),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+
+                        let down = matches!(
+                            msg,
+                            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+                        );
+
+                        if let Some(button) = button {
+                            self.deferred_event(move |_, e| e.mouse_press(button, down));
+                        }
+
+                        if down {
+                            self.current_mouse_capture.update(|x| x + 1);
+                            if self.current_mouse_capture.get() == 1 {
+                                SetCapture(self.window_hwnd);
+                                SetFocus(self.window_hwnd);
+                            }
+                        } else {
+                            self.current_mouse_capture.update(|x| x.saturating_sub(1));
+                            if self.current_mouse_capture.get() == 0 {
+                                ReleaseCapture();
+                            }
+                        }
+                    }
+                }
+
+                WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+                    let delta = (wparam >> 16) as i16;
+                    let delta = delta as f64 / WHEEL_DELTA as f64;
+
+                    let x = if msg == WM_MOUSEWHEEL { 0.0 } else { delta };
+                    let y = if msg == WM_MOUSEWHEEL { -delta } else { 0.0 };
+
+                    self.deferred_event(move |_, e| e.mouse_scroll(x, y));
+                }
+
+                WM_MOUSELEAVE => {
+                    self.current_mouse_position.set(None);
+                    self.deferred_event(move |_, e| e.mouse_leave());
+                }
+
+                WM_SETCURSOR if lparam as u32 & 0xffff == HTCLIENT => {
+                    let cursor = self.current_mouse_cursor.get();
+
+                    if cursor.is_null() {
+                        ShowCursor(0);
+                    } else {
+                        SetCursor(cursor);
+                        ShowCursor(1);
+                    }
+
+                    return 1;
+                }
+
+                WM_GETMINMAXINFO => {
+                    let info = lparam as *mut MINMAXINFO;
+                    let min = self.current_min_window_size.get();
+                    let max = self.current_max_window_size.get();
+                    (*info).ptMinTrackSize = POINT {
+                        x: min.width.try_into().unwrap_or(i32::MAX),
+                        y: min.height.try_into().unwrap_or(i32::MAX),
+                    };
+                    (*info).ptMaxTrackSize = POINT {
+                        x: max.width.try_into().unwrap_or(i32::MAX),
+                        y: max.height.try_into().unwrap_or(i32::MAX),
+                    };
+                    (*info).ptMaxSize = (*info).ptMaxTrackSize;
+                    return 0;
+                }
+
+                WM_SETFOCUS if !self.current_window_focused.replace(true) => {
+                    self.deferred_event(|_, e| e.focus_changed(true));
+                }
+
+                WM_KILLFOCUS if self.current_window_focused.replace(false) => {
+                    self.deferred_event(|_, e| e.focus_changed(false));
+                }
+
+                WM_PAINT => {
+                    let mut rect = RECT { ..zeroed() };
+                    if GetUpdateRect(self.window_hwnd, &mut rect, 0) != 0 {
+                        let rect = Rect {
+                            left: rect.left,
+                            top: rect.top,
+                            right: rect.right,
+                            bottom: rect.bottom,
+                        };
+
+                        self.deferred_event(move |_, e| e.damage(rect));
+                        ValidateRgn(self.window_hwnd, null_mut());
+                    }
+
+                    return 0;
+                }
+
+                WM_USER_DND_ENTER => {
+                    let mut point = (lparam as *const POINT).read();
+                    if ScreenToClient(self.window_hwnd, &mut point) == 0 {
+                        return 0;
+                    }
+
+                    let data = DropTargetImpl::decode_data_object(wparam as _);
+                    let point = Point {
+                        x: point.x as f64,
+                        y: point.y as f64,
+                    };
+
+                    let effect = self
+                        .non_reentrant_event(|e| e.drag_enter(data, point))
+                        .unwrap_or(DropEffect::Reject);
+
+                    return encode_dnd_effect(effect) as _;
+                }
+
+                WM_USER_DND_HOVER => {
+                    let mut point = (lparam as *const POINT).read();
+                    if ScreenToClient(self.window_hwnd, &mut point) == 0 {
+                        return 0;
+                    }
+
+                    let point = Point {
+                        x: point.x as f64,
+                        y: point.y as f64,
+                    };
+
+                    let effect = self
+                        .non_reentrant_event(|e| e.drag_move(point))
+                        .unwrap_or(DropEffect::Reject);
+
+                    return encode_dnd_effect(effect) as _;
+                }
+
+                WM_USER_DND_ACCEPT => {
+                    let effect = self
+                        .non_reentrant_event(|e| e.drag_accept())
+                        .unwrap_or(DropEffect::Reject);
+
+                    return encode_dnd_effect(effect) as _;
+                }
+
+                WM_USER_DND_LEAVE => {
+                    self.non_reentrant_event(|e| e.drag_leave());
+                    return 0;
+                }
+
+                WM_USER_KEY_MODIFIERS => {
+                    let modifiers = query_modifiers();
+                    if self.current_key_modifiers.replace(modifiers) != modifiers {
+                        self.deferred_event(move |window, e| {
+                            e.key_modifiers(window.current_key_modifiers.get())
+                        });
+                    }
+                }
+
+                WM_USER_KEY_DOWN | WM_USER_KEY_UP => {
+                    let scan_code = ((lparam & 0x1ff_0000) >> 16) as u32;
+                    let Some(key) = scan_code_to_key(scan_code) else {
+                        return 0;
+                    };
+
+                    let capture = self
+                        .non_reentrant_event(|handler| {
+                            handler.key_press(key, msg == WM_USER_KEY_DOWN)
+                        })
+                        .unwrap_or(false);
+
+                    return if capture { 1 } else { 0 };
+                }
+
+                WM_USER_VSYNC => {
+                    self.non_reentrant_event(|e| {
+                        e.frame();
+                        self.vsync_thread.notify_frame_finished();
+                    });
+
+                    return 0;
+                }
+
+                WM_USER_WAKEUP => {
+                    self.deferred_event(|_, e| e.wakeup());
+                    return 0;
+                }
+
+                WM_USER_CLOSE_WINDOW => {
+                    DestroyWindow(self.window_hwnd);
+                    return 0;
+                }
+
+                _ => {}
+            }
+
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
     }
 }
@@ -442,7 +741,7 @@ impl PlatformWindow for WindowImpl {
 
     fn close(&self) {
         unsafe {
-            PostMessageW(self.window_hwnd, WM_USER_KILL_WINDOW, 0, 0);
+            PostMessageW(self.window_hwnd, WM_USER_CLOSE_WINDOW, 0, 0);
         }
     }
 
@@ -645,336 +944,5 @@ impl PlatformWaker for WindowWakerImpl {
         } else {
             Err(WakeupError)
         }
-    }
-}
-
-unsafe extern "system" fn wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe {
-        // get our userdata that we set in [`WindowImpl::open`]
-        let window_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowImpl;
-
-        // sometimes we get messages before OR _after_ (?) the window is
-        // created/destroyed be defensive here
-        if window_ptr.is_null() {
-            return DefWindowProcW(hwnd, msg, wparam, lparam);
-        }
-
-        if msg == WM_DESTROY {
-            // exit the event loop, if we are the owner of the event loop.
-            // in parented modes, the parent drives the pump.
-            if matches!((*window_ptr).open_mode, OpenMode::Blocking) {
-                PostQuitMessage(0);
-            }
-
-            // drop the rc, will call our [`WindowImpl::drop`].
-            drop(Rc::from_raw(window_ptr));
-            return 0;
-        }
-
-        let window = &*window_ptr;
-        match msg {
-            WM_CLOSE => {
-                window.deferred_event(|_, e| e.close_requested());
-                return 0;
-            }
-
-            WM_DISPLAYCHANGE => {
-                window.vsync_thread.notify_display_change();
-            }
-
-            WM_WINDOWPOSCHANGED => {
-                let info = lparam as *const WINDOWPOS;
-
-                if (*info).flags & SWP_SHOWWINDOW != 0 {
-                    // just in case, we might be on a new display
-                    window.vsync_thread.notify_display_change();
-                }
-
-                let visibility = if (*info).flags & SWP_HIDEWINDOW != 0 {
-                    WindowVisibility::Hidden
-                } else if (*info).flags & SWP_SHOWWINDOW != 0 {
-                    WindowVisibility::Normal
-                } else if (*info).x == -32000 && (*info).y == -32000 {
-                    WindowVisibility::Minimized
-                } else if window.current_window_visibility.get() == WindowVisibility::Hidden {
-                    WindowVisibility::Hidden
-                } else {
-                    WindowVisibility::Normal
-                };
-
-                let rect = window.convert_client(
-                    Rect {
-                        left: (*info).x,
-                        top: (*info).y,
-                        right: (*info).x.saturating_add((*info).cx),
-                        bottom: (*info).y.saturating_add((*info).cy),
-                    },
-                    false,
-                );
-
-                // update window visibility
-                if window.current_window_visibility.replace(visibility) != visibility {
-                    window.deferred_event(move |_, e| {
-                        e.visibility_changed(visibility); // dont wanna miss any updates
-                    });
-                }
-
-                // update window position
-                if visibility != WindowVisibility::Minimized
-                    && window.current_window_position.replace(rect.origin()) != rect.origin()
-                {
-                    window.deferred_event(move |window, e| {
-                        e.position_changed(window.current_window_position.get()) // fine if we get a new value instead
-                    });
-                }
-
-                // update window size
-                if window.current_window_size.replace(rect.size()) != rect.size() {
-                    window.deferred_event(move |window, e| {
-                        e.size_changed(window.current_window_size.get()) // same as with position
-                    });
-                }
-
-                return 0;
-            }
-
-            WM_DPICHANGED => {
-                let dpi = (wparam & 0xFFFF) as u32;
-                window.current_dpi_scale.set(dpi);
-
-                // force a resize to update the client size, as the window size is not changed
-                // dpi change _can_ cause a border size change, so we have to update the client
-                // size to reflect that. if the user wants to resize the window afterwards based
-                // on the new dpi, they can do so.
-                window.set_size(window.current_window_size.replace(Size::default()));
-                window.deferred_event(|window, e| e.scale_changed(window.scale()));
-
-                return 0;
-            }
-
-            WM_STYLECHANGED => {
-                let dwstyle = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-                let dwexstyle = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                window.current_window_style.set((dwstyle, dwexstyle));
-            }
-
-            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN | WM_LBUTTONUP
-            | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
-                let button = match msg {
-                    WM_LBUTTONUP | WM_LBUTTONDOWN => Some(MouseButton::Left),
-                    WM_RBUTTONUP | WM_RBUTTONDOWN => Some(MouseButton::Right),
-                    WM_MBUTTONUP | WM_MBUTTONDOWN => Some(MouseButton::Middle),
-                    WM_XBUTTONUP | WM_XBUTTONDOWN => match ((wparam >> 16) & 0xffff) as u16 {
-                        XBUTTON1 => Some(MouseButton::Back),
-                        XBUTTON2 => Some(MouseButton::Forward),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-
-                let down = matches!(
-                    msg,
-                    WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
-                );
-
-                if let Some(button) = button {
-                    window.deferred_event(move |_, e| e.mouse_press(button, down));
-                }
-
-                if down {
-                    window.current_mouse_capture.update(|x| x + 1);
-                    if window.current_mouse_capture.get() == 1 {
-                        SetCapture(hwnd);
-                        SetFocus(hwnd);
-                    }
-                } else {
-                    window.current_mouse_capture.update(|x| x.saturating_sub(1));
-                    if window.current_mouse_capture.get() == 0 {
-                        ReleaseCapture();
-                    }
-                }
-            }
-
-            WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
-                let delta = (wparam >> 16) as i16;
-                let delta = delta as f64 / WHEEL_DELTA as f64;
-
-                let x = if msg == WM_MOUSEWHEEL { 0.0 } else { delta };
-                let y = if msg == WM_MOUSEWHEEL { -delta } else { 0.0 };
-
-                window.deferred_event(move |_, e| e.mouse_scroll(x, y));
-            }
-
-            WM_MOUSELEAVE => {
-                window.deferred_event(move |_, e| e.mouse_leave());
-            }
-
-            WM_MOUSEMOVE => {
-                let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
-                    cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-                    dwFlags: TME_LEAVE,
-                    hwndTrack: hwnd,
-                    dwHoverTime: 0,
-                });
-
-                let (x, y) = (
-                    (lparam & 0xFFFF) as i16 as f64,
-                    ((lparam >> 16) & 0xFFFF) as i16 as f64,
-                );
-
-                window.deferred_event(move |_, e| e.mouse_move(Point { x, y }));
-            }
-
-            WM_SETCURSOR if lparam as u32 & 0xffff == HTCLIENT => {
-                let cursor = window.current_mouse_cursor.get();
-
-                if cursor.is_null() {
-                    ShowCursor(0);
-                } else {
-                    SetCursor(cursor);
-                    ShowCursor(1);
-                }
-
-                return 1;
-            }
-
-            WM_GETMINMAXINFO => {
-                let info = lparam as *mut MINMAXINFO;
-                let min = window.current_min_window_size.get();
-                let max = window.current_max_window_size.get();
-                (*info).ptMinTrackSize = POINT {
-                    x: min.width.try_into().unwrap_or(i32::MAX),
-                    y: min.height.try_into().unwrap_or(i32::MAX),
-                };
-                (*info).ptMaxTrackSize = POINT {
-                    x: max.width.try_into().unwrap_or(i32::MAX),
-                    y: max.height.try_into().unwrap_or(i32::MAX),
-                };
-                (*info).ptMaxSize = (*info).ptMaxTrackSize;
-                return 0;
-            }
-
-            WM_SETFOCUS if !window.current_window_focused.replace(true) => {
-                window.deferred_event(|_, e| e.focus_changed(true));
-            }
-
-            WM_KILLFOCUS if window.current_window_focused.replace(false) => {
-                window.deferred_event(|_, e| e.focus_changed(false));
-            }
-
-            WM_PAINT => {
-                let mut rect = RECT { ..zeroed() };
-                if GetUpdateRect(hwnd, &mut rect, 0) != 0 {
-                    let rect = Rect {
-                        left: rect.left,
-                        top: rect.top,
-                        right: rect.right,
-                        bottom: rect.bottom,
-                    };
-
-                    window.deferred_event(move |_, e| e.damage(rect));
-                    ValidateRgn(hwnd, null_mut());
-                }
-
-                return 0;
-            }
-
-            WM_USER_DND_ENTER => {
-                let mut point = (lparam as *const POINT).read();
-                if ScreenToClient(hwnd, &mut point) == 0 {
-                    return 0;
-                }
-
-                let data = DropTargetImpl::decode_data_object(wparam as _);
-                let point = Point {
-                    x: point.x as f64,
-                    y: point.y as f64,
-                };
-
-                let effect = window
-                    .non_reentrant_event(|e| e.drag_enter(data, point))
-                    .unwrap_or(DropEffect::Reject);
-
-                return encode_dnd_effect(effect) as _;
-            }
-
-            WM_USER_DND_HOVER => {
-                let mut point = (lparam as *const POINT).read();
-                if ScreenToClient(hwnd, &mut point) == 0 {
-                    return 0;
-                }
-
-                let point = Point {
-                    x: point.x as f64,
-                    y: point.y as f64,
-                };
-
-                let effect = window
-                    .non_reentrant_event(|e| e.drag_move(point))
-                    .unwrap_or(DropEffect::Reject);
-
-                return encode_dnd_effect(effect) as _;
-            }
-
-            WM_USER_DND_ACCEPT => {
-                let effect = window
-                    .non_reentrant_event(|e| e.drag_accept())
-                    .unwrap_or(DropEffect::Reject);
-
-                return encode_dnd_effect(effect) as _;
-            }
-
-            WM_USER_DND_LEAVE => {
-                window.non_reentrant_event(|e| e.drag_leave());
-                return 0;
-            }
-
-            WM_USER_KEY_DOWN | WM_USER_KEY_UP => {
-                let scan_code = ((lparam & 0x1ff_0000) >> 16) as u32;
-                let Some(key) = scan_code_to_key(scan_code) else {
-                    return 0;
-                };
-
-                let capture = window
-                    .non_reentrant_event(|handler| handler.key_press(key, msg == WM_USER_KEY_DOWN))
-                    .unwrap_or(false);
-
-                return if capture { 1 } else { 0 };
-            }
-
-            WM_USER_VSYNC => {
-                let modifiers = get_modifiers();
-
-                window.non_reentrant_event(|e| {
-                    if window.current_key_modifiers.replace(modifiers) != modifiers {
-                        e.key_modifiers(modifiers);
-                    }
-
-                    e.frame();
-                    window.vsync_thread.notify_frame_finished();
-                });
-
-                return 0;
-            }
-
-            WM_USER_WAKEUP => {
-                window.deferred_event(|_, e| e.wakeup());
-                return 0;
-            }
-
-            WM_USER_KILL_WINDOW => {
-                DestroyWindow(hwnd);
-                return 0;
-            }
-
-            _ => {}
-        }
-
-        DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 }
