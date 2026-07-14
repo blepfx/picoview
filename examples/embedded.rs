@@ -67,7 +67,7 @@ impl WindowHandler for Parent<'_> {
 
     fn mouse_move(&mut self, point: Point) {
         println!("parent.mouse_move({:?})", point);
-        self.window.set_cursor_icon(MouseCursor::Default);
+        self.window.set_cursor_icon(MouseCursor::Hidden);
     }
 
     fn mouse_leave(&mut self) {

@@ -15,7 +15,7 @@ pub enum OpenGlError {
     VersionUnsupported,
 
     /// A platform-specific error occurred.
-    CreateFailed(String),
+    Platform(String),
 }
 
 /// An error that can occur when making an OpenGL context current or
@@ -91,7 +91,7 @@ impl fmt::Display for OpenGlError {
             OpenGlError::VersionUnsupported => {
                 write!(f, "requested opengl version is unsupported")
             }
-            OpenGlError::CreateFailed(err) => write!(f, "failed to create opengl context: {}", err),
+            OpenGlError::Platform(err) => write!(f, "failed to create opengl context: {}", err),
         }
     }
 }

@@ -1,9 +1,15 @@
 use super::gl::GlContext;
-use super::util::*;
 use crate::platform::win::dnd::DropTargetImpl;
+use crate::platform::win::util::cursor::WinCursor;
+use crate::platform::win::util::dpi::DpiContext;
+use crate::platform::win::util::error::Win32Error;
+use crate::platform::win::util::exchange::{
+    Clipboard, decode_hdrop, encode_drop_effect, encode_hdrop,
+};
 use crate::platform::win::util::keyboard::{KeyboardHook, query_modifiers, scan_code_to_key};
 use crate::platform::win::util::vsync::VSyncThread;
-use crate::platform::win::util::window::{WindowProc, create_window};
+use crate::platform::win::util::widestr::WideString;
+use crate::platform::win::util::window::{WindowProc, create_window, hinstance};
 use crate::platform::*;
 use raw_window_handle::RawWindowHandle;
 use std::cell::{Cell, RefCell};
@@ -12,8 +18,7 @@ use std::mem::{size_of, zeroed};
 use std::num::NonZeroIsize;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use windows_sys::Win32::Foundation::{
     HWND, LPARAM, LRESULT, OLE_E_WRONGCOMPOBJ, POINT, RECT, RPC_E_CHANGED_MODE, WPARAM,
 };
@@ -67,32 +72,36 @@ pub struct WindowImpl {
     /// Current OpenGL context for this window, if requested. Or an error if the
     /// context could not be created.
     gl_context: Result<GlContext, OpenGlError>,
-
-    /// `winapi` is inherently reentrant, so we have to make sure that we don't
-    /// call the event handler while it is already borrowed (otherwise we
-    /// would panic).
-    ///
-    /// Instead, we put the event into a queue so we can call it later once the
-    /// event handler is free again.
-    #[allow(clippy::type_complexity)]
-    event_deferred: RefCell<VecDeque<Box<dyn FnOnce(&Self, &mut dyn WindowHandler)>>>,
-    /// The event handler for this window, processes our events.
-    event_handler: RefCell<Option<Box<dyn WindowHandler>>>,
-
-    /// The HWND for this window
-    window_hwnd: HWND,
-
+    /// Dynamically loaded DPI management functions, used for HiDPI support.
+    dpi_context: DpiContext,
+    /// Thread that waits for VSync blanks and sends a message to the window to
+    /// trigger [`WindowHandler::frame`] event.
+    vsync_thread: VSyncThread,
     /// COM based drag-and-drop handler, needed to access the new DnD API,
     /// unfortunately..
     _drop_target: Arc<DropTargetImpl>,
     /// Thread-local keyboard hook for this window.
     _keyboard_hook: KeyboardHook,
-    /// Thread that waits for VSync blanks and sends a message to the window to
-    /// trigger [`WindowHandler::frame`] event.
-    vsync_thread: VSyncThread,
 
+    /// The HWND for this window
+    hwnd: HWND,
     /// The mode in which the window was opened
     open_mode: OpenMode,
+
+    /// Windows API is inherently reentrant, so we have to make sure that we
+    /// don't call the event handler while it is already borrowed (otherwise
+    /// we would panic).
+    ///
+    /// Instead, we put the event into a queue so we can call it later once the
+    /// event handler is free again.
+    ///
+    /// Same queue is used to defer events that are sent while the event handler
+    /// is being initialized, so that we can send events to the handler as
+    /// soon as it is ready.
+    #[allow(clippy::type_complexity)]
+    event_deferred: RefCell<VecDeque<Box<dyn FnOnce(&Self, &mut dyn WindowHandler)>>>,
+    /// The event handler for this window, processes our events.
+    event_handler: RefCell<Option<Box<dyn WindowHandler>>>,
 
     /// The last size of the window, used to detect size changes
     current_window_size: Cell<Size>,
@@ -114,7 +123,7 @@ pub struct WindowImpl {
     /// changes
     current_key_modifiers: Cell<Modifiers>,
     /// The current mouse cursor of the window, used to detect cursor changes
-    current_mouse_cursor: Cell<HCURSOR>,
+    current_mouse_cursor: Cell<(MouseCursor, WinCursor)>,
     /// The number of mouse button pressed - mouse button releases, used for
     /// automatic cursor capture and release.
     current_mouse_capture: Cell<u32>,
@@ -122,18 +131,14 @@ pub struct WindowImpl {
     current_mouse_position: Cell<Option<Point>>,
     /// The current system scale for the window (in DPI).
     current_dpi_scale: Cell<u32>,
-
-    /// Cache of preloaded cursors, used for querying the right system-provided
-    /// cursor icon from a [`MouseCursor`]
-    cursor_cache: CursorCache,
 }
 
 /// Win32 implementation of a [`PlatformWaker`].
 pub struct WindowWakerImpl {
-    /// The HWND of the window to wake up
-    window_hwnd: HWND,
-    /// Whether the window is still open. // TODO: possible race condition?
-    window_open: AtomicBool,
+    /// The HWND of the window to wake up. We store it in a `RwLock` so we can
+    /// clean-up the handle when the window is closed, and avoid sending
+    /// messages to a closed window.
+    window_hwnd: RwLock<HWND>,
 }
 
 unsafe impl Send for WindowWakerImpl {}
@@ -173,7 +178,8 @@ impl WindowImpl {
             // set dpi awareness for the window (well restore it later)
             // we need it here so the window becomes DPI aware and window factory runs in
             // DPI aware mode (so calls to set_size and friends work correctly)
-            let _dpi_awareness = ThreadDpiAwareness::per_monitor_aware();
+            let dpi_context = DpiContext::new();
+            let _dpi_awareness = dpi_context.enter_per_monitor_aware_v2();
 
             let window = create_window(dwstyle, parent, |hwnd| {
                 // enable transparency if requested
@@ -207,22 +213,23 @@ impl WindowImpl {
                     .map(|config| GlContext::new(hwnd, config))
                     .unwrap_or_else(|| Err(OpenGlError::NotRequested));
 
-                // preload our cursors
-                let cursor_cache = CursorCache::load();
-
                 // construct our window data, here we store all our state accessible from
                 // [`WindowProc::window_proc`]
                 Ok(Rc::new(Self {
                     waker: Arc::new(WindowWakerImpl {
-                        window_hwnd: hwnd,
-                        window_open: AtomicBool::new(true),
+                        window_hwnd: RwLock::new(hwnd),
                     }),
 
                     current_dpi_scale: Cell::new(
-                        try_get_dpi_for_window(hwnd).unwrap_or(USER_DEFAULT_SCREEN_DPI),
+                        dpi_context
+                            .dpi_for_window(hwnd)
+                            .unwrap_or(USER_DEFAULT_SCREEN_DPI),
                     ),
                     current_mouse_capture: Cell::new(0),
-                    current_mouse_cursor: Cell::new(cursor_cache.get_closest(MouseCursor::Default)),
+                    current_mouse_cursor: Cell::new((
+                        MouseCursor::Default,
+                        MouseCursor::Default.into(),
+                    )),
                     current_key_modifiers: Cell::new(Modifiers::default()),
                     current_window_focused: Cell::new(false),
 
@@ -234,18 +241,18 @@ impl WindowImpl {
                     current_max_window_size: Cell::new(Size::MAX),
                     current_mouse_position: Cell::new(None),
 
-                    window_hwnd: hwnd,
+                    hwnd,
                     open_mode: mode,
-
-                    gl_context,
-                    cursor_cache,
 
                     event_handler: RefCell::new(None),
                     event_deferred: RefCell::new(VecDeque::new()),
 
-                    _drop_target: drop_target,
-                    _keyboard_hook: KeyboardHook::new(hwnd),
+                    gl_context,
+                    // the other one is in use, just make a new one, should be cheap
+                    dpi_context: DpiContext::new(),
                     vsync_thread: VSyncThread::new(hwnd),
+                    _keyboard_hook: KeyboardHook::new(hwnd),
+                    _drop_target: drop_target,
                 }))
             })?;
 
@@ -340,27 +347,30 @@ impl WindowImpl {
     /// Convert a client size to a window size or vice-versa, taking into
     /// account the current window style and extended style.
     pub fn convert_client(&self, input: Rect, from_client: bool) -> Rect {
-        unsafe {
-            let mut rect = RECT { ..zeroed() };
-            let (dwstyle, dwexstyle) = self.current_window_style.get();
-            if AdjustWindowRectEx(&mut rect, dwstyle, 0, dwexstyle) == 0 {
-                return input;
-            }
+        let (dwstyle, dwexstyle) = self.current_window_style.get();
+        let Some(rect) = self.dpi_context.adjust_window_rect_ex_for_dpi(
+            RECT::default(),
+            dwstyle,
+            dwexstyle,
+            false,
+            self.current_dpi_scale.get(),
+        ) else {
+            return input;
+        };
 
-            if from_client {
-                Rect {
-                    top: input.top.saturating_add(rect.top),
-                    left: input.left.saturating_add(rect.left),
-                    bottom: input.bottom.saturating_add(rect.bottom),
-                    right: input.right.saturating_add(rect.right),
-                }
-            } else {
-                Rect {
-                    top: input.top.saturating_sub(rect.top),
-                    left: input.left.saturating_sub(rect.left),
-                    bottom: input.bottom.saturating_sub(rect.bottom),
-                    right: input.right.saturating_sub(rect.right),
-                }
+        if from_client {
+            Rect {
+                top: input.top.saturating_add(rect.top),
+                left: input.left.saturating_add(rect.left),
+                bottom: input.bottom.saturating_add(rect.bottom),
+                right: input.right.saturating_add(rect.right),
+            }
+        } else {
+            Rect {
+                top: input.top.saturating_sub(rect.top),
+                left: input.left.saturating_sub(rect.left),
+                bottom: input.bottom.saturating_sub(rect.bottom),
+                right: input.right.saturating_sub(rect.right),
             }
         }
     }
@@ -369,7 +379,7 @@ impl WindowImpl {
 impl Drop for WindowImpl {
     fn drop(&mut self) {
         // subsequent wakeups should fail
-        self.waker.window_open.store(false, Ordering::Release);
+        *self.waker.window_hwnd.write().expect("lock poisoned") = null_mut();
 
         // drop the handler here, so it could do clean up when the window is still alive
         // will ignore any events sent after this point, as the handler is gone
@@ -377,7 +387,7 @@ impl Drop for WindowImpl {
 
         // winapi cleanup stuff
         unsafe {
-            RevokeDragDrop(self.window_hwnd);
+            RevokeDragDrop(self.hwnd);
         }
     }
 }
@@ -385,7 +395,7 @@ impl Drop for WindowImpl {
 impl WindowProc for WindowImpl {
     unsafe fn window_proc(&self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         // enter DPI aware context, who knows what the host thread is doing.
-        let _dpi_awareness = ThreadDpiAwareness::per_monitor_aware();
+        let _dpi_awareness = self.dpi_context.enter_per_monitor_aware_v2();
 
         unsafe {
             match msg {
@@ -467,22 +477,14 @@ impl WindowProc for WindowImpl {
                 }
 
                 WM_DPICHANGED => {
-                    let dpi = (wparam & 0xFFFF) as u32;
-                    self.current_dpi_scale.set(dpi);
-
-                    // force a resize to update the client size, as the window size is not changed
-                    // dpi change _can_ cause a border size change, so we have to update the client
-                    // size to reflect that. if the user wants to resize the window afterwards based
-                    // on the new dpi, they can do so.
-                    self.set_size(self.current_window_size.replace(Size::default()));
+                    self.current_dpi_scale.set((wparam & 0xFFFF) as u32);
                     self.deferred_event(|window, e| e.scale_changed(window.scale()));
-
                     return 0;
                 }
 
                 WM_STYLECHANGED => {
-                    let dwstyle = GetWindowLongW(self.window_hwnd, GWL_STYLE) as u32;
-                    let dwexstyle = GetWindowLongW(self.window_hwnd, GWL_EXSTYLE) as u32;
+                    let dwstyle = GetWindowLongW(self.hwnd, GWL_STYLE) as u32;
+                    let dwexstyle = GetWindowLongW(self.hwnd, GWL_EXSTYLE) as u32;
                     self.current_window_style.set((dwstyle, dwexstyle));
                 }
 
@@ -493,7 +495,7 @@ impl WindowProc for WindowImpl {
                         let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
                             cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                             dwFlags: TME_LEAVE,
-                            hwndTrack: self.window_hwnd,
+                            hwndTrack: self.hwnd,
                             dwHoverTime: 0,
                         });
                     }
@@ -542,8 +544,8 @@ impl WindowProc for WindowImpl {
                         if down {
                             self.current_mouse_capture.update(|x| x + 1);
                             if self.current_mouse_capture.get() == 1 {
-                                SetCapture(self.window_hwnd);
-                                SetFocus(self.window_hwnd);
+                                SetCapture(self.hwnd);
+                                SetFocus(self.hwnd);
                             }
                         } else {
                             self.current_mouse_capture.update(|x| x.saturating_sub(1));
@@ -570,15 +572,8 @@ impl WindowProc for WindowImpl {
                 }
 
                 WM_SETCURSOR if lparam as u32 & 0xffff == HTCLIENT => {
-                    let cursor = self.current_mouse_cursor.get();
-
-                    if cursor.is_null() {
-                        ShowCursor(0);
-                    } else {
-                        SetCursor(cursor);
-                        ShowCursor(1);
-                    }
-
+                    let (_, cursor) = self.current_mouse_cursor.get();
+                    cursor.apply();
                     return 1;
                 }
 
@@ -608,7 +603,7 @@ impl WindowProc for WindowImpl {
 
                 WM_PAINT => {
                     let mut rect = RECT { ..zeroed() };
-                    if GetUpdateRect(self.window_hwnd, &mut rect, 0) != 0 {
+                    if GetUpdateRect(self.hwnd, &mut rect, 0) != 0 {
                         let rect = Rect {
                             left: rect.left,
                             top: rect.top,
@@ -617,7 +612,7 @@ impl WindowProc for WindowImpl {
                         };
 
                         self.deferred_event(move |_, e| e.damage(rect));
-                        ValidateRgn(self.window_hwnd, null_mut());
+                        ValidateRgn(self.hwnd, null_mut());
                     }
 
                     return 0;
@@ -625,7 +620,7 @@ impl WindowProc for WindowImpl {
 
                 WM_USER_DND_ENTER => {
                     let mut point = (lparam as *const POINT).read();
-                    if ScreenToClient(self.window_hwnd, &mut point) == 0 {
+                    if ScreenToClient(self.hwnd, &mut point) == 0 {
                         return 0;
                     }
 
@@ -639,12 +634,12 @@ impl WindowProc for WindowImpl {
                         .non_reentrant_event(|e| e.drag_enter(data, point))
                         .unwrap_or(DropEffect::Reject);
 
-                    return encode_dnd_effect(effect) as _;
+                    return encode_drop_effect(effect) as _;
                 }
 
                 WM_USER_DND_HOVER => {
                     let mut point = (lparam as *const POINT).read();
-                    if ScreenToClient(self.window_hwnd, &mut point) == 0 {
+                    if ScreenToClient(self.hwnd, &mut point) == 0 {
                         return 0;
                     }
 
@@ -657,7 +652,7 @@ impl WindowProc for WindowImpl {
                         .non_reentrant_event(|e| e.drag_move(point))
                         .unwrap_or(DropEffect::Reject);
 
-                    return encode_dnd_effect(effect) as _;
+                    return encode_drop_effect(effect) as _;
                 }
 
                 WM_USER_DND_ACCEPT => {
@@ -665,11 +660,11 @@ impl WindowProc for WindowImpl {
                         .non_reentrant_event(|e| e.drag_accept())
                         .unwrap_or(DropEffect::Reject);
 
-                    return encode_dnd_effect(effect) as _;
+                    return encode_drop_effect(effect) as _;
                 }
 
                 WM_USER_DND_LEAVE => {
-                    self.non_reentrant_event(|e| e.drag_leave());
+                    self.deferred_event(|_, e| e.drag_leave());
                     return 0;
                 }
 
@@ -698,9 +693,13 @@ impl WindowProc for WindowImpl {
                 }
 
                 WM_USER_VSYNC => {
-                    self.non_reentrant_event(|e| {
+                    // this closure is zero-sized and does not allocate, so we wouldn't alloc every
+                    // frame. we have to defer here because we use
+                    // `SendNotifyMessage` and this could sometimes be called while the event
+                    // handler is borrowed, which would panic.
+                    self.deferred_event(|window, e| {
                         e.frame();
-                        self.vsync_thread.notify_frame_finished();
+                        window.vsync_thread.notify_frame_finished();
                     });
 
                     return 0;
@@ -712,7 +711,7 @@ impl WindowProc for WindowImpl {
                 }
 
                 WM_USER_CLOSE_WINDOW => {
-                    DestroyWindow(self.window_hwnd);
+                    DestroyWindow(self.hwnd);
                     return 0;
                 }
 
@@ -727,9 +726,8 @@ impl WindowProc for WindowImpl {
 impl PlatformWindow for WindowImpl {
     fn window_handle(&self) -> rwh_06::RawWindowHandle {
         unsafe {
-            let mut handle = rwh_06::Win32WindowHandle::new(NonZeroIsize::new_unchecked(
-                self.window_hwnd as isize,
-            ));
+            let mut handle =
+                rwh_06::Win32WindowHandle::new(NonZeroIsize::new_unchecked(self.hwnd as isize));
             handle.hinstance = NonZeroIsize::new(hinstance() as isize);
             rwh_06::RawWindowHandle::Win32(handle)
         }
@@ -741,7 +739,7 @@ impl PlatformWindow for WindowImpl {
 
     fn close(&self) {
         unsafe {
-            PostMessageW(self.window_hwnd, WM_USER_CLOSE_WINDOW, 0, 0);
+            PostMessageW(self.hwnd, WM_USER_CLOSE_WINDOW, 0, 0);
         }
     }
 
@@ -762,8 +760,8 @@ impl PlatformWindow for WindowImpl {
 
     fn set_title(&self, title: &str) {
         unsafe {
-            let window_title = to_widestring(title);
-            SetWindowTextW(self.window_hwnd, window_title.as_ptr() as _);
+            let title = WideString::from(title);
+            SetWindowTextW(self.hwnd, title.as_ptr());
         }
     }
 
@@ -782,7 +780,7 @@ impl PlatformWindow for WindowImpl {
                 style |= WS_POPUP;
             }
 
-            SetWindowLongW(self.window_hwnd, GWL_STYLE, style as _);
+            SetWindowLongW(self.hwnd, GWL_STYLE, style as _);
             self.current_window_style
                 .update(|(_, exstyle)| (style, exstyle));
 
@@ -793,8 +791,9 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_cursor_icon(&self, cursor: MouseCursor) {
-        self.current_mouse_cursor
-            .set(self.cursor_cache.get_closest(cursor));
+        if self.current_mouse_cursor.get().0 != cursor {
+            self.current_mouse_cursor.set((cursor, cursor.into()));
+        }
     }
 
     fn set_cursor_position(&self, point: Point) {
@@ -804,7 +803,7 @@ impl PlatformWindow for WindowImpl {
                 y: point.y as i32,
             };
 
-            if ClientToScreen(self.window_hwnd, &mut point) != 0 {
+            if ClientToScreen(self.hwnd, &mut point) != 0 {
                 SetCursorPos(point.x, point.y);
             }
         }
@@ -819,8 +818,8 @@ impl PlatformWindow for WindowImpl {
 
             let size = self.convert_client(Rect::from_size(size), true).size();
             SetWindowPos(
-                self.window_hwnd,
-                self.window_hwnd,
+                self.hwnd,
+                self.hwnd,
                 0,
                 0,
                 size.width as i32,
@@ -843,8 +842,8 @@ impl PlatformWindow for WindowImpl {
     fn set_position(&self, point: Point) {
         unsafe {
             SetWindowPos(
-                self.window_hwnd,
-                self.window_hwnd,
+                self.hwnd,
+                self.hwnd,
                 point.x as i32,
                 point.y as i32,
                 0,
@@ -857,8 +856,8 @@ impl PlatformWindow for WindowImpl {
     fn set_visible(&self, visible: bool) {
         unsafe {
             SetWindowPos(
-                self.window_hwnd,
-                self.window_hwnd,
+                self.hwnd,
+                self.hwnd,
                 0,
                 0,
                 0,
@@ -877,12 +876,12 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn open_url(&self, url: &str) -> bool {
-        let path = to_widestring(url);
-        let verb = to_widestring("open");
+        let path = WideString::from(url);
+        let verb = WideString::from("open");
 
         unsafe {
             ShellExecuteW(
-                self.window_hwnd,
+                self.hwnd,
                 verb.as_ptr(),
                 path.as_ptr(),
                 null(),
@@ -895,16 +894,19 @@ impl PlatformWindow for WindowImpl {
 
     fn get_clipboard(&self) -> Exchange {
         unsafe {
-            let clipboard = match Clipboard::open(self.window_hwnd) {
+            let clipboard = match Clipboard::open(self.hwnd) {
                 Some(clipboard) => clipboard,
                 None => return Exchange::Empty,
             };
 
-            if let Some(files) = clipboard.get(CF_HDROP, |hdrop| decode_hdrop(hdrop as _)) {
+            if let Some(files) = clipboard.get(CF_HDROP, |hdrop| decode_hdrop(hdrop.as_ptr() as _))
+            {
                 return Exchange::Files(files);
             }
 
-            if let Some(text) = clipboard.get(CF_UNICODETEXT, |data| from_widestring(data as _)) {
+            if let Some(text) = clipboard.get(CF_UNICODETEXT, |data| {
+                WideString::from_iter(data.iter().copied()).to_string_lossy()
+            }) {
                 return Exchange::Text(text);
             }
 
@@ -914,18 +916,21 @@ impl PlatformWindow for WindowImpl {
 
     fn set_clipboard(&self, data: Exchange) -> bool {
         unsafe {
-            let clipboard = match Clipboard::open(self.window_hwnd) {
+            let clipboard = match Clipboard::open(self.hwnd) {
                 Some(clipboard) => clipboard,
                 None => return false,
             };
 
             match data {
                 Exchange::Empty => clipboard.empty(),
-                Exchange::Text(text) => {
-                    clipboard.set(CF_UNICODETEXT, &to_widestring(&text));
-                }
                 Exchange::Files(files) => {
                     clipboard.set(CF_HDROP, &encode_hdrop(&files));
+                }
+                Exchange::Text(text) => {
+                    clipboard.set(
+                        CF_UNICODETEXT,
+                        WideString::from(text.as_str()).as_bytes_with_nul(),
+                    );
                 }
             }
 
@@ -936,13 +941,16 @@ impl PlatformWindow for WindowImpl {
 
 impl PlatformWaker for WindowWakerImpl {
     fn wakeup(&self) -> Result<(), WakeupError> {
-        if self.window_open.load(Ordering::Acquire) {
-            unsafe {
-                PostMessageW(self.window_hwnd, WM_USER_WAKEUP, 0, 0);
-                Ok(())
-            }
-        } else {
-            Err(WakeupError)
+        let guard = self.window_hwnd.read().expect("lock poisoned");
+
+        if guard.is_null() {
+            return Err(WakeupError);
         }
+
+        unsafe {
+            PostMessageW(*guard, WM_USER_WAKEUP, 0, 0);
+        }
+
+        Ok(())
     }
 }

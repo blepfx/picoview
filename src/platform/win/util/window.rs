@@ -1,8 +1,10 @@
-use crate::platform::win::util::{Win32Error, hinstance, to_widestring};
+use crate::platform::win::util::error::Win32Error;
+use crate::platform::win::util::widestr::WideString;
 use std::ptr::null_mut;
 use std::rc::Rc;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Com::CoCreateGuid;
+use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GCW_ATOM, GWLP_USERDATA,
     GetClassLongW, GetWindowLongPtrW, IDC_ARROW, LoadCursorW, RegisterClassW, SetWindowLongPtrW,
@@ -20,6 +22,15 @@ impl WindowProc for () {
     unsafe fn window_proc(&self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
+}
+
+/// Returns the [`HINSTANCE`] of the current module, whatever the fuck is that.
+pub fn hinstance() -> HINSTANCE {
+    unsafe extern "C" {
+        unsafe static __ImageBase: IMAGE_DOS_HEADER;
+    }
+
+    unsafe { &__ImageBase as *const IMAGE_DOS_HEADER as _ }
 }
 
 /// Creates a new window with the given style and parent, and calls the provided
@@ -80,7 +91,7 @@ pub unsafe fn create_window<W: WindowProc, E: From<Win32Error>>(
         let hinstance = hinstance();
 
         // unique class name to avoid conflicts with other windows
-        let class_name = to_widestring(&format!("picoview-{}", generate_guid()));
+        let class_name = WideString::from(format!("picoview-{}", generate_guid()).as_str());
         let window_class = RegisterClassW(&WNDCLASSW {
             style: 0,
             lpfnWndProc: Some(wnd_proc::<W>),

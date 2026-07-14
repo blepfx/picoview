@@ -148,9 +148,6 @@ pub fn scan_code_to_key(scan_code: u32) -> Option<Key> {
 
 /// A keyboard hook, used to capture key events in case a DAW
 /// tries to capture the events meant for us.
-///
-/// Note that this is a thread-local hook, so it will only capture events for
-/// windows created on the same thread.
 pub struct KeyboardHook {
     hook: Rc<HookInner>,
     hwnd: HWND,

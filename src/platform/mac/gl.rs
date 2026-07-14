@@ -96,7 +96,7 @@ impl GlContext {
         parent.addSubview(&view);
 
         let context = view.openGLContext().ok_or_else(|| {
-            OpenGlError::CreateFailed("Failed to get NSOpenGLContext from NSOpenGLView".into())
+            OpenGlError::Platform("Failed to get NSOpenGLContext from NSOpenGLView".into())
         })?;
 
         unsafe {
@@ -107,7 +107,7 @@ impl GlContext {
         let bundle = {
             CFBundle::bundle_with_identifier(Some(&CFString::from_static_str("com.apple.opengl")))
                 .ok_or_else(|| {
-                OpenGlError::CreateFailed("Failed to get the 'com.apple.opengl' CFBundle".into())
+                OpenGlError::Platform("Failed to get the 'com.apple.opengl' CFBundle".into())
             })?
         };
 

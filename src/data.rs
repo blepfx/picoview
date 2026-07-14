@@ -414,6 +414,30 @@ pub enum Exchange {
     Files(Vec<PathBuf>),
 }
 
+impl From<String> for Exchange {
+    fn from(s: String) -> Self {
+        Exchange::Text(s)
+    }
+}
+
+impl From<&str> for Exchange {
+    fn from(s: &str) -> Self {
+        Exchange::Text(s.to_string())
+    }
+}
+
+impl From<Vec<PathBuf>> for Exchange {
+    fn from(paths: Vec<PathBuf>) -> Self {
+        Exchange::Files(paths)
+    }
+}
+
+impl From<&[PathBuf]> for Exchange {
+    fn from(paths: &[PathBuf]) -> Self {
+        Exchange::Files(paths.to_vec())
+    }
+}
+
 /// The effect a drag-and-drop operation is expected to have
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

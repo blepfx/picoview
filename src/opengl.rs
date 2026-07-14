@@ -56,27 +56,40 @@ impl GlFormat {
 /// A requested OpenGL configuration for a window
 #[derive(Debug, Clone, Copy)]
 pub struct GlConfig {
-    /// OpenGL version to request
+    /// OpenGL version to request.
+    ///
+    /// Note that the actual version may be different (higher or lower)
+    /// depending on the platform and driver support. You can query the actual
+    /// version after context creation.
     pub version: GlVersion,
 
-    /// Output framebuffer format
+    /// Whether to enable debug mode extension, if available.
+    ///
+    /// Note that this is only a request, and the actual context may not have
+    /// debug mode enabled.
+    pub debug: bool,
+
+    /// Output framebuffer format.
+    ///
+    /// Note that the actual format may be a superset of the requested format
+    /// (e.g. requesting RGB8 may result in RGBA8 being used).
     pub format: GlFormat,
 
-    /// Whether to use double buffering
-    pub double_buffer: bool,
+    /// Whether to use double buffering.
+    ///
+    /// Set to `None` if you do not care.
+    pub double_buffer: Option<bool>,
 
-    /// Whether to force hardware acceleration (if true, fails if only software
-    /// opengl renderers are available)
-    pub force_hardware: bool,
-
-    /// Whether to enable debug mode extension
-    pub debug: bool,
+    /// Whether to use hardware acceleration.
+    ///
+    /// Set to `None` if you do not care.
+    pub hardware_acceleration: Option<bool>,
 
     /// Whether to perform sRGB gamma correction when writing to the output
     /// framebuffer
     pub srgb: bool,
 
-    /// Number of samples for multisample anti-aliasing, set to 0 to disable
+    /// Number of samples for multisample anti-aliasing, set to 0/1 to disable
     /// MSAA
     pub msaa_count: u8,
 }
@@ -85,8 +98,8 @@ impl Default for GlConfig {
     fn default() -> Self {
         Self {
             version: GlVersion::Compat(1, 1),
-            double_buffer: true,
-            force_hardware: false,
+            double_buffer: None,
+            hardware_acceleration: None,
             debug: false,
             srgb: false,
             format: GlFormat::RGBA8_D24_S8,

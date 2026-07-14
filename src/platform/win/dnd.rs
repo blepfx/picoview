@@ -1,5 +1,6 @@
 use crate::Exchange;
-use crate::platform::win::util::{decode_hdrop, from_widestring};
+use crate::platform::win::util::exchange::decode_hdrop;
+use crate::platform::win::util::widestr::WideString;
 use crate::platform::win::window::{
     WM_USER_DND_ACCEPT, WM_USER_DND_ENTER, WM_USER_DND_HOVER, WM_USER_DND_LEAVE,
 };
@@ -10,11 +11,12 @@ use std::ptr::null_mut;
 use std::sync::Arc;
 use windows_sys::Win32::Foundation::{E_NOINTERFACE, HWND, POINT, S_OK};
 use windows_sys::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL};
-use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows_sys::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT, ReleaseStgMedium};
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, SendMessageW};
 use windows_sys::core::{GUID, HRESULT};
 
+/// COM implementation of [`IDropTarget`] that forwards events to a window.
 #[repr(C)]
 pub struct DropTargetImpl {
     base: IDropTarget,
@@ -165,9 +167,7 @@ impl DropTargetImpl {
                 };
 
                 if ((*(*data).vtbl).get_data)(data, &format, &mut medium) == S_OK {
-                    let files = decode_hdrop(medium.u.hGlobal);
-
-                    return Exchange::Files(files);
+                    return Exchange::Files(decode_hdrop(medium.u.hGlobal));
                 }
             }
 
@@ -184,10 +184,20 @@ impl DropTargetImpl {
 
                 if ((*(*data).vtbl).get_data)(data, &format, &mut medium) == S_OK {
                     let text = GlobalLock(medium.u.hGlobal);
-                    let text = from_widestring(text as *const u16);
+                    let text = if !text.is_null() {
+                        let size = GlobalSize(medium.u.hGlobal) as usize;
+                        let text = std::slice::from_raw_parts(text as *const u8, size);
+                        Some(WideString::from_iter(text.iter().copied()).to_string_lossy())
+                    } else {
+                        None
+                    };
+
                     GlobalUnlock(medium.u.hGlobal);
                     ReleaseStgMedium(&mut medium);
-                    return Exchange::Text(text);
+
+                    if let Some(text) = text {
+                        return Exchange::Text(text);
+                    }
                 }
             }
 

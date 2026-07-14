@@ -1,4 +1,5 @@
 use crate::platform::PlatformOpenGl;
+use crate::platform::win::util::error::Win32Error;
 use crate::platform::win::util::wgl::{
     create_context_arb, create_context_fallback, create_pixel_format_arb,
     create_pixel_format_fallback, try_set_swap_interval,
@@ -18,22 +19,33 @@ use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 pub struct GlContext {
     /// The window our context was created for
     hwnd: HWND,
+    /// Window device context
     hdc: HDC,
+    /// Window OpenGL context
     hglrc: HGLRC,
-    gl_library: HMODULE,
+    /// Windows OpenGL module (used as a fallback for `wglGetProcAddress` when
+    /// it returns null)
+    hmodule: HMODULE,
 }
 
 impl GlContext {
     pub unsafe fn new(hwnd: HWND, config: crate::GlConfig) -> Result<Self, OpenGlError> {
         unsafe {
+            let hmodule = LoadLibraryA(c"opengl32.dll".as_ptr() as _);
+            if hmodule.is_null() {
+                return Err(Win32Error::last_error().into());
+            }
+
             let hdc = GetDC(hwnd);
-            let gl_library = LoadLibraryA(c"opengl32.dll".as_ptr() as *const _);
+            if hdc.is_null() {
+                return Err(Win32Error::last_error().into());
+            }
 
             let (format_id, format_desc) = create_pixel_format_arb(hdc, &config)
                 .or_else(|_| create_pixel_format_fallback(hdc, &config))
                 .map_err(|_| {
-                    FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
+                    FreeLibrary(hmodule);
                     OpenGlError::FormatUnsupported
                 })?;
 
@@ -42,8 +54,8 @@ impl GlContext {
             let hglrc = create_context_arb(hdc, &config)
                 .or_else(|_| create_context_fallback(hdc))
                 .map_err(|_| {
-                    FreeLibrary(gl_library);
                     ReleaseDC(hwnd, hdc);
+                    FreeLibrary(hmodule);
                     OpenGlError::VersionUnsupported
                 })?;
 
@@ -53,7 +65,7 @@ impl GlContext {
                 hwnd,
                 hdc,
                 hglrc,
-                gl_library,
+                hmodule,
             })
         }
     }
@@ -63,7 +75,7 @@ impl PlatformOpenGl for GlContext {
     fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
         unsafe {
             wglGetProcAddress(symbol.as_ptr() as *const _)
-                .or_else(|| GetProcAddress(self.gl_library, symbol.as_ptr() as *const _))
+                .or_else(|| GetProcAddress(self.hmodule, symbol.as_ptr() as *const _))
                 .map(|x| x as *const c_void)
                 .unwrap_or(null())
         }
@@ -100,7 +112,7 @@ impl Drop for GlContext {
             wglMakeCurrent(null_mut(), null_mut());
             wglDeleteContext(self.hglrc);
             ReleaseDC(self.hwnd, self.hdc);
-            FreeLibrary(self.gl_library);
+            FreeLibrary(self.hmodule);
         }
     }
 }

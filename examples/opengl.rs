@@ -147,6 +147,8 @@ impl<'a> WindowHandler for Handler<'a> {
             self.window.set_visible(false);
             self.window.set_size((500, 500));
             self.window.set_visible(true);
+            println!("clipboard contents: {:?}", self.window.get_clipboard());
+            self.window.set_clipboard("Hello from picoview! 🦀");
         }
     }
 

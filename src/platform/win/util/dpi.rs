@@ -1,66 +1,125 @@
-use crate::platform::win::util::proc_address;
-use std::sync::OnceLock;
-use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE, HWND, RECT};
+use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    AdjustWindowRectEx, WINDOW_EX_STYLE, WINDOW_STYLE,
+};
+use windows_sys::core::BOOL;
 
-/// https://learn.microsoft.com/en-us/windows/win32/hidpi/dpi-awareness-context
-pub const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE: isize = -3;
-
-/// Sets the DPI awareness for the current thread, if available.
-///
-/// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext
-///
-/// This function will load `SetThreadDpiAwarenessContext` symbol dynamically so
-/// it can work on older versions of Windows (Windows 7) where the function is
-/// not available. If the function is not available, it will return `None`.
-///
-/// # Safety
-/// - The `awareness` must be a valid DPI awareness mode.
-pub unsafe fn try_set_thread_dpi_awareness(awareness: isize) -> Option<isize> {
-    static FUNC: OnceLock<Option<unsafe extern "system" fn(isize) -> isize>> = OnceLock::new();
-    unsafe {
-        FUNC.get_or_init(|| proc_address(c"user32.dll", c"SetThreadDpiAwarenessContext"))
-            .map(|f| f(awareness))
-    }
-}
-
-/// Returns the DPI for the given window, if available.
-///
-/// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow
-///
-/// This function will load `GetDpiForWindow` symbol dynamically so it can work
-/// on older versions of Windows (Windows 7) where the function is not
-/// available. If the function is not available, it will return `None`.
-///
-/// # Safety
-/// - The `window` must be a valid window handle for the lifetime of the call.
-pub unsafe fn try_get_dpi_for_window(window: HWND) -> Option<u32> {
-    static FUNC: OnceLock<Option<unsafe extern "system" fn(HWND) -> u32>> = OnceLock::new();
-    unsafe {
-        FUNC.get_or_init(|| proc_address(c"user32.dll", c"GetDpiForWindow"))
-            .map(|f| f(window))
-    }
+/// A context for managing DPI awareness and querying DPI information on
+/// Windows.
+#[derive(Default)]
+pub struct DpiContext {
+    user32: HMODULE,
+    get_dpi_for_window: Option<unsafe extern "system" fn(HWND) -> u32>,
+    set_thread_dpi_awareness_context: Option<unsafe extern "system" fn(isize) -> isize>,
+    adjust_window_rect_ex_for_dpi: Option<
+        unsafe extern "system" fn(*mut RECT, WINDOW_STYLE, BOOL, WINDOW_EX_STYLE, u32) -> BOOL,
+    >,
 }
 
 /// A RAII guard that sets the DPI awareness for the current thread, and
 /// restores the previous DPI awareness state when dropped.
-pub struct ThreadDpiAwareness(Option<isize>);
+pub struct DpiAwarenessGuard<'a> {
+    context: &'a DpiContext,
+    previous: isize,
+}
 
-impl ThreadDpiAwareness {
-    /// Set the awareness to [`DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE`] for the
-    /// current thread, if supported.
-    pub fn per_monitor_aware() -> Self {
+impl DpiContext {
+    /// Creates a new [`DpiContext`], loading the necessary functions from
+    /// `user32.dll` at runtime (so it can work on older versions of Windows,
+    /// like Windows 7, where DPI awareness functions are not available).
+    pub fn new() -> Self {
         unsafe {
-            Self(try_set_thread_dpi_awareness(
-                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE,
-            ))
+            let user32 = LoadLibraryA(c"user32.dll".as_ptr() as *const _);
+            if user32.is_null() {
+                // weird, but okay, just return a default context that does nothing
+                return Self::default();
+            }
+
+            let set_thread_dpi_awareness_context =
+                GetProcAddress(user32, c"SetThreadDpiAwarenessContext".as_ptr() as *const _)
+                    .map(|x| std::mem::transmute_copy(&x));
+            let get_dpi_for_window =
+                GetProcAddress(user32, c"GetDpiForWindow".as_ptr() as *const _)
+                    .map(|x| std::mem::transmute_copy(&x));
+            let adjust_window_rect_ex_for_dpi =
+                GetProcAddress(user32, c"AdjustWindowRectExForDpi".as_ptr() as *const _)
+                    .map(|x| std::mem::transmute_copy(&x));
+
+            Self {
+                user32,
+                get_dpi_for_window,
+                set_thread_dpi_awareness_context,
+                adjust_window_rect_ex_for_dpi,
+            }
+        }
+    }
+
+    /// Gets the DPI scale for the given window, if available. Returns `None` if
+    /// the function is not available.
+    ///
+    /// # Safety
+    /// - The `hwnd` must be a valid window handle for the lifetime of the call.
+    pub unsafe fn dpi_for_window(&self, hwnd: HWND) -> Option<u32> {
+        self.get_dpi_for_window.map(|f| unsafe { f(hwnd) })
+    }
+
+    /// Calculates the required window rectangle for a given client rectangle,
+    /// taking into account the window styles and DPI scaling.
+    ///
+    /// Uses `AdjustWindowRectExForDpi` if available, otherwise falls back to
+    /// `AdjustWindowRectEx`.
+    pub fn adjust_window_rect_ex_for_dpi(
+        &self,
+        mut rect: RECT,
+        style: WINDOW_STYLE,
+        ex_style: WINDOW_EX_STYLE,
+        has_menu: bool,
+        dpi: u32,
+    ) -> Option<RECT> {
+        if let Some(adjust) = self.adjust_window_rect_ex_for_dpi {
+            let success = unsafe { adjust(&mut rect, style, has_menu as BOOL, ex_style, dpi) };
+            if success != 0 { Some(rect) } else { None }
+        } else {
+            // fallback to the old function, which will not scale the rect for dpi
+            // which is fine because then we would be dpi-unaware anyway
+            let success =
+                unsafe { AdjustWindowRectEx(&mut rect, style, has_menu as BOOL, ex_style) };
+            if success != 0 { Some(rect) } else { None }
+        }
+    }
+
+    /// Set the thread DPI awareness to
+    /// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` for the duration of the
+    /// guard, if supported.
+    pub fn enter_per_monitor_aware_v2(&self) -> DpiAwarenessGuard<'_> {
+        /// https://learn.microsoft.com/en-us/windows/win32/hidpi/dpi-awareness-context
+        const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: isize = -4;
+
+        DpiAwarenessGuard {
+            context: self,
+            previous: self
+                .set_thread_dpi_awareness_context
+                .map(|f| unsafe { f(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) })
+                .unwrap_or(0),
         }
     }
 }
 
-impl Drop for ThreadDpiAwareness {
+impl Drop for DpiAwarenessGuard<'_> {
     fn drop(&mut self) {
-        if let Some(prev) = self.0 {
-            unsafe { try_set_thread_dpi_awareness(prev) };
+        if let Some(f) = self.context.set_thread_dpi_awareness_context {
+            unsafe { f(self.previous) };
+        }
+    }
+}
+
+impl Drop for DpiContext {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.user32.is_null() {
+                FreeLibrary(self.user32);
+            }
         }
     }
 }

@@ -216,8 +216,8 @@ impl<'a> Window<'a> {
     ///   is not supported on this device.
     /// - [`OpenGlError::VersionUnsupported`] if the requested OpenGL version is
     ///   not supported on this device.
-    /// - [`OpenGlError::CreateFailed`] if the context could not be created for
-    ///   a platform-specific reason.
+    /// - [`OpenGlError::Platform`] if the context could not be created for a
+    ///   platform-specific reason.
     #[inline]
     pub fn opengl(&self) -> Result<GlContext<'a>, OpenGlError> {
         self.0.opengl().map(GlContext)
@@ -353,8 +353,8 @@ impl<'a> Window<'a> {
     ///
     /// Returns `true` if the action was handled by the OS
     #[inline]
-    pub fn set_clipboard(&self, data: Exchange) -> bool {
-        self.0.set_clipboard(data)
+    pub fn set_clipboard(&self, data: impl Into<Exchange>) -> bool {
+        self.0.set_clipboard(data.into())
     }
 
     /// Get the current text contents of the system clipboard, if any.

@@ -1,4 +1,4 @@
-use crate::platform::win::util::Win32Error;
+use crate::platform::win::util::error::Win32Error;
 use crate::platform::win::util::window::create_window;
 use crate::{GlConfig, GlVersion, OpenGlError};
 use std::collections::HashSet;
@@ -35,8 +35,8 @@ pub const WGL_BLUE_BITS_ARB: i32 = 0x2019;
 pub const WGL_ALPHA_BITS_ARB: i32 = 0x201B;
 pub const WGL_DEPTH_BITS_ARB: i32 = 0x2022;
 pub const WGL_STENCIL_BITS_ARB: i32 = 0x2023;
+pub const WGL_NO_ACCELERATION_ARB: i32 = 0x2025;
 pub const WGL_FULL_ACCELERATION_ARB: i32 = 0x2027;
-pub const WGL_GENERIC_ACCELERATION_ARB: i32 = 0x2026;
 pub const WGL_TYPE_RGBA_ARB: i32 = 0x202B;
 pub const WGL_SAMPLE_BUFFERS_ARB: i32 = 0x2041;
 pub const WGL_SAMPLES_ARB: i32 = 0x2042;
@@ -168,12 +168,17 @@ pub unsafe fn create_pixel_format_fallback(
     unsafe {
         let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
 
+        let mut flags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL;
+        match config.double_buffer {
+            None => flags |= PFD_DOUBLEBUFFER_DONTCARE,
+            Some(true) => flags |= PFD_DOUBLEBUFFER,
+            Some(false) => {}
+        }
+
         let pfd = PIXELFORMATDESCRIPTOR {
             nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
             nVersion: 1,
-            dwFlags: PFD_DRAW_TO_WINDOW
-                | PFD_SUPPORT_OPENGL
-                | (PFD_DOUBLEBUFFER * config.double_buffer as u32),
+            dwFlags: flags,
             iPixelType: PFD_TYPE_RGBA,
             cColorBits: (red + green + blue) as _,
             cAlphaBits: alpha as _,
@@ -185,6 +190,7 @@ pub unsafe fn create_pixel_format_fallback(
 
         let pixel_format = ChoosePixelFormat(hdc, &pfd);
         if pixel_format == 0 {
+            println!("Failed to choose pixel format with fallback");
             Err(OpenGlError::FormatUnsupported)
         } else {
             Ok((pixel_format, pfd))
@@ -215,7 +221,6 @@ pub unsafe fn create_pixel_format_arb(
             let mut pixel_format_attribs = vec![
                 WGL_DRAW_TO_WINDOW_ARB, 1,
                 WGL_SUPPORT_OPENGL_ARB, 1,
-                WGL_DOUBLE_BUFFER_ARB, config.double_buffer as i32,
                 WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
                 WGL_RED_BITS_ARB, red as _,
                 WGL_GREEN_BITS_ARB, green as _,
@@ -225,26 +230,32 @@ pub unsafe fn create_pixel_format_arb(
                 WGL_STENCIL_BITS_ARB, stencil as _,
             ];
 
-            if config.force_hardware {
+            if let Some(double_buffer) = config.double_buffer {
                 pixel_format_attribs
-                    .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB]);
-            } else {
-                pixel_format_attribs
-                    .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_GENERIC_ACCELERATION_ARB]);
+                    .extend_from_slice(&[WGL_DOUBLE_BUFFER_ARB, double_buffer as i32]);
             }
 
-            if wgl.ext_multisample {
+            if let Some(acceleration) = config.hardware_acceleration {
+                if acceleration {
+                    pixel_format_attribs
+                        .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB]);
+                } else {
+                    pixel_format_attribs
+                        .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_NO_ACCELERATION_ARB]);
+                }
+            }
+
+            if wgl.ext_multisample && config.msaa_count > 1 {
                 pixel_format_attribs.extend_from_slice(&[
                     WGL_SAMPLE_BUFFERS_ARB,
-                    (config.msaa_count != 0) as i32,
+                    1,
                     WGL_SAMPLES_ARB,
                     config.msaa_count as i32,
                 ]);
             }
 
-            if wgl.ext_framebuffer_srgb {
-                pixel_format_attribs
-                    .extend_from_slice(&[WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, config.srgb as i32]);
+            if wgl.ext_framebuffer_srgb && config.srgb {
+                pixel_format_attribs.extend_from_slice(&[WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, 1]);
             }
 
             pixel_format_attribs.push(0);
@@ -263,6 +274,10 @@ pub unsafe fn create_pixel_format_arb(
         );
 
         if num_formats == 0 {
+            println!(
+                "Failed to choose pixel format with attributes: {:?}",
+                pixel_format_attribs
+            );
             return Err(OpenGlError::FormatUnsupported);
         }
 
@@ -274,6 +289,10 @@ pub unsafe fn create_pixel_format_arb(
             &mut pfd,
         ) == 0
         {
+            println!(
+                "Failed to describe pixel format {} with attributes: {:?}",
+                format_id, pixel_format_attribs
+            );
             return Err(OpenGlError::FormatUnsupported);
         }
 
