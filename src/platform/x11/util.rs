@@ -1,4 +1,10 @@
-use crate::{MouseCursor, Point};
+pub mod connection;
+pub mod cursor;
+pub mod info;
+pub mod input;
+pub mod visual;
+
+use crate::Point;
 use std::ffi::c_ulong;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -62,9 +68,9 @@ pub fn window_position(conn: &Connection, window_id: c_ulong) -> Option<Point> {
 
     let status = unsafe {
         XTranslateCoordinates(
-            conn.display(),
+            conn.as_raw(),
             window_id,
-            XDefaultRootWindow(conn.display()),
+            XDefaultRootWindow(conn.as_raw()),
             0,
             0,
             &mut x,
@@ -85,179 +91,10 @@ pub fn window_position(conn: &Connection, window_id: c_ulong) -> Option<Point> {
 
 pub use connection::*;
 pub use cursor::*;
-pub use events::*;
 pub use info::*;
 pub use input::*;
 pub use selection::*;
 pub use visual::*;
-
-mod connection {
-    use raw_window_handle::XlibDisplayHandle;
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::ffi::{CStr, c_char, c_ulong};
-    use std::ptr::NonNull;
-    use std::rc::Rc;
-    use std::sync::Mutex;
-    use x11::xlib::*;
-
-    /// A cloneable handle to an X11 display connection. The connection is
-    /// automatically closed when all handles are dropped.
-    #[derive(Clone)]
-    pub struct Connection(Rc<ConnectionInner>);
-
-    impl Connection {
-        /// Open a new connection to the X server. Returns `None` if the
-        /// connection could not be established.
-        pub fn open() -> Option<Self> {
-            unsafe {
-                let display = XOpenDisplay(std::ptr::null());
-                if display.is_null() {
-                    return None;
-                }
-
-                GlobalState::with(|global| {
-                    if !global.closed {
-                        global.errors.insert(display.addr(), None);
-                    }
-                });
-
-                Some(Self(Rc::new(ConnectionInner {
-                    display,
-                    atoms: RefCell::new(HashMap::new()),
-                })))
-            }
-        }
-
-        /// Get the last error that occurred on this display connection.
-        pub fn last_error(&self) -> Result<(), String> {
-            let error = GlobalState::with(|global| {
-                global
-                    .errors
-                    .get_mut(&(self.0.display.addr()))
-                    .and_then(|x| x.take())
-            });
-
-            match error {
-                Some(error) => Err(error),
-                None => Ok(()),
-            }
-        }
-
-        /// Get a raw-window-handle display handle to this connection.
-        pub fn display_handle(&self) -> XlibDisplayHandle {
-            unsafe {
-                XlibDisplayHandle::new(
-                    NonNull::new(self.display() as *mut _),
-                    XDefaultScreen(self.display()) as _,
-                )
-            }
-        }
-
-        /// Get the raw `Display` pointer for this connection for `xlib` calls
-        pub fn display(&self) -> *mut Display {
-            self.0.display
-        }
-
-        /// Get the atom for the given name, caching it for future calls
-        pub fn atom(&self, name: &'static CStr) -> c_ulong {
-            *self
-                .0
-                .atoms
-                .borrow_mut()
-                .entry(name.as_ptr().addr())
-                .or_insert_with(|| unsafe { XInternAtom(self.display(), name.as_ptr(), 0) })
-        }
-    }
-
-    struct ConnectionInner {
-        display: *mut Display,
-        atoms: RefCell<HashMap<usize, c_ulong>>,
-    }
-
-    impl Drop for ConnectionInner {
-        fn drop(&mut self) {
-            GlobalState::with(|global| {
-                if global.closed {
-                    return;
-                }
-
-                global.errors.remove(&self.display.addr());
-                unsafe {
-                    XCloseDisplay(self.display);
-                }
-            });
-        }
-    }
-
-    /// Global Xlib state, used for global error handling (because error handler
-    /// is global for some reason) and a use-after-free workaround (see
-    /// [`Self::closed`] field)
-    struct GlobalState {
-        errors: HashMap<usize, Option<String>>,
-
-        // NOTE: this is a stupid workaround for an Xlib bug (?) where
-        // libX11 calls XFreeThreads on dtor
-        // which happens _before_ non-main threads are exited, causing
-        // a use-after-free
-        closed: bool,
-    }
-
-    impl GlobalState {
-        fn with<R>(f: impl FnOnce(&mut Self) -> R) -> R {
-            static GLOBAL: Mutex<Option<GlobalState>> = Mutex::new(None);
-            f(GLOBAL.lock().expect("poisoned").get_or_insert_with(|| {
-                unsafe {
-                    XSetErrorHandler(Some(error_handler));
-                    libc::atexit(exit_handler);
-                }
-
-                Self {
-                    errors: HashMap::new(),
-                    closed: false,
-                }
-            }))
-        }
-    }
-
-    extern "C" fn exit_handler() {
-        GlobalState::with(|global| {
-            // we dont want to keep any memory allocated after this point, especially
-            // because when used as a plugin (as a dylib), the static memory will NOT be
-            // unloaded automatically
-            global.errors = HashMap::new();
-            global.closed = true;
-        });
-    }
-
-    unsafe extern "C" fn error_handler(dpy: *mut Display, err: *mut XErrorEvent) -> i32 {
-        GlobalState::with(|global| {
-            let Some(conn) = global.errors.get_mut(&(dpy as usize)) else {
-                return 0;
-            };
-
-            if conn.is_some() {
-                return 0;
-            }
-
-            unsafe {
-                let mut buf = [0 as c_char; 255];
-
-                XGetErrorText(
-                    (*err).display,
-                    (*err).error_code.into(),
-                    buf.as_mut_ptr(),
-                    254, // leave space for null terminator
-                );
-
-                buf[254] = 0; // force null terminator just in case
-                conn.replace(CStr::from_ptr(buf.as_mut_ptr()).to_string_lossy().into());
-            }
-
-            0
-        })
-    }
-}
 
 mod selection {
     use super::Connection;
@@ -277,7 +114,7 @@ mod selection {
         Empty,
         /// Selection is owned by the current window and must be handled
         /// separately to avoid a deadlock
-        Recursive,
+        Reentrant,
     }
 
     /// Encode a list of file paths into a `text/uri-list` selection value
@@ -351,15 +188,15 @@ mod selection {
         }
 
         unsafe {
-            let owner = XGetSelectionOwner(conn.display(), selection);
+            let owner = XGetSelectionOwner(conn.as_raw(), selection);
             if owner == 0 {
                 return Err(SelectionError::Empty);
             } else if window == owner {
-                return Err(SelectionError::Recursive);
+                return Err(SelectionError::Reentrant);
             }
 
             let result = XConvertSelection(
-                conn.display(),
+                conn.as_raw(),
                 selection,
                 target,
                 property,
@@ -371,11 +208,11 @@ mod selection {
                 return Err(SelectionError::Empty);
             }
 
-            XSync(conn.display(), 0);
+            XSync(conn.as_raw(), 0);
 
             let event = {
                 let mut event = zeroed();
-                XIfEvent(conn.display(), &mut event, Some(event_filter), null_mut());
+                XIfEvent(conn.as_raw(), &mut event, Some(event_filter), null_mut());
                 event.selection
             };
 
@@ -390,7 +227,7 @@ mod selection {
             let mut data = null_mut();
 
             let result = XGetWindowProperty(
-                conn.display(),
+                conn.as_raw(),
                 event.requestor,
                 event.property,
                 0,
@@ -452,8 +289,8 @@ mod selection {
                 Ok(Exchange::Empty) => continue,
                 Ok(exchange) => return Ok(exchange),
                 Err(SelectionError::Empty) => continue,
-                Err(SelectionError::Recursive) => {
-                    return Err(SelectionError::Recursive);
+                Err(SelectionError::Reentrant) => {
+                    return Err(SelectionError::Reentrant);
                 }
             }
         }
@@ -470,7 +307,7 @@ mod selection {
     ) {
         unsafe {
             XSendEvent(
-                conn.display(),
+                conn.as_raw(),
                 source,
                 0,
                 0,
@@ -479,7 +316,7 @@ mod selection {
                         type_: ClientMessage,
                         serial: 0,
                         send_event: 1,
-                        display: conn.display(),
+                        display: conn.as_raw(),
                         window: source,
                         message_type: if finished {
                             conn.atom(c"XdndFinished")
@@ -510,619 +347,7 @@ mod selection {
             );
 
             // just in case
-            XFlush(conn.display());
-        }
-    }
-}
-
-mod visual {
-    use super::Connection;
-    use std::ffi::c_int;
-    use std::mem::zeroed;
-    use std::ptr::null_mut;
-    use x11::glx::GLXFBConfig;
-    use x11::xlib::*;
-
-    /// A visual config is used for creating a backing surface for an X window
-    /// (and optionally an OpenGl context)
-    pub struct VisualConfig {
-        pub fb_config: GLXFBConfig,
-        pub depth: c_int,
-        pub visual: *mut Visual,
-    }
-
-    impl VisualConfig {
-        /// Copy the visual and depth from the parent window
-        pub fn copy_from_parent() -> Self {
-            Self {
-                depth: CopyFromParent,
-                visual: null_mut(),
-                fb_config: null_mut(),
-            }
-        }
-
-        /// Try to find a true-color visual with the given depth, if available.
-        pub fn try_new_true_color(conn: &Connection, depth: u8) -> Option<Self> {
-            let visual = unsafe {
-                let mut visual = XVisualInfo { ..zeroed() };
-                match XMatchVisualInfo(
-                    conn.display(),
-                    XDefaultScreen(conn.display()),
-                    depth as _,
-                    TrueColor,
-                    &mut visual,
-                ) {
-                    0 => return None,
-                    _ => visual,
-                }
-            };
-
-            Some(Self {
-                depth: depth as _,
-                visual: visual.visual,
-                fb_config: null_mut(),
-            })
-        }
-    }
-}
-
-mod input {
-    use super::Connection;
-    use crate::{Key, Modifiers};
-    use std::ffi::{c_int, c_uint};
-    use x11::xinput2::*;
-    use x11::xlib::*;
-
-    /// Check if the given [`KeyRelease`] event is an auto-repeat and not a
-    /// physical release event.
-    pub fn is_autorepeat_release(conn: &Connection, event: &XKeyEvent) -> bool {
-        if event.type_ != KeyRelease {
-            return false;
-        }
-
-        unsafe {
-            let mut next = XEvent { type_: 0 };
-            if XEventsQueued(conn.display(), 0 /* QueuedAlready */) == 0 {
-                return false;
-            }
-
-            if XPeekEvent(conn.display(), &mut next) == 0 {
-                return false;
-            }
-
-            if next.type_ != KeyPress {
-                return false;
-            }
-
-            let next = next.key;
-            if next.keycode != event.keycode || next.time != event.time {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    /// Convert event key code to a `Key` enum variant, if possible.
-    pub fn keycode_to_key(code: c_uint) -> Option<Key> {
-        Some(match code {
-            0x09 => Key::Escape,
-            0x0A => Key::D1,
-            0x0B => Key::D2,
-            0x0C => Key::D3,
-            0x0D => Key::D4,
-            0x0E => Key::D5,
-            0x0F => Key::D6,
-            0x10 => Key::D7,
-            0x11 => Key::D8,
-            0x12 => Key::D9,
-            0x13 => Key::D0,
-            0x14 => Key::Minus,
-            0x15 => Key::Equal,
-            0x16 => Key::Backspace,
-            0x17 => Key::Tab,
-            0x18 => Key::Q,
-            0x19 => Key::W,
-            0x1A => Key::E,
-            0x1B => Key::R,
-            0x1C => Key::T,
-            0x1D => Key::Y,
-            0x1E => Key::U,
-            0x1F => Key::I,
-            0x20 => Key::O,
-            0x21 => Key::P,
-            0x22 => Key::BracketLeft,
-            0x23 => Key::BracketRight,
-            0x24 => Key::Enter,
-            0x25 => Key::ControlLeft,
-            0x26 => Key::A,
-            0x27 => Key::S,
-            0x28 => Key::D,
-            0x29 => Key::F,
-            0x2A => Key::G,
-            0x2B => Key::H,
-            0x2C => Key::J,
-            0x2D => Key::K,
-            0x2E => Key::L,
-            0x2F => Key::Semicolon,
-            0x30 => Key::Quote,
-            0x31 => Key::Backquote,
-            0x32 => Key::ShiftLeft,
-            0x33 => Key::Backslash,
-            0x34 => Key::Z,
-            0x35 => Key::X,
-            0x36 => Key::C,
-            0x37 => Key::V,
-            0x38 => Key::B,
-            0x39 => Key::N,
-            0x3A => Key::M,
-            0x3B => Key::Comma,
-            0x3C => Key::Period,
-            0x3D => Key::Slash,
-            0x3E => Key::ShiftRight,
-            0x3F => Key::NumpadMultiply,
-            0x40 => Key::AltLeft,
-            0x41 => Key::Space,
-            0x42 => Key::CapsLock,
-            0x43 => Key::F1,
-            0x44 => Key::F2,
-            0x45 => Key::F3,
-            0x46 => Key::F4,
-            0x47 => Key::F5,
-            0x48 => Key::F6,
-            0x49 => Key::F7,
-            0x4A => Key::F8,
-            0x4B => Key::F9,
-            0x4C => Key::F10,
-            0x4D => Key::NumLock,
-            0x4E => Key::ScrollLock,
-            0x4F => Key::Numpad7,
-            0x50 => Key::Numpad8,
-            0x51 => Key::Numpad9,
-            0x52 => Key::NumpadSubtract,
-            0x53 => Key::Numpad4,
-            0x54 => Key::Numpad5,
-            0x55 => Key::Numpad6,
-            0x56 => Key::NumpadAdd,
-            0x57 => Key::Numpad1,
-            0x58 => Key::Numpad2,
-            0x59 => Key::Numpad3,
-            0x5A => Key::Numpad0,
-            0x5B => Key::NumpadDecimal,
-            0x5F => Key::F11,
-            0x60 => Key::F12,
-            0x68 => Key::NumpadEnter,
-            0x69 => Key::ControlRight,
-            0x6A => Key::NumpadDivide,
-            0x6B => Key::PrintScreen,
-            0x6C => Key::AltRight,
-            0x6E => Key::Home,
-            0x6F => Key::ArrowUp,
-            0x70 => Key::PageUp,
-            0x71 => Key::ArrowLeft,
-            0x72 => Key::ArrowRight,
-            0x73 => Key::End,
-            0x74 => Key::ArrowDown,
-            0x75 => Key::PageDown,
-            0x76 => Key::Insert,
-            0x77 => Key::Delete,
-            0x7D => Key::NumpadEqual,
-            0x81 => Key::NumpadComma,
-            0x85 => Key::MetaLeft,
-            0x86 => Key::MetaRight,
-            0x87 => Key::ContextMenu,
-            _ => return None,
-        })
-    }
-
-    /// Convert modifier mask to a set of `Modifiers` flags, if possible.
-    pub fn keymask_to_mods(mods: c_uint) -> Modifiers {
-        Modifiers {
-            alt: (mods & Mod1Mask) != 0,
-            ctrl: (mods & ControlMask) != 0,
-            shift: (mods & ShiftMask) != 0,
-            meta: (mods & Mod4Mask) != 0,
-            num_lock: (mods & Mod2Mask) != 0,
-            caps_lock: (mods & LockMask) != 0,
-            scroll_lock: (mods & Mod5Mask) != 0,
-        }
-    }
-
-    /// https://codebrowser.dev/gtk/include/X11/extensions/XI2.h.html
-    /// Valid only for XInput 2.4+
-    #[allow(non_upper_case_globals)]
-    pub const XI_GesturePinchBegin: i32 = 27;
-    #[allow(non_upper_case_globals)]
-    pub const XI_GesturePinchUpdate: i32 = 28;
-    #[allow(non_upper_case_globals)]
-    pub const XI_GesturePinchEnd: i32 = 29;
-
-    /// Gesture pinch event, valid only for XInput 2.4+
-    /// Copied from https://codebrowser.dev/gtk/include/X11/extensions/XI2.h.html
-    #[repr(C)]
-    #[derive(Debug, Clone, Copy)]
-    pub struct XIGesturePinchEvent {
-        pub header: XIEvent,
-
-        pub deviceid: i32,
-        pub sourceid: i32,
-        pub detail: i32,
-        pub root: Window,
-        pub event: Window,
-        pub child: Window,
-        pub root_x: f64,
-        pub root_y: f64,
-        pub event_x: f64,
-        pub event_y: f64,
-
-        pub delta_x: f64,
-        pub delta_y: f64,
-        pub delta_unaccel_x: f64,
-        pub delta_unaccel_y: f64,
-        pub scale: f64,
-        pub delta_angle: f64,
-
-        pub mods: XIModifierState,
-        pub group: XIGroupState,
-    }
-
-    /// Information about the XInput2 extension.
-    pub struct XI2Info {
-        pub ext_opcode: c_int,
-    }
-
-    /// Information about an axis of a physical input device.
-    #[derive(Debug)]
-    pub struct XI2DeviceAxis {
-        pub source_id: c_int,
-        pub valuator: c_int,
-        pub is_horizontal: bool,
-        pub increment: f64,
-        pub position: Option<f64>,
-    }
-
-    impl XI2Info {
-        /// Query the XInput2 extension and return its opcode if available.
-        pub fn query(conn: &Connection) -> Option<Self> {
-            unsafe {
-                let mut ext_opcode = 0;
-                if XQueryExtension(
-                    conn.display(),
-                    c"XInputExtension".as_ptr() as _,
-                    &mut ext_opcode,
-                    &mut 0,
-                    &mut 0,
-                ) == 0
-                {
-                    None
-                } else {
-                    // announce that we support xinput 2.4
-                    XIQueryVersion(conn.display(), &mut 2, &mut 4);
-                    Some(Self { ext_opcode })
-                }
-            }
-        }
-    }
-
-    impl XI2DeviceAxis {
-        /// Get all available axes for physical devices.
-        pub fn list(conn: &Connection) -> Vec<Self> {
-            let mut result = Vec::new();
-            xi2_list_classes_for(conn, XIAllDevices, |device, class| {
-                if device.deviceid != class.sourceid {
-                    return; // physical devices only
-                }
-
-                if class._type == XIScrollClass {
-                    let info = unsafe { &*(class as *const _ as *const XIScrollClassInfo) };
-                    if info.scroll_type == XIScrollTypeHorizontal {
-                        result.push(Self {
-                            source_id: info.sourceid,
-                            valuator: info.number,
-                            increment: info.increment,
-                            position: None,
-                            is_horizontal: true,
-                        });
-                    } else if info.scroll_type == XIScrollTypeVertical {
-                        result.push(Self {
-                            source_id: info.sourceid,
-                            valuator: info.number,
-                            increment: info.increment,
-                            position: None,
-                            is_horizontal: false,
-                        });
-                    }
-                }
-            });
-
-            result
-        }
-
-        /// Reset the position of all axes to their current value.
-        pub fn reset_position(&mut self, conn: &Connection) {
-            xi2_list_classes_for(conn, self.source_id, |_, class| {
-                if class._type == XIValuatorClass {
-                    let info = unsafe { &*(class as *const _ as *const XIValuatorClassInfo) };
-                    if info.sourceid == self.source_id && info.number == self.valuator {
-                        self.position.replace(info.value);
-                    }
-                }
-            });
-        }
-
-        /// Track the delta of the axis position since the last reset or
-        /// track_position call.
-        pub fn track_position(&mut self, position: f64) -> f64 {
-            (position - self.position.replace(position).unwrap_or(position)) / self.increment
-        }
-    }
-
-    /// Enumerate all (device, class) pairs for the given device id or all
-    /// devices if `XIAllDevices` is given.
-    fn xi2_list_classes_for(
-        conn: &Connection,
-        device_id: c_int,
-        mut f: impl FnMut(&XIDeviceInfo, &XIAnyClassInfo),
-    ) {
-        unsafe {
-            let mut count = 0;
-            let info = XIQueryDevice(conn.display(), device_id, &mut count);
-            if info.is_null() {
-                return;
-            }
-
-            for i in 0..count {
-                let device = &*info.add(i as usize);
-                let classes =
-                    std::slice::from_raw_parts(device.classes, device.num_classes as usize);
-
-                for class in classes {
-                    let class = &**class;
-                    f(device, class);
-                }
-            }
-
-            XIFreeDeviceInfo(info as *mut _);
-        }
-    }
-}
-
-mod info {
-    use super::Connection;
-    use std::ffi::CStr;
-    use std::mem::zeroed;
-    use std::ptr::null_mut;
-    use std::str::FromStr;
-    use x11::xlib::*;
-    use x11::xrandr::*;
-
-    /// Get the DPI scaling factor from X resources, if available.
-    pub fn query_scale_dpi(conn: &Connection) -> Option<f64> {
-        unsafe {
-            let rms = XResourceManagerString(conn.display());
-            if rms.is_null() {
-                return None;
-            }
-
-            let db = XrmGetStringDatabase(rms);
-            if db.is_null() {
-                return None;
-            }
-
-            let mut value = XrmValue { ..zeroed() };
-            let result = XrmGetResource(
-                db,
-                c"Xft.dpi".as_ptr(),
-                c"Xft.Dpi".as_ptr(),
-                &mut null_mut(),
-                &mut value,
-            );
-
-            if result == 0 || value.addr.is_null() {
-                XrmDestroyDatabase(db);
-                return None;
-            }
-
-            let string = CStr::from_ptr(value.addr).to_string_lossy();
-            let Ok(value) = f64::from_str(&string) else {
-                XrmDestroyDatabase(db);
-                return None;
-            };
-
-            XrmDestroyDatabase(db);
-            Some(value)
-        }
-    }
-
-    /// Get the current refresh rate of the default screen by querying the
-    /// XRandR extension, if available.
-    pub fn query_refresh_rate(conn: &Connection) -> Option<f64> {
-        unsafe {
-            let has_randr = XRRQueryExtension(conn.display(), &mut 0, &mut 0);
-            if has_randr == 0 {
-                return None;
-            }
-
-            let resources =
-                XRRGetScreenResourcesCurrent(conn.display(), XDefaultRootWindow(conn.display()));
-            if resources.is_null() {
-                return None;
-            }
-
-            let mut max_rate: Option<f64> = None;
-            for crtc in 0..(*resources).ncrtc {
-                let crtc = (*resources).crtcs.add(crtc as usize).read();
-                let crtc_info = XRRGetCrtcInfo(conn.display(), resources, crtc);
-
-                if !crtc_info.is_null() && (*crtc_info).mode != 0 {
-                    for mode in 0..(*resources).nmode {
-                        let mode = (*resources).modes.add(mode as usize);
-
-                        if (*mode).id == (*crtc_info).mode {
-                            let rate = (*mode).dotClock as f64
-                                / ((*mode).hTotal as f64 * (*mode).vTotal as f64);
-
-                            //xvfb reports it as NaN
-                            if rate.is_finite() {
-                                max_rate = max_rate.map(|prev| prev.max(rate)).or(Some(rate));
-                            }
-                        }
-                    }
-                }
-
-                XRRFreeCrtcInfo(crtc_info);
-            }
-
-            XRRFreeScreenResources(resources);
-
-            max_rate
-        }
-    }
-}
-
-mod cursor {
-    use super::Connection;
-    use std::ffi::{CStr, c_ulong};
-    use std::mem::zeroed;
-    use x11::xcursor::XcursorLibraryLoadCursor;
-    use x11::xlib::*;
-
-    /// Empty cursor that can be used to hide the mouse cursor. It is
-    /// implemented by creating a 1x1 transparent pixmap and using it as the
-    /// cursor image.
-    pub struct EmptyCursor {
-        conn: Connection,
-        cursor: c_ulong,
-    }
-
-    impl EmptyCursor {
-        pub fn new(conn: Connection) -> Self {
-            unsafe {
-                const EMPTY: &[u8] = &[0];
-
-                let black = XColor { ..zeroed() };
-                let pixmap = XCreateBitmapFromData(
-                    conn.display(),
-                    XDefaultRootWindow(conn.display()),
-                    EMPTY.as_ptr() as _,
-                    1,
-                    1,
-                );
-
-                let cursor = XCreatePixmapCursor(
-                    conn.display(),
-                    pixmap,
-                    pixmap,
-                    &black as *const _ as *mut _,
-                    &black as *const _ as *mut _,
-                    0,
-                    0,
-                );
-
-                XFreePixmap(conn.display(), pixmap);
-
-                Self { conn, cursor }
-            }
-        }
-
-        pub fn cursor(&self) -> c_ulong {
-            self.cursor
-        }
-    }
-
-    impl Drop for EmptyCursor {
-        fn drop(&mut self) {
-            unsafe {
-                XFreeCursor(self.conn.display(), self.cursor);
-            }
-        }
-    }
-
-    /// Load a cursor by trying multiple names until one is found.
-    pub fn load_cursor_by_name(conn: &Connection, name: &[&CStr]) -> Option<c_ulong> {
-        for name in name {
-            let cursor = unsafe { XcursorLibraryLoadCursor(conn.display(), name.as_ptr()) };
-            if cursor != 0 {
-                return Some(cursor);
-            }
-        }
-
-        None
-    }
-
-    /// Load a cursor corresponding to the given `MouseCursor` variant.
-    pub fn load_cursor_by_enum(conn: &Connection, cursor: super::MouseCursor) -> Option<c_ulong> {
-        use super::MouseCursor::*;
-
-        match cursor {
-            Hidden => None,
-            Default => load_cursor_by_name(conn, &[c"left_ptr"]),
-            Hand => load_cursor_by_name(conn, &[c"hand2", c"hand1"]),
-            HandGrabbing => load_cursor_by_name(conn, &[c"closedhand", c"grabbing"]),
-            Help => load_cursor_by_name(conn, &[c"question_arrow"]),
-            Text => load_cursor_by_name(conn, &[c"text", c"xterm"]),
-            VerticalText => load_cursor_by_name(conn, &[c"vertical-text"]),
-            Working => load_cursor_by_name(conn, &[c"watch"]),
-            PtrWorking => load_cursor_by_name(conn, &[c"left_ptr_watch"]),
-            NotAllowed => load_cursor_by_name(conn, &[c"crossed_circle"]),
-            PtrNotAllowed => load_cursor_by_name(conn, &[c"no-drop", c"crossed_circle"]),
-            ZoomIn => load_cursor_by_name(conn, &[c"zoom-in"]),
-            ZoomOut => load_cursor_by_name(conn, &[c"zoom-out"]),
-            Alias => load_cursor_by_name(conn, &[c"link"]),
-            Copy => load_cursor_by_name(conn, &[c"copy"]),
-            Move => load_cursor_by_name(conn, &[c"move"]),
-            AllScroll => load_cursor_by_name(conn, &[c"all-scroll"]),
-            Cell => load_cursor_by_name(conn, &[c"plus"]),
-            Crosshair => load_cursor_by_name(conn, &[c"crosshair"]),
-            EResize => load_cursor_by_name(conn, &[c"right_side"]),
-            NResize => load_cursor_by_name(conn, &[c"top_side"]),
-            NeResize => load_cursor_by_name(conn, &[c"top_right_corner"]),
-            NwResize => load_cursor_by_name(conn, &[c"top_left_corner"]),
-            SResize => load_cursor_by_name(conn, &[c"bottom_side"]),
-            SeResize => load_cursor_by_name(conn, &[c"bottom_right_corner"]),
-            SwResize => load_cursor_by_name(conn, &[c"bottom_left_corner"]),
-            WResize => load_cursor_by_name(conn, &[c"left_side"]),
-            EwResize => load_cursor_by_name(conn, &[c"h_double_arrow"]),
-            NsResize => load_cursor_by_name(conn, &[c"v_double_arrow"]),
-            NwseResize => load_cursor_by_name(conn, &[c"bd_double_arrow", c"size_bdiag"]),
-            NeswResize => load_cursor_by_name(conn, &[c"fd_double_arrow", c"size_fdiag"]),
-            ColResize => load_cursor_by_name(conn, &[c"split_h", c"h_double_arrow"]),
-            RowResize => load_cursor_by_name(conn, &[c"split_v", c"v_double_arrow"]),
-        }
-    }
-}
-
-mod events {
-    use super::Connection;
-    use std::ptr::null;
-    use std::time::Duration;
-    use x11::xlib::*;
-
-    /// Wait for events with an optional timeout and return the number of
-    /// pending events after the wait.
-    pub fn wait_for_events(conn: &Connection, timeout: Option<Duration>) -> Result<u32, String> {
-        unsafe {
-            let timespec = timeout.map(|timeout| libc::timespec {
-                tv_sec: timeout.as_secs().try_into().unwrap_or(i64::MAX),
-                tv_nsec: timeout.subsec_nanos().into(),
-            });
-
-            let result = libc::ppoll(
-                &mut libc::pollfd {
-                    fd: XConnectionNumber(conn.display()) as _,
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-                1 as _,
-                timespec.as_ref().map(|x| x as *const _).unwrap_or(null()),
-                null(),
-            );
-
-            if result == -1 {
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-
-            Ok(XPending(conn.display()) as u32)
+            XFlush(conn.as_raw());
         }
     }
 }

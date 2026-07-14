@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::mem::zeroed;
 use std::os::unix::ffi::OsStrExt;
+use std::ptr::null_mut;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -94,14 +95,12 @@ pub struct WindowImpl {
     /// applications. TODO: implement drag into other windows.
     exchange_dragndrop: RefCell<Exchange>,
 
-    /// The empty 1x1 cursor used to hide the mouse cursor.
-    cursor_empty: EmptyCursor,
     /// Cache of X11 cursor IDs for each supported mouse cursor icon.
-    cursor_cache: RefCell<HashMap<MouseCursor, c_ulong>>,
+    cursor_cache: RefCell<HashMap<MouseCursor, X11Cursor>>,
 
     /// XInput2 extension info, `None` if not available. Used for high precision
     /// mouse events and gestures.
-    xi2_info: Option<XI2Info>,
+    xi2_info: Option<XI2Extension>,
     /// List of XInput2 device axes, used for computing scroll deltas.
     xi2_axes: RefCell<Vec<XI2DeviceAxis>>,
 
@@ -136,7 +135,7 @@ impl WindowImpl {
                 WindowError::Platform("Failed to connect to X server".to_string())
             })?;
 
-            let default_root = XDefaultRootWindow(connection.display());
+            let default_root = XDefaultRootWindow(connection.as_raw());
             let window_parent = match mode {
                 OpenMode::Blocking => default_root,
                 OpenMode::Embedded(RawWindowHandle::Xlib(handle)) => handle.window,
@@ -166,22 +165,22 @@ impl WindowImpl {
                         &connection,
                         if options.transparent { 24 } else { 32 },
                     )
-                })
-                // fallback to a generic config if all else fails
-                .unwrap_or(VisualConfig::copy_from_parent());
+                });
 
             // create a colormap with our config, needed for transparency, and for opengl
             // with some drivers (i think)
-            let window_colormap = XCreateColormap(
-                connection.display(),
-                default_root,
-                visual_info.visual,
-                AllocNone,
-            );
+            let window_colormap = visual_info.as_ref().map_or(CopyFromParent as _, |visual| {
+                XCreateColormap(
+                    connection.as_raw(),
+                    default_root,
+                    visual.info().visual,
+                    AllocNone,
+                )
+            });
 
             // finally, create our window
             let window_id = XCreateWindow(
-                connection.display(),
+                connection.as_raw(),
                 match mode {
                     OpenMode::Embedded(..) => window_parent,
                     _ => default_root,
@@ -191,9 +190,11 @@ impl WindowImpl {
                 200,
                 200,
                 0,
-                visual_info.depth,
+                visual_info
+                    .as_ref()
+                    .map_or(CopyFromParent, |x| x.info().depth),
                 InputOutput as u32,
-                visual_info.visual,
+                visual_info.as_ref().map_or(null_mut(), |x| x.info().visual),
                 CWEventMask | CWColormap | CWBorderPixel,
                 &mut XSetWindowAttributes {
                     border_pixel: 0,
@@ -213,9 +214,14 @@ impl WindowImpl {
 
             // failed to create a window, shouldnt happen, but just in case
             if window_id == 0 {
-                // free our colormap so we dont leak it
-                XFreeColormap(connection.display(), window_colormap);
+                if window_colormap != 0 {
+                    XFreeColormap(connection.as_raw(), window_colormap);
+                }
 
+                // if we have an Xlib error, return that.
+                connection.last_error().map_err(WindowError::Platform)?;
+
+                // otherwise return a generic error
                 return Err(WindowError::Platform(
                     "Failed to create X11 window".to_string(),
                 ));
@@ -223,12 +229,12 @@ impl WindowImpl {
 
             // transient hint (its not really a "parent" in the traditional sense)
             if let OpenMode::Transient(..) = mode {
-                XSetTransientForHint(connection.display(), window_id, window_parent);
+                XSetTransientForHint(connection.as_raw(), window_id, window_parent);
             }
 
             // ask for close window messages
             XSetWMProtocols(
-                connection.display(),
+                connection.as_raw(),
                 window_id,
                 &mut connection.atom(c"WM_DELETE_WINDOW"),
                 1,
@@ -236,7 +242,7 @@ impl WindowImpl {
 
             // check if we have xinput2 available, and if so, select for events we want to
             // receive
-            let (xi2_info, xi2_axes) = match XI2Info::query(&connection) {
+            let (xi2_info, xi2_axes) = match XI2Extension::new(&connection) {
                 Some(info) => {
                     let mut mask = [0; 4];
                     XISetMask(&mut mask, XI_Enter);
@@ -246,7 +252,7 @@ impl WindowImpl {
                     XISetMask(&mut mask, XI_GesturePinchUpdate);
                     XISetMask(&mut mask, XI_GesturePinchEnd);
                     XISelectEvents(
-                        connection.display(),
+                        connection.as_raw(),
                         window_id,
                         &mut XIEventMask {
                             deviceid: XIAllDevices,
@@ -256,7 +262,8 @@ impl WindowImpl {
                         1,
                     );
 
-                    (Some(info), XI2DeviceAxis::list(&connection))
+                    let axes = info.list_axes(&connection);
+                    (Some(info), axes)
                 }
 
                 None => (None, Vec::new()),
@@ -267,7 +274,7 @@ impl WindowImpl {
             {
                 let data = [5u32];
                 XChangeProperty(
-                    connection.display(),
+                    connection.as_raw(),
                     window_id,
                     connection.atom(c"XdndAware"),
                     connection.atom(c"ATOM"),
@@ -282,12 +289,11 @@ impl WindowImpl {
             let gl_context = options
                 .opengl
                 .map(|config| {
-                    GlContext::new(
-                        connection.clone(),
-                        window_id as _,
-                        config,
-                        visual_info.fb_config,
-                    )
+                    let Some(visual) = visual_info else {
+                        return Err(OpenGlError::FormatUnsupported);
+                    };
+
+                    GlContext::new(connection.clone(), window_id as _, config, visual)
                 })
                 .unwrap_or_else(|| Err(OpenGlError::NotRequested));
 
@@ -298,15 +304,13 @@ impl WindowImpl {
             // get a dpi scale for our window, default to 96dpi (1.0)
             let dpi_scale = query_scale_dpi(&connection).unwrap_or(96.0) / 96.0;
 
-            // sync to ensure all our commands are executed correctly and check for errors
-            // after
-            XSync(connection.display(), 0);
-
             // if we get an error here, it means the window creation failed
             if let Err(e) = connection.last_error() {
                 // cleanup so we dont leave a dangling window and colormap
-                XDestroyWindow(connection.display(), window_id);
-                XFreeColormap(connection.display(), window_colormap);
+                XDestroyWindow(connection.as_raw(), window_id);
+                if window_colormap != 0 {
+                    XFreeColormap(connection.as_raw(), window_colormap);
+                }
 
                 // :p
                 return Err(WindowError::Platform(e));
@@ -320,7 +324,7 @@ impl WindowImpl {
                 window_colormap,
 
                 waker: Arc::new(WindowWakerImpl {
-                    display: RwLock::new(connection.display()),
+                    display: RwLock::new(connection.as_raw()),
                     window_id,
                 }),
 
@@ -345,7 +349,6 @@ impl WindowImpl {
                 xi2_info,
                 xi2_axes: RefCell::new(xi2_axes),
 
-                cursor_empty: EmptyCursor::new(connection.clone()),
                 cursor_cache: RefCell::new(HashMap::new()),
 
                 handler: RefCell::new(None),
@@ -408,11 +411,11 @@ impl WindowImpl {
                 };
 
                 // flush any pending messages we could have
-                XFlush(self.connection.display());
+                XFlush(self.connection.as_raw());
 
                 // check for errors if we have any
                 self.connection
-                    .last_error()
+                    .async_last_error()
                     .map_err(WindowError::Platform)?;
 
                 // wait until we get at least 1 event, or until the next frame timer runs out
@@ -423,7 +426,7 @@ impl WindowImpl {
                 for _ in 0..num_events {
                     let mut event = XEvent { type_: 0 };
 
-                    if XNextEvent(self.connection.display(), &mut event) == 0 {
+                    if XNextEvent(self.connection.as_raw(), &mut event) == 0 {
                         self.handle_event(event);
 
                         // if we get a DestroyNotify event, exit immediately
@@ -445,106 +448,111 @@ impl WindowImpl {
             match event.type_ {
                 GenericEvent => {
                     let mut event = event.generic_event_cookie;
-                    let is_xi2 = self
-                        .xi2_info
-                        .as_ref()
-                        .is_some_and(|info| event.extension == info.ext_opcode);
 
-                    if is_xi2 {
-                        if XGetEventData(self.connection.display(), &mut event) == 0 {
-                            return;
-                        }
+                    if let Some(xi2) = self.xi2_info.as_ref() {
+                        xi2.query_event(&self.connection, &mut event, |event| {
+                            match (*event).evtype {
+                                XI_Motion => {
+                                    let event = &*(event as *mut _ as *const XIDeviceEvent);
 
-                        match event.evtype {
-                            XI_Motion => {
-                                let event = &*(event.data as *const XIDeviceEvent);
-                                let mask = std::slice::from_raw_parts(
-                                    event.valuators.mask,
-                                    event.valuators.mask_len as usize,
-                                );
+                                    let mask = std::slice::from_raw_parts(
+                                        event.valuators.mask,
+                                        event.valuators.mask_len as usize,
+                                    );
 
-                                if event.sourceid == event.deviceid {
-                                    self.handle_event_modifiers(keymask_to_mods(
-                                        event.mods.effective as _,
-                                    ));
+                                    if event.sourceid == event.deviceid {
+                                        self.handle_event_modifiers(keymask_to_mods(
+                                            event.mods.effective as _,
+                                        ));
 
-                                    self.handle_event_motion(event.event_x, event.event_y, true);
+                                        self.handle_event_motion(
+                                            event.event_x,
+                                            event.event_y,
+                                            true,
+                                        );
 
-                                    let mut scroll_x = 0.0;
-                                    let mut scroll_y = 0.0;
+                                        let mut scroll_x = 0.0;
+                                        let mut scroll_y = 0.0;
 
-                                    let mut values = event.valuators.values;
-                                    for i in 0..event.valuators.mask_len * 8 {
-                                        if !XIMaskIsSet(mask, i) {
-                                            continue;
-                                        }
+                                        let mut values = event.valuators.values;
+                                        for i in 0..event.valuators.mask_len * 8 {
+                                            if !XIMaskIsSet(mask, i) {
+                                                continue;
+                                            }
 
-                                        let value = {
-                                            let value = *values;
-                                            values = values.offset(1);
-                                            value
-                                        };
+                                            let value = {
+                                                let value = *values;
+                                                values = values.offset(1);
+                                                value
+                                            };
 
-                                        if let Some(axis) =
-                                            self.xi2_axes.borrow_mut().iter_mut().find(|axis| {
-                                                axis.source_id == event.sourceid
-                                                    && axis.valuator == i
-                                            })
-                                        {
-                                            let delta = axis.track_position(value);
-                                            if axis.is_horizontal {
-                                                scroll_x += delta;
-                                            } else {
-                                                scroll_y += delta;
+                                            if let Some(axis) =
+                                                self.xi2_axes.borrow_mut().iter_mut().find(|axis| {
+                                                    axis.source_id == event.sourceid
+                                                        && axis.valuator == i
+                                                })
+                                            {
+                                                let delta = axis.track_position(value);
+                                                match axis.kind {
+                                                    XI2AxisKind::HorizontalScroll => {
+                                                        scroll_x += delta
+                                                    }
+                                                    XI2AxisKind::VerticalScroll => {
+                                                        scroll_y += delta
+                                                    }
+                                                }
                                             }
                                         }
+
+                                        if scroll_x != 0.0 || scroll_y != 0.0 {
+                                            self.event(|e| e.mouse_scroll(scroll_x, scroll_y));
+                                        }
+                                    }
+                                }
+
+                                XI_Enter => {
+                                    for device in self.xi2_axes.borrow_mut().iter_mut() {
+                                        device.reset_position(&self.connection);
+                                    }
+                                }
+
+                                XI_HierarchyChanged => {
+                                    self.xi2_axes.replace(xi2.list_axes(&self.connection));
+                                }
+
+                                XI_GesturePinchBegin
+                                | XI_GesturePinchUpdate
+                                | XI_GesturePinchEnd => {
+                                    let event = &*(event as *mut _ as *const XIGesturePinchEvent);
+
+                                    if event.header.evtype == XI_GesturePinchBegin {
+                                        self.last_gesture_zoom.set(1.0);
                                     }
 
-                                    if scroll_x != 0.0 || scroll_y != 0.0 {
-                                        self.event(|e| e.mouse_scroll(scroll_x, scroll_y));
+                                    let new_zoom = event.scale;
+                                    let old_zoom = self.last_gesture_zoom.replace(new_zoom);
+
+                                    if new_zoom != old_zoom {
+                                        self.event(|e| e.gesture_zoom(new_zoom / old_zoom));
+                                    }
+
+                                    if event.delta_angle != 0.0 {
+                                        self.event(|e| e.gesture_rotate(event.delta_angle));
+                                    }
+
+                                    if event.delta_x != 0.0 || event.delta_y != 0.0 {
+                                        self.event(|e| {
+                                            e.mouse_scroll(
+                                                event.delta_x * 0.05,
+                                                event.delta_y * 0.05,
+                                            )
+                                        });
                                     }
                                 }
+
+                                _ => {}
                             }
-
-                            XI_Enter => {
-                                for device in self.xi2_axes.borrow_mut().iter_mut() {
-                                    device.reset_position(&self.connection);
-                                }
-                            }
-
-                            XI_HierarchyChanged => {
-                                self.xi2_axes.replace(XI2DeviceAxis::list(&self.connection));
-                            }
-
-                            XI_GesturePinchBegin | XI_GesturePinchUpdate | XI_GesturePinchEnd => {
-                                let event = &*(event.data as *const XIGesturePinchEvent);
-
-                                if event.header.evtype == XI_GesturePinchBegin {
-                                    self.last_gesture_zoom.set(1.0);
-                                }
-
-                                let new_zoom = event.scale;
-                                let old_zoom = self.last_gesture_zoom.replace(new_zoom);
-
-                                if new_zoom != old_zoom {
-                                    self.event(|e| e.gesture_zoom(new_zoom / old_zoom));
-                                }
-
-                                if event.delta_angle != 0.0 {
-                                    self.event(|e| e.gesture_rotate(event.delta_angle));
-                                }
-
-                                if event.delta_x != 0.0 || event.delta_y != 0.0 {
-                                    self.event(|e| {
-                                        e.mouse_scroll(event.delta_x * 0.05, event.delta_y * 0.05)
-                                    });
-                                }
-                            }
-
-                            _ => {}
-                        }
-
-                        XFreeEventData(self.connection.display(), &mut event);
+                        });
                     }
                 }
 
@@ -591,7 +599,7 @@ impl WindowImpl {
                             ) {
                                 Ok(exchange) => exchange,
                                 Err(SelectionError::Empty) => Exchange::Empty,
-                                Err(SelectionError::Recursive) => {
+                                Err(SelectionError::Reentrant) => {
                                     self.exchange_dragndrop.borrow().clone()
                                 }
                             };
@@ -675,7 +683,7 @@ impl WindowImpl {
 
                     if event.type_ == ButtonPress {
                         XSetInputFocus(
-                            self.connection.display(),
+                            self.connection.as_raw(),
                             self.window_id,
                             RevertToParent,
                             CurrentTime,
@@ -733,7 +741,7 @@ impl WindowImpl {
 
                         if !capture {
                             XSendEvent(
-                                self.connection.display(),
+                                self.connection.as_raw(),
                                 self.window_parent.get(),
                                 1,
                                 match event.type_ {
@@ -818,7 +826,7 @@ impl WindowImpl {
                             };
 
                             XChangeProperty(
-                                self.connection.display(),
+                                self.connection.as_raw(),
                                 event.requestor,
                                 event.property,
                                 XA_ATOM,
@@ -833,7 +841,7 @@ impl WindowImpl {
                             && let Exchange::Text(text) = exchange
                         {
                             XChangeProperty(
-                                self.connection.display(),
+                                self.connection.as_raw(),
                                 event.requestor,
                                 event.property,
                                 event.target,
@@ -847,7 +855,7 @@ impl WindowImpl {
                         {
                             let list = encode_uri_list(files);
                             XChangeProperty(
-                                self.connection.display(),
+                                self.connection.as_raw(),
                                 event.requestor,
                                 event.property,
                                 event.target,
@@ -860,7 +868,7 @@ impl WindowImpl {
                     }
 
                     XSendEvent(
-                        self.connection.display(),
+                        self.connection.as_raw(),
                         event.requestor,
                         0,
                         NoEventMask,
@@ -880,7 +888,7 @@ impl WindowImpl {
                     );
 
                     // just in case
-                    XFlush(self.connection.display());
+                    XFlush(self.connection.as_raw());
                 }
 
                 _ => {}
@@ -943,14 +951,14 @@ impl Drop for WindowImpl {
         unsafe {
             // kill the window itself
             if !self.is_destroyed.get() {
-                XDestroyWindow(self.connection.display(), self.window_id);
+                XDestroyWindow(self.connection.as_raw(), self.window_id);
             }
 
             // free our colormap
-            XFreeColormap(self.connection.display(), self.window_colormap);
+            XFreeColormap(self.connection.as_raw(), self.window_colormap);
 
             // sync
-            XSync(self.connection.display(), 0);
+            XSync(self.connection.as_raw(), 0);
         }
     }
 }
@@ -990,7 +998,7 @@ impl PlatformWindow for WindowImpl {
                 let status =
                     XStringListToTextProperty(&mut (title.as_ptr() as *mut _), 1, &mut text);
                 if status != 0 {
-                    XSetWMName(self.connection.display(), self.window_id, &mut text);
+                    XSetWMName(self.connection.as_raw(), self.window_id, &mut text);
                     XFree(text.value as *mut _);
                 }
             }
@@ -1006,7 +1014,7 @@ impl PlatformWindow for WindowImpl {
             }];
 
             XChangeProperty(
-                self.connection.display(),
+                self.connection.as_raw(),
                 self.window_id,
                 self.connection.atom(c"_NET_WM_WINDOW_TYPE"),
                 self.connection.atom(c"ATOM"),
@@ -1031,7 +1039,7 @@ impl PlatformWindow for WindowImpl {
             ];
 
             XChangeProperty(
-                self.connection.display(),
+                self.connection.as_raw(),
                 self.window_id,
                 self.connection.atom(c"_MOTIF_WM_HINTS"),
                 self.connection.atom(c"ATOM"),
@@ -1059,22 +1067,20 @@ impl PlatformWindow for WindowImpl {
         }
 
         unsafe {
-            let cursor = match cursor {
-                MouseCursor::Hidden => self.cursor_empty.cursor(),
-                cursor => *self
-                    .cursor_cache
-                    .borrow_mut()
-                    .entry(cursor)
-                    .or_insert_with(|| {
-                        load_cursor_by_enum(&self.connection, cursor).unwrap_or_else(|| {
-                            load_cursor_by_enum(&self.connection, MouseCursor::Default)
-                                .unwrap_or_else(|| self.cursor_empty.cursor())
-                        })
-                    }),
-            };
+            let cursor = self
+                .cursor_cache
+                .borrow_mut()
+                .entry(cursor)
+                .or_insert_with(|| {
+                    X11Cursor::load(self.connection.clone(), cursor).unwrap_or_else(|| {
+                        X11Cursor::load(self.connection.clone(), MouseCursor::Default)
+                            .unwrap_or_else(|| X11Cursor::empty(self.connection.clone()))
+                    })
+                })
+                .as_raw();
 
             XChangeWindowAttributes(
-                self.connection.display(),
+                self.connection.as_raw(),
                 self.window_id,
                 CWCursor,
                 &mut XSetWindowAttributes { cursor, ..zeroed() },
@@ -1085,7 +1091,7 @@ impl PlatformWindow for WindowImpl {
     fn set_cursor_position(&self, point: Point) {
         unsafe {
             XWarpPointer(
-                self.connection.display(),
+                self.connection.as_raw(),
                 0,
                 self.window_id,
                 0,
@@ -1110,7 +1116,7 @@ impl PlatformWindow for WindowImpl {
 
         unsafe {
             XConfigureWindow(
-                self.connection.display(),
+                self.connection.as_raw(),
                 self.window_id,
                 (CWWidth | CWHeight) as _,
                 &mut XWindowChanges {
@@ -1136,7 +1142,7 @@ impl PlatformWindow for WindowImpl {
                 ..zeroed()
             };
 
-            XSetWMNormalHints(self.connection.display(), self.window_id, &mut hints);
+            XSetWMNormalHints(self.connection.as_raw(), self.window_id, &mut hints);
         }
     }
 
@@ -1154,7 +1160,7 @@ impl PlatformWindow for WindowImpl {
                 ..zeroed()
             };
 
-            XSetWMNormalHints(self.connection.display(), self.window_id, &mut hints);
+            XSetWMNormalHints(self.connection.as_raw(), self.window_id, &mut hints);
         }
     }
 
@@ -1165,7 +1171,7 @@ impl PlatformWindow for WindowImpl {
 
         unsafe {
             XConfigureWindow(
-                self.connection.display(),
+                self.connection.as_raw(),
                 self.window_id,
                 (CWX | CWY) as _,
                 &mut XWindowChanges {
@@ -1186,7 +1192,7 @@ impl PlatformWindow for WindowImpl {
             if visible {
                 if let Some(point) = self.last_window_position.get() {
                     XConfigureWindow(
-                        self.connection.display(),
+                        self.connection.as_raw(),
                         self.window_id,
                         (CWX | CWY) as _,
                         &mut XWindowChanges {
@@ -1199,7 +1205,7 @@ impl PlatformWindow for WindowImpl {
 
                 if let Some(size) = self.last_window_size.get() {
                     XConfigureWindow(
-                        self.connection.display(),
+                        self.connection.as_raw(),
                         self.window_id,
                         (CWWidth | CWHeight) as _,
                         &mut XWindowChanges {
@@ -1210,11 +1216,11 @@ impl PlatformWindow for WindowImpl {
                     );
                 }
 
-                XMapRaised(self.connection.display(), self.window_id);
-                XSync(self.connection.display(), 0);
+                XMapRaised(self.connection.as_raw(), self.window_id);
+                XSync(self.connection.as_raw(), 0);
             } else {
-                XUnmapWindow(self.connection.display(), self.window_id);
-                XSync(self.connection.display(), 0);
+                XUnmapWindow(self.connection.as_raw(), self.window_id);
+                XSync(self.connection.as_raw(), 0);
             }
         }
     }
@@ -1236,7 +1242,7 @@ impl PlatformWindow for WindowImpl {
         ) {
             Ok(exchange) => exchange,
             Err(SelectionError::Empty) => Exchange::Empty,
-            Err(SelectionError::Recursive) => self.exchange_clipboard.borrow().clone(),
+            Err(SelectionError::Reentrant) => self.exchange_clipboard.borrow().clone(),
         }
     }
 
@@ -1247,7 +1253,7 @@ impl PlatformWindow for WindowImpl {
 
         unsafe {
             XSetSelectionOwner(
-                self.connection.display(),
+                self.connection.as_raw(),
                 self.connection.atom(c"CLIPBOARD"),
                 if is_empty { 0 } else { self.window_id },
                 CurrentTime,

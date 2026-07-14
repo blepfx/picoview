@@ -6,8 +6,7 @@ use std::ffi::{CStr, c_void};
 use std::os::raw::{c_int, c_ulong};
 use std::ptr::{null, null_mut};
 use x11::glx::*;
-use x11::xlib::{Bool, Display, XDefaultScreen, XFree, XSync};
-use x11::xrender::XRenderFindVisualFormat;
+use x11::xlib::{Bool, Display, XDefaultScreen, XFree};
 
 const GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20B2;
 const CONTEXT_ES2_PROFILE_BIT_EXT: i32 = 0x00000004;
@@ -48,11 +47,11 @@ impl GlContext {
     ) -> Option<(u8, u8, HashSet<&'static str>)> {
         unsafe {
             let (mut major, mut minor) = (0, 0);
-            if glXQueryVersion(connection.display(), &mut major, &mut minor) == 0 {
+            if glXQueryVersion(connection.as_raw(), &mut major, &mut minor) == 0 {
                 return None;
             }
 
-            let extensions = glXGetClientString(connection.display(), GLX_EXTENSIONS);
+            let extensions = glXGetClientString(connection.as_raw(), GLX_EXTENSIONS);
             let extensions = if extensions.is_null() {
                 HashSet::new()
             } else if let Ok(extensions) = CStr::from_ptr(extensions).to_str() {
@@ -70,12 +69,12 @@ impl GlContext {
     ///
     /// Returns `None` if no suitable config could be found.
     pub fn find_best_config(
-        connection: &Connection,
+        conn: &Connection,
         config: &GlConfig,
         transparent: bool,
     ) -> Option<VisualConfig> {
         unsafe {
-            let (major, minor, extensions) = Self::get_version_info(connection)?;
+            let (major, minor, extensions) = Self::get_version_info(conn)?;
             let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
 
             let ext_multisample =
@@ -131,8 +130,8 @@ impl GlContext {
 
             let mut n_configs = 0;
             let fb_config_list = glXChooseFBConfig(
-                connection.display(),
-                XDefaultScreen(connection.display()),
+                conn.as_raw(),
+                XDefaultScreen(conn.as_raw()),
                 fb_attribs.as_ptr(),
                 &mut n_configs,
             );
@@ -141,31 +140,24 @@ impl GlContext {
                 return None;
             }
 
-            let mut preferred_config = 0;
+            let mut preferred_config = None;
             for i in 0..n_configs {
-                let config = *fb_config_list.add(i as usize);
-                let visual = glXGetVisualFromFBConfig(connection.display(), config);
-                let format = XRenderFindVisualFormat(connection.display(), (*visual).visual);
+                let Some(config) = VisualConfig::from_glx(conn, *fb_config_list.add(i as usize))
+                else {
+                    continue; // couldnt get info? weird
+                };
 
-                if transparent && (*format).direct.alphaMask > 0 {
-                    preferred_config = i;
+                let Some(format) = config.xrender_format(conn) else {
+                    continue;
+                };
+
+                if transparent && format.direct.alphaMask > 0 {
+                    preferred_config = Some(config);
                 }
-
-                XFree(visual as *mut _);
             }
 
-            let config = *fb_config_list.add(preferred_config as usize);
-            let visual = glXGetVisualFromFBConfig(connection.display(), config);
-
-            let config = VisualConfig {
-                fb_config: config,
-                depth: (*visual).depth,
-                visual: (*visual).visual,
-            };
-
-            XFree(visual as *mut _);
             XFree(fb_config_list as *mut _);
-            Some(config)
+            preferred_config
         }
     }
 
@@ -175,9 +167,9 @@ impl GlContext {
         connection: Connection,
         window: c_ulong,
         config: GlConfig,
-        fb_config: GLXFBConfig,
+        visual: VisualConfig,
     ) -> Result<GlContext, OpenGlError> {
-        if fb_config.is_null() {
+        if visual.glx_config().is_null() {
             return Err(OpenGlError::FormatUnsupported);
         }
 
@@ -237,8 +229,8 @@ impl GlContext {
                 };
 
                 glXCreateContextAttribsARB(
-                    connection.display(),
-                    fb_config,
+                    connection.as_raw(),
+                    visual.glx_config(),
                     std::ptr::null_mut(),
                     1,
                     ctx_attribs.as_ptr(),
@@ -248,15 +240,12 @@ impl GlContext {
             };
 
             if context.is_null() {
-                let fb_visual = glXGetVisualFromFBConfig(connection.display(), fb_config);
-                if fb_visual.is_null() {
-                    return Err(OpenGlError::Platform(
-                        "glXGetVisualFromFBConfig returned null".into(),
-                    ));
-                }
-
-                context = glXCreateContext(connection.display(), fb_visual, null_mut(), 1);
-                XFree(fb_visual as *mut _);
+                context = glXCreateContext(
+                    connection.as_raw(),
+                    visual.info() as *const _ as *mut _,
+                    null_mut(),
+                    1,
+                );
             };
 
             if context.is_null() {
@@ -271,14 +260,13 @@ impl GlContext {
                         .map(|addr| std::mem::transmute::<_, GlXSwapIntervalEXT>(addr));
 
                 if let Some(glXSwapIntervalEXT) = glXSwapIntervalEXT
-                    && glXMakeCurrent(connection.display(), window, context) != 0
+                    && glXMakeCurrent(connection.as_raw(), window, context) != 0
                 {
-                    glXSwapIntervalEXT(connection.display(), window, 0);
-                    glXMakeCurrent(connection.display(), 0, null_mut());
+                    glXSwapIntervalEXT(connection.as_raw(), window, 0);
+                    glXMakeCurrent(connection.as_raw(), 0, null_mut());
                 }
             }
 
-            XSync(connection.display(), 0);
             connection.last_error().map_err(OpenGlError::Platform)?;
 
             Ok(GlContext {
@@ -293,8 +281,8 @@ impl GlContext {
 impl Drop for GlContext {
     fn drop(&mut self) {
         unsafe {
-            glXMakeCurrent(self.connection.display(), 0, std::ptr::null_mut());
-            glXDestroyContext(self.connection.display(), self.context);
+            glXMakeCurrent(self.connection.as_raw(), 0, std::ptr::null_mut());
+            glXDestroyContext(self.connection.as_raw(), self.context);
         }
     }
 }
@@ -310,7 +298,7 @@ impl PlatformOpenGl for GlContext {
 
     fn swap_buffers(&self) -> Result<(), SwapBuffersError> {
         unsafe {
-            glXSwapBuffers(self.connection.display(), self.window);
+            glXSwapBuffers(self.connection.as_raw(), self.window);
             Ok(())
         }
     }
@@ -325,9 +313,9 @@ impl PlatformOpenGl for GlContext {
 
             let result = {
                 if current {
-                    glXMakeCurrent(self.connection.display(), self.window, self.context)
+                    glXMakeCurrent(self.connection.as_raw(), self.window, self.context)
                 } else {
-                    glXMakeCurrent(self.connection.display(), 0, std::ptr::null_mut())
+                    glXMakeCurrent(self.connection.as_raw(), 0, std::ptr::null_mut())
                 }
             };
 
