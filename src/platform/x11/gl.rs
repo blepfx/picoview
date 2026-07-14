@@ -106,16 +106,12 @@ impl GlContext {
                 stencil as _,
             ];
 
-            if let Some(double_buffer) = config.double_buffer {
-                fb_attribs.extend_from_slice(&[GLX_DOUBLEBUFFER, double_buffer as i32]);
+            if config.double_buffer {
+                fb_attribs.extend_from_slice(&[GLX_DOUBLEBUFFER, 1]);
             }
 
-            // not sure if this is correct to be honest
-            if let Some(hardware) = config.hardware_acceleration {
-                fb_attribs.extend_from_slice(&[
-                    GLX_CONFIG_CAVEAT,
-                    if hardware { GLX_NONE } else { GLX_SLOW_CONFIG },
-                ]);
+            if config.force_hardware {
+                fb_attribs.extend_from_slice(&[GLX_CONFIG_CAVEAT, GLX_NONE]);
             }
 
             if config.srgb && ext_framebuffer_srgb {

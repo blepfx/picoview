@@ -35,7 +35,6 @@ pub const WGL_BLUE_BITS_ARB: i32 = 0x2019;
 pub const WGL_ALPHA_BITS_ARB: i32 = 0x201B;
 pub const WGL_DEPTH_BITS_ARB: i32 = 0x2022;
 pub const WGL_STENCIL_BITS_ARB: i32 = 0x2023;
-pub const WGL_NO_ACCELERATION_ARB: i32 = 0x2025;
 pub const WGL_FULL_ACCELERATION_ARB: i32 = 0x2027;
 pub const WGL_TYPE_RGBA_ARB: i32 = 0x202B;
 pub const WGL_SAMPLE_BUFFERS_ARB: i32 = 0x2041;
@@ -168,17 +167,12 @@ pub unsafe fn create_pixel_format_fallback(
     unsafe {
         let (red, green, blue, alpha, depth, stencil) = config.format.as_rgbads();
 
-        let mut flags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL;
-        match config.double_buffer {
-            None => flags |= PFD_DOUBLEBUFFER_DONTCARE,
-            Some(true) => flags |= PFD_DOUBLEBUFFER,
-            Some(false) => {}
-        }
-
         let pfd = PIXELFORMATDESCRIPTOR {
             nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
             nVersion: 1,
-            dwFlags: flags,
+            dwFlags: PFD_DRAW_TO_WINDOW
+                | PFD_SUPPORT_OPENGL
+                | (PFD_DOUBLEBUFFER * config.double_buffer as u32),
             iPixelType: PFD_TYPE_RGBA,
             cColorBits: (red + green + blue) as _,
             cAlphaBits: alpha as _,
@@ -230,19 +224,13 @@ pub unsafe fn create_pixel_format_arb(
                 WGL_STENCIL_BITS_ARB, stencil as _,
             ];
 
-            if let Some(double_buffer) = config.double_buffer {
-                pixel_format_attribs
-                    .extend_from_slice(&[WGL_DOUBLE_BUFFER_ARB, double_buffer as i32]);
+            if config.double_buffer {
+                pixel_format_attribs.extend_from_slice(&[WGL_DOUBLE_BUFFER_ARB, 1]);
             }
 
-            if let Some(acceleration) = config.hardware_acceleration {
-                if acceleration {
-                    pixel_format_attribs
-                        .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB]);
-                } else {
-                    pixel_format_attribs
-                        .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_NO_ACCELERATION_ARB]);
-                }
+            if config.force_hardware {
+                pixel_format_attribs
+                    .extend_from_slice(&[WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB]);
             }
 
             if wgl.ext_multisample && config.msaa_count > 1 {

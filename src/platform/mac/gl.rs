@@ -22,15 +22,13 @@ impl GlContext {
         mtm: MainThreadMarker,
     ) -> Result<Self, OpenGlError> {
         let version = match config.version {
-            GlVersion::Core(major, minor) => {
-                if (major, minor) > (4, 1) {
-                    return Err(OpenGlError::VersionUnsupported);
-                } else if (major, minor) > (3, 2) {
-                    objc2_app_kit::NSOpenGLProfileVersion4_1Core
-                } else {
-                    objc2_app_kit::NSOpenGLProfileVersion3_2Core
-                }
+            GlVersion::Core(a, b) if (a, b) > (4, 1) => {
+                return Err(OpenGlError::VersionUnsupported);
             }
+            GlVersion::Core(a, b) if (a, b) > (3, 2) => {
+                objc2_app_kit::NSOpenGLProfileVersion4_1Core
+            }
+            GlVersion::Core(_, _) => objc2_app_kit::NSOpenGLProfileVersion3_2Core,
             GlVersion::Compat(_, _) => objc2_app_kit::NSOpenGLProfileVersionLegacy,
             GlVersion::ES(_, _) => return Err(OpenGlError::VersionUnsupported),
         };
@@ -48,6 +46,7 @@ impl GlContext {
                 d as _,
                 objc2_app_kit::NSOpenGLPFAStencilSize,
                 s as _,
+                objc2_app_kit::NSOpenGLPFAMinimumPolicy,
             ];
 
             if config.force_hardware {

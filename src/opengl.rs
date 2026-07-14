@@ -76,14 +76,16 @@ pub struct GlConfig {
     pub format: GlFormat,
 
     /// Whether to use double buffering.
-    ///
-    /// Set to `None` if you do not care.
-    pub double_buffer: Option<bool>,
+    pub double_buffer: bool,
 
-    /// Whether to use hardware acceleration.
+    /// Whether to force hardware acceleration.
     ///
-    /// Set to `None` if you do not care.
-    pub hardware_acceleration: Option<bool>,
+    /// If set to `false`, the context may be created with software rendering if
+    /// hardware acceleration is not available.
+    ///
+    /// If set to `true`, the context creation will fail if hardware
+    /// acceleration is not available.
+    pub force_hardware: bool,
 
     /// Whether to perform sRGB gamma correction when writing to the output
     /// framebuffer
@@ -98,8 +100,8 @@ impl Default for GlConfig {
     fn default() -> Self {
         Self {
             version: GlVersion::Compat(1, 1),
-            double_buffer: None,
-            hardware_acceleration: None,
+            double_buffer: true,
+            force_hardware: false,
             debug: false,
             srgb: false,
             format: GlFormat::RGBA8_D24_S8,
