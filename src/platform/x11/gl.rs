@@ -104,9 +104,19 @@ impl GlContext {
                 depth as _,
                 GLX_STENCIL_SIZE,
                 stencil as _,
-                GLX_DOUBLEBUFFER,
-                config.double_buffer as i32,
             ];
+
+            if let Some(double_buffer) = config.double_buffer {
+                fb_attribs.extend_from_slice(&[GLX_DOUBLEBUFFER, double_buffer as i32]);
+            }
+
+            // not sure if this is correct to be honest
+            if let Some(hardware) = config.hardware_acceleration {
+                fb_attribs.extend_from_slice(&[
+                    GLX_CONFIG_CAVEAT,
+                    if hardware { GLX_NONE } else { GLX_SLOW_CONFIG },
+                ]);
+            }
 
             if config.srgb && ext_framebuffer_srgb {
                 fb_attribs.extend_from_slice(&[GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB, 1]);
