@@ -298,56 +298,13 @@ mod selection {
         Err(SelectionError::Empty)
     }
 
-    pub fn send_xdnd_feedback(
-        conn: &Connection,
-        target: c_ulong,
-        source: c_ulong,
-        finished: bool,
-        effect: DropEffect,
-    ) {
-        unsafe {
-            XSendEvent(
-                conn.as_raw(),
-                source,
-                0,
-                0,
-                &mut XEvent {
-                    client_message: XClientMessageEvent {
-                        type_: ClientMessage,
-                        serial: 0,
-                        send_event: 1,
-                        display: conn.as_raw(),
-                        window: source,
-                        message_type: if finished {
-                            conn.atom(c"XdndFinished")
-                        } else {
-                            conn.atom(c"XdndStatus")
-                        },
-                        format: 32,
-
-                        data: {
-                            let mut data = ClientMessageData::default();
-                            data.set_long(0, target as _);
-                            data.set_long(1, if effect == DropEffect::Reject { 0 } else { 1 }); // success
-                            data.set_long(
-                                2,
-                                match effect {
-                                    DropEffect::Move => conn.atom(c"XdndActionMove") as _,
-                                    DropEffect::Link => conn.atom(c"XdndActionLink") as _,
-                                    DropEffect::Generic => conn.atom(c"XdndActionPrivate") as _,
-                                    DropEffect::Copy | DropEffect::Reject => {
-                                        conn.atom(c"XdndActionCopy") as _
-                                    }
-                                },
-                            );
-                            data
-                        },
-                    },
-                },
-            );
-
-            // just in case
-            XFlush(conn.as_raw());
+    pub fn encode_drop_effect(conn: &Connection, effect: DropEffect) -> c_ulong {
+        match effect {
+            DropEffect::Move => conn.atom(c"XdndActionMove"),
+            DropEffect::Copy => conn.atom(c"XdndActionCopy"),
+            DropEffect::Link => conn.atom(c"XdndActionLink"),
+            DropEffect::Generic => conn.atom(c"XdndActionPrivate"),
+            DropEffect::Reject => conn.atom(c"XdndActionNone"),
         }
     }
 }

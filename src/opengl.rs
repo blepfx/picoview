@@ -140,7 +140,13 @@ impl<'a> GlContext<'a> {
         self.0.swap_buffers()
     }
 
-    /// Get the address of an OpenGL function by name
+    /// Get the address of an OpenGL function by name.
+    ///
+    /// Please note that a non-null returned pointer does not guarantee that the
+    /// function is actually supported.
+    ///
+    /// You should check the OpenGL version and extensions to determine if a
+    /// function is available.
     pub fn get_proc_address(&self, name: &CStr) -> *const c_void {
         self.0.get_proc_address(name)
     }

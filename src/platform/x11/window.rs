@@ -92,7 +92,8 @@ pub struct WindowImpl {
     /// applications.
     exchange_clipboard: RefCell<Exchange>,
     /// The current drag and drop data, used to provide data to other
-    /// applications. TODO: implement drag into other windows.
+    /// applications. TODO: currently not implemented, implement drag into other
+    /// windows later.
     exchange_dragndrop: RefCell<Exchange>,
 
     /// Cache of X11 cursor IDs for each supported mouse cursor icon.
@@ -588,6 +589,7 @@ impl WindowImpl {
                             y: y as f64 - origin.y,
                         };
 
+                        let source = event.data.get_long(0) as c_ulong;
                         let effect = if !self.last_dragdrop_state.replace(true) {
                             let timestamp = event.data.get_long(3) as c_ulong;
                             let data = match parse_selection(
@@ -605,17 +607,48 @@ impl WindowImpl {
                             };
 
                             self.event(|e| e.drag_enter(data, point))
+                                .unwrap_or(DropEffect::Reject)
                         } else {
                             self.event(|e| e.drag_move(point))
+                                .unwrap_or(DropEffect::Reject)
                         };
 
-                        send_xdnd_feedback(
-                            &self.connection,
-                            self.window_id,
-                            event.data.get_long(0) as c_ulong,
-                            false,
-                            effect.unwrap_or(DropEffect::Reject),
+                        XSendEvent(
+                            self.connection.as_raw(),
+                            source,
+                            0,
+                            0,
+                            &mut XEvent {
+                                client_message: XClientMessageEvent {
+                                    type_: ClientMessage,
+                                    serial: 0,
+                                    send_event: 1,
+                                    display: self.connection.as_raw(),
+                                    window: source,
+                                    message_type: self.connection.atom(c"XdndStatus"),
+                                    format: 32,
+                                    data: {
+                                        let mut data = ClientMessageData::default();
+                                        data.set_long(0, self.window_id as _);
+                                        data.set_long(
+                                            1,
+                                            if effect == DropEffect::Reject { 0 } else { 1 },
+                                        ); // success
+
+                                        data.set_long(2, 0); // no rectangle
+                                        data.set_long(3, 0); // no rectangle
+                                        data.set_long(
+                                            4,
+                                            encode_drop_effect(&self.connection, effect) as _,
+                                        );
+
+                                        data
+                                    },
+                                },
+                            },
                         );
+
+                        XFlush(self.connection.as_raw());
                     }
 
                     if event.format == 32
@@ -628,16 +661,8 @@ impl WindowImpl {
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndDrop") as _
                     {
-                        let effect = self.event(|e| e.drag_accept());
+                        self.event(|e| e.drag_accept());
                         self.last_dragdrop_state.set(false);
-
-                        send_xdnd_feedback(
-                            &self.connection,
-                            self.window_id,
-                            event.data.get_long(0) as c_ulong,
-                            true,
-                            effect.unwrap_or(DropEffect::Reject),
-                        );
                     }
                 }
 
@@ -955,7 +980,9 @@ impl Drop for WindowImpl {
             }
 
             // free our colormap
-            XFreeColormap(self.connection.as_raw(), self.window_colormap);
+            if self.window_colormap != 0 {
+                XFreeColormap(self.connection.as_raw(), self.window_colormap);
+            }
 
             // sync
             XSync(self.connection.as_raw(), 0);
@@ -1135,12 +1162,13 @@ impl PlatformWindow for WindowImpl {
         );
 
         unsafe {
-            let mut hints = XSizeHints {
-                flags: PMinSize,
-                min_width,
-                min_height,
-                ..zeroed()
-            };
+            let mut hints = XSizeHints { ..zeroed() };
+
+            XGetWMNormalHints(self.connection.as_raw(), self.window_id, &mut hints, &mut 0);
+
+            hints.flags |= PMinSize;
+            hints.min_width = min_width;
+            hints.min_height = min_height;
 
             XSetWMNormalHints(self.connection.as_raw(), self.window_id, &mut hints);
         }
@@ -1153,12 +1181,13 @@ impl PlatformWindow for WindowImpl {
         );
 
         unsafe {
-            let mut hints = XSizeHints {
-                flags: PMaxSize,
-                max_width,
-                max_height,
-                ..zeroed()
-            };
+            let mut hints = XSizeHints { ..zeroed() };
+
+            XGetWMNormalHints(self.connection.as_raw(), self.window_id, &mut hints, &mut 0);
+
+            hints.flags |= PMaxSize;
+            hints.max_width = max_width;
+            hints.max_height = max_height;
 
             XSetWMNormalHints(self.connection.as_raw(), self.window_id, &mut hints);
         }
@@ -1184,7 +1213,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_visible(&self, visible: bool) {
-        if self.last_window_visible.get() == visible {
+        if self.last_window_visible.replace(visible) == visible {
             return;
         }
 

@@ -100,7 +100,7 @@ impl WindowImpl {
 
                 window.setContentView(Some(&view.view));
                 window.makeFirstResponder(Some(&view.view));
-                window.setReleasedWhenClosed(true);
+                window.setReleasedWhenClosed(false);
                 window.setDelegate(Some(view.as_ns_window_delegate()));
 
                 WindowImpl::init_handler(&view, options.factory)?;
@@ -406,7 +406,7 @@ impl WindowImpl {
     fn convert_point_to_picoview(&self, point: NSPoint) -> Point {
         let backing = self.view.convertPointToBacking(NSPoint {
             x: point.x,
-            y: point.y - self.view.frame().size.height,
+            y: self.view.frame().size.height - point.y,
         });
 
         Point {

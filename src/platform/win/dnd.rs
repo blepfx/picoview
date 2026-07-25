@@ -147,7 +147,9 @@ impl DropTargetImpl {
     ) -> HRESULT {
         unsafe {
             let this = &*(this as *const Self);
-            let effect = PostMessageW(this.hwnd, WM_USER_DND_ACCEPT, 0, 0);
+
+            // same goes for this as in drag_enter
+            let effect = SendMessageW(this.hwnd, WM_USER_DND_ACCEPT, 0, 0);
             pdw_effect.write(effect as _);
             S_OK
         }

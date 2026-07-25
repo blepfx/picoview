@@ -36,28 +36,26 @@ impl Clipboard {
     }
 
     /// Empties the clipboard, removing all data.
-    pub fn empty(&self) {
-        unsafe {
-            EmptyClipboard();
-        }
+    pub fn empty(&self) -> bool {
+        unsafe { EmptyClipboard() != 0 }
     }
 
     /// Gets the clipboard data for the given format. Returns `None` if the data
     /// is not available.
     pub fn get<R>(&self, format: CLIPBOARD_FORMAT, callback: impl FnOnce(&[u8]) -> R) -> Option<R> {
         unsafe {
-            let data = GetClipboardData(format as _);
-            if !data.is_null() {
-                let data = GlobalLock(data);
+            let handle = GetClipboardData(format as _);
+            if !handle.is_null() {
+                let data = GlobalLock(handle);
                 let result = if !data.is_null() {
-                    let size = GlobalSize(data as _);
+                    let size = GlobalSize(handle);
                     let slice = std::slice::from_raw_parts(data as *const u8, size);
                     Some(callback(slice))
                 } else {
                     None
                 };
 
-                GlobalUnlock(data as *mut _);
+                GlobalUnlock(handle);
                 result
             } else {
                 None
@@ -72,23 +70,26 @@ impl Clipboard {
     /// - The data must match the specified format.
     pub unsafe fn set(&self, format: CLIPBOARD_FORMAT, data: &[u8]) -> bool {
         unsafe {
-            let buf = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(data));
-            if buf.is_null() {
+            // we have to empty first
+            if !self.empty() {
                 return false;
             }
 
-            let buf = GlobalLock(buf) as *mut u8;
+            let handle = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(data));
+            if handle.is_null() {
+                return false;
+            }
+
+            let buf = GlobalLock(handle) as *mut u8;
             if buf.is_null() {
                 return false;
             }
 
             copy_nonoverlapping(data.as_ptr(), buf, data.len());
 
-            if GlobalUnlock(buf as *mut _) == 0 {
-                return false;
-            }
+            GlobalUnlock(handle);
 
-            if SetClipboardData(format as _, buf as *mut _).is_null() {
+            if SetClipboardData(format as _, handle).is_null() {
                 return false;
             }
 

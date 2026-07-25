@@ -1,9 +1,10 @@
 use picoview::*;
-use std::mem::transmute;
+use std::ffi::CStr;
 
 fn main() {
     WindowBuilder::new(|window| {
         window.set_max_size((1000, 1000));
+        window.set_min_size((100, 100));
         window.set_size((200, 200));
         window.set_title("OpenGL Example");
         window.set_visible(true);
@@ -34,23 +35,31 @@ struct Handler<'a> {
     scale: f64,
 }
 
+unsafe fn gl_func<T>(gl: &GlContext, name: &CStr) -> T {
+    let ptr = gl.get_proc_address(name);
+    if ptr.is_null() {
+        panic!("failed to load OpenGL function: {:?}", name);
+    }
+
+    unsafe { std::mem::transmute_copy(&ptr) }
+}
+
 impl<'a> WindowHandler for Handler<'a> {
     fn frame(&mut self) {
         // we just rawdogging opengl here lol
         let gl = self.opengl;
-        let clear_color: unsafe extern "system" fn(f32, f32, f32, f32) =
-            unsafe { transmute(gl.get_proc_address(c"glClearColor")) };
-        let clear: unsafe extern "system" fn(i32) =
-            unsafe { transmute(gl.get_proc_address(c"glClear")) };
-        let begin: unsafe extern "system" fn(i32) =
-            unsafe { transmute(gl.get_proc_address(c"glBegin")) };
-        let end: unsafe extern "system" fn() = unsafe { transmute(gl.get_proc_address(c"glEnd")) };
-        let vertex: unsafe extern "system" fn(f32, f32, f32) =
-            unsafe { transmute(gl.get_proc_address(c"glVertex3f")) };
-        let viewport: unsafe extern "system" fn(i32, i32, i32, i32) =
-            unsafe { transmute(gl.get_proc_address(c"glViewport")) };
-        let color: unsafe extern "system" fn(f32, f32, f32, f32) =
-            unsafe { transmute(gl.get_proc_address(c"glColor4f")) };
+        let clear_color = unsafe {
+            gl_func::<unsafe extern "system" fn(f32, f32, f32, f32)>(&gl, c"glClearColor")
+        };
+        let clear = unsafe { gl_func::<unsafe extern "system" fn(i32)>(&gl, c"glClear") };
+        let begin = unsafe { gl_func::<unsafe extern "system" fn(i32)>(&gl, c"glBegin") };
+        let end = unsafe { gl_func::<unsafe extern "system" fn()>(&gl, c"glEnd") };
+        let vertex =
+            unsafe { gl_func::<unsafe extern "system" fn(f32, f32, f32)>(&gl, c"glVertex3f") };
+        let viewport =
+            unsafe { gl_func::<unsafe extern "system" fn(i32, i32, i32, i32)>(&gl, c"glViewport") };
+        let color =
+            unsafe { gl_func::<unsafe extern "system" fn(f32, f32, f32, f32)>(&gl, c"glColor4f") };
 
         gl.make_current(true).unwrap();
 
@@ -180,7 +189,7 @@ impl<'a> WindowHandler for Handler<'a> {
 
     fn drag_move(&mut self, point: Point) -> DropEffect {
         println!("drag_move({point:?})");
-        DropEffect::Reject
+        DropEffect::Copy
     }
 
     fn drag_leave(&mut self) {

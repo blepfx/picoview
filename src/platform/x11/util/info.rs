@@ -40,6 +40,12 @@ pub fn query_scale_dpi(conn: &Connection) -> Option<f64> {
         };
 
         XrmDestroyDatabase(db);
+
+        // guard against stupid values
+        if value <= 0.0 {
+            return None;
+        }
+
         Some(value)
     }
 }
@@ -72,8 +78,8 @@ pub fn query_refresh_rate(conn: &Connection) -> Option<f64> {
                         let rate = (*mode).dotClock as f64
                             / ((*mode).hTotal as f64 * (*mode).vTotal as f64);
 
-                        //xvfb reports it as NaN
-                        if rate.is_finite() {
+                        //xvfb reports it as NaN, also guard against zero just in case
+                        if rate.is_finite() && rate > 0.0 {
                             max_rate = max_rate.map(|prev| prev.max(rate)).or(Some(rate));
                         }
                     }

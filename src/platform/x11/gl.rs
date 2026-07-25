@@ -42,20 +42,26 @@ impl GlContext {
     /// as a set of supported extensions.
     ///
     /// Returns `None` if the version could not be queried.
-    pub unsafe fn get_version_info(
-        connection: &Connection,
-    ) -> Option<(u8, u8, HashSet<&'static str>)> {
+    pub unsafe fn get_version_info(connection: &Connection) -> Option<(u8, u8, HashSet<String>)> {
         unsafe {
             let (mut major, mut minor) = (0, 0);
             if glXQueryVersion(connection.as_raw(), &mut major, &mut minor) == 0 {
                 return None;
             }
 
-            let extensions = glXGetClientString(connection.as_raw(), GLX_EXTENSIONS);
+            let extensions = if (major, minor) >= (1, 1) {
+                glXQueryExtensionsString(connection.as_raw(), XDefaultScreen(connection.as_raw()))
+            } else {
+                null_mut()
+            };
+
             let extensions = if extensions.is_null() {
                 HashSet::new()
             } else if let Ok(extensions) = CStr::from_ptr(extensions).to_str() {
-                extensions.split(' ').collect::<HashSet<_>>()
+                extensions
+                    .split(' ')
+                    .map(|s| s.to_string())
+                    .collect::<HashSet<String>>()
             } else {
                 HashSet::new()
             };
@@ -151,8 +157,11 @@ impl GlContext {
                     continue;
                 };
 
-                if transparent && format.direct.alphaMask > 0 {
+                // if transparent, require that the visual has an alpha mask
+                // otherwise take the first visual available
+                if !transparent || format.direct.alphaMask > 0 {
                     preferred_config = Some(config);
+                    break;
                 }
             }
 
@@ -179,7 +188,7 @@ impl GlContext {
             let ext_es_support = extensions.contains("GLX_EXT_create_context_es2_profile")
                 || extensions.contains("GLX_EXT_create_context_es_profile");
             let ext_context = extensions.contains("GLX_ARB_create_context");
-            let ext_swap_control = extensions.contains("GLX_ARB_create_context");
+            let ext_swap_control = extensions.contains("GLX_EXT_swap_control");
 
             let glXCreateContextAttribsARB = ext_context
                 .then(|| {

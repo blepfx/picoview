@@ -404,12 +404,13 @@ impl WindowProc for WindowImpl {
                     if let OpenMode::Blocking = self.open_mode {
                         PostQuitMessage(0);
                     }
-
-                    return 0;
                 }
 
                 WM_CLOSE => {
                     self.deferred_event(|_, e| e.close_requested());
+
+                    // do not call DefWindowProc here
+                    // we do not want to close the window yet
                     return 0;
                 }
 
@@ -473,12 +474,20 @@ impl WindowProc for WindowImpl {
                         });
                     }
 
+                    // do not call DefWindowProc here
+                    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-windowposchanged (see remarks)
                     return 0;
                 }
 
                 WM_DPICHANGED => {
                     self.current_dpi_scale.set((wparam & 0xFFFF) as u32);
                     self.deferred_event(|window, e| e.scale_changed(window.scale()));
+
+                    // we specifically ignore the suggested rect in lparam, we want to preserve the
+                    // _physical_ size and if the user wants they can resize the window themselves
+
+                    // we handled the message, do not call DefWindowProc
+                    // https://learn.microsoft.com/en-us/windows/win32/hidpi/wm-dpichanged
                     return 0;
                 }
 
@@ -486,12 +495,16 @@ impl WindowProc for WindowImpl {
                     let dwstyle = GetWindowLongW(self.hwnd, GWL_STYLE) as u32;
                     let dwexstyle = GetWindowLongW(self.hwnd, GWL_EXSTYLE) as u32;
                     self.current_window_style.set((dwstyle, dwexstyle));
+
+                    // we handled the message, do not call DefWindowProc
+                    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-stylechanged
+                    return 0;
                 }
 
                 WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN
                 | WM_XBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
+                    // mouse just entered the window, start tracking mouse leave events
                     if self.current_mouse_position.get().is_none() {
-                        // mouse just entered the window, start tracking mouse leave events
                         let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
                             cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                             dwFlags: TME_LEAVE,
@@ -574,6 +587,9 @@ impl WindowProc for WindowImpl {
                 WM_SETCURSOR if lparam as u32 & 0xffff == HTCLIENT => {
                     let (_, cursor) = self.current_mouse_cursor.get();
                     cursor.apply();
+
+                    // do not call DefWindowProc here, we handled the cursor change
+                    // otherwise the cursor would be handled by the parent windows
                     return 1;
                 }
 
@@ -590,6 +606,8 @@ impl WindowProc for WindowImpl {
                         y: max.height.try_into().unwrap_or(i32::MAX),
                     };
                     (*info).ptMaxSize = (*info).ptMaxTrackSize;
+
+                    // we handled the message, do not call DefWindowProc
                     return 0;
                 }
 
@@ -615,6 +633,8 @@ impl WindowProc for WindowImpl {
                         ValidateRgn(self.hwnd, null_mut());
                     }
 
+                    // we validated the region already,
+                    // do not call DefWindowProc here
                     return 0;
                 }
 
@@ -786,7 +806,19 @@ impl PlatformWindow for WindowImpl {
 
             // force a resize (restyling keeps the outer size while changing the inner size,
             // so we need to resize the window to keep the client size the same)
-            self.set_size(self.current_window_size.replace(Size::default()));
+            let size = self
+                .convert_client(Rect::from_size(self.current_window_size.get()), true)
+                .size();
+
+            SetWindowPos(
+                self.hwnd,
+                self.hwnd,
+                0,
+                0,
+                size.width as i32,
+                size.height as i32,
+                SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
         }
     }
 
@@ -923,24 +955,20 @@ impl PlatformWindow for WindowImpl {
 
             match data {
                 Exchange::Empty => clipboard.empty(),
-                Exchange::Files(files) => {
-                    clipboard.set(CF_HDROP, &encode_hdrop(&files));
-                }
-                Exchange::Text(text) => {
-                    clipboard.set(
-                        CF_UNICODETEXT,
-                        WideString::from(text.as_str()).as_bytes_with_nul(),
-                    );
-                }
+                Exchange::Files(files) => clipboard.set(CF_HDROP, &encode_hdrop(&files)),
+                Exchange::Text(text) => clipboard.set(
+                    CF_UNICODETEXT,
+                    WideString::from(text.as_str()).as_bytes_with_nul(),
+                ),
             }
-
-            true
         }
     }
 }
 
 impl PlatformWaker for WindowWakerImpl {
     fn wakeup(&self) -> Result<(), WakeupError> {
+        // used to prevent possible data races if the window is closed while we are
+        // trying to wake it up
         let guard = self.window_hwnd.read().expect("lock poisoned");
 
         if guard.is_null() {

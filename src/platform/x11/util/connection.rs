@@ -163,6 +163,7 @@ impl GlobalState {
         static GLOBAL: Mutex<Option<GlobalState>> = Mutex::new(None);
         f(GLOBAL.lock().expect("poisoned").get_or_insert_with(|| {
             unsafe {
+                XInitThreads();
                 XSetErrorHandler(Some(error_handler));
                 libc::atexit(exit_handler);
             }
