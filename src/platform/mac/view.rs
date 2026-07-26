@@ -86,7 +86,10 @@ impl Deref for WindowImpl {
 
 // rust methods stuff
 impl WindowImpl {
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
+    pub unsafe fn open(
+        options: WindowBuilder<'_>,
+        mode: OpenMode,
+    ) -> Result<WindowWaker, WindowError> {
         let main_thread = MainThreadMarker::new()
             .ok_or_else(|| WindowError::Platform("not on main thread".into()))?;
 
@@ -168,7 +171,7 @@ impl WindowImpl {
     }
 
     unsafe fn create_view(
-        options: &WindowBuilder,
+        options: &WindowBuilder<'_>,
         blocking: Option<Retained<NSApplication>>,
         is_embedded: bool,
         main_thread: MainThreadMarker,
@@ -295,7 +298,7 @@ impl WindowImpl {
         Ok(view)
     }
 
-    fn init_handler(this: &Retained<Self>, factory: WindowFactory) -> Result<(), WindowError> {
+    fn init_handler(this: &Retained<Self>, factory: WindowFactory<'_>) -> Result<(), WindowError> {
         // SAFETY: we erase the lifetime of our WindowImpl; it should be safe to do so
         // because:
         //  - because our window instance has a stable address for the whole lifetime of

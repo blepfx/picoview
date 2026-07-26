@@ -159,12 +159,12 @@ impl WindowHandler for () {}
 /// Optionally, the factory can return an error if it fails to initialize for
 /// some reason. The error will be propagated to the caller as
 /// [`WindowError::Factory`].
-pub type WindowFactory = Box<
+pub type WindowFactory<'scope> = Box<
     dyn for<'a> FnOnce(
             Window<'a>,
         ) -> Result<Box<dyn WindowHandler + 'a>, Box<dyn Error + Send + Sync>>
         + Send
-        + 'static,
+        + 'scope,
 >;
 
 /// A builder for opening new windows.
@@ -176,7 +176,7 @@ pub type WindowFactory = Box<
 /// corresponding methods on the [`Window`] object once the window is created.
 #[non_exhaustive]
 #[must_use = "`WindowBuilder` does nothing until you call one of the open methods"]
-pub struct WindowBuilder {
+pub struct WindowBuilder<'scope> {
     /// Whether the window client area is transparent (premultiplied alpha)
     pub transparent: bool,
 
@@ -184,7 +184,7 @@ pub struct WindowBuilder {
     pub opengl: Option<GlConfig>,
 
     /// The factory function that creates the event handler for the window
-    pub factory: WindowFactory,
+    pub factory: WindowFactory<'scope>,
 }
 
 /// A thread-safe handle that can be used to wake up an associated event loop.
@@ -377,7 +377,7 @@ impl WindowWaker {
     }
 }
 
-impl WindowBuilder {
+impl<'scope> WindowBuilder<'scope> {
     /// Create a new [`WindowBuilder`] with the given event handler factory and
     /// default parameters
     pub fn new(
@@ -387,7 +387,7 @@ impl WindowBuilder {
             Box<dyn WindowHandler + 'a>,
             Box<dyn Error + Send + Sync>,
         > + Send
-        + 'static,
+        + 'scope,
     ) -> Self {
         Self {
             transparent: false,
@@ -502,7 +502,7 @@ impl<'a> Debug for Window<'a> {
     }
 }
 
-impl Debug for WindowBuilder {
+impl Debug for WindowBuilder<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowBuilder")
             .field("transparent", &self.transparent)

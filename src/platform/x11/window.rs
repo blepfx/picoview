@@ -9,9 +9,10 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::mem::zeroed;
 use std::os::unix::ffi::OsStrExt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
+use std::rc::Rc;
 use std::sync::{Arc, RwLock};
-use std::thread;
 use std::time::{Duration, Instant};
 use x11::xinput2::{
     XI_Enter, XI_HierarchyChanged, XI_Motion, XIAllDevices, XIDeviceEvent, XIEventMask,
@@ -120,16 +121,76 @@ pub struct WindowWakerImpl {
     display: RwLock<*mut Display>,
 }
 
-// while it is not really Send, we promise to only send it to a different thread
-// once after init while the WindowImpl contains Connection which is !Send, as
-// long as we move all instances of Connection to the other thread we should be
-// ok TODO: maybe remove that?
-unsafe impl Send for WindowImpl {}
+/// SAFETY: as we initialized X11 with XInitThreads, it is safe to access
+/// [`Display`] concurrently.
 unsafe impl Send for WindowWakerImpl {}
 unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
+    pub unsafe fn open(
+        options: WindowBuilder<'_>,
+        mode: OpenMode,
+    ) -> Result<WindowWaker, WindowError> {
+        unsafe {
+            match mode {
+                OpenMode::Blocking => {
+                    let window = Self::create(options, mode)?;
+                    window.run_event_loop()?;
+                    Ok(WindowWaker::default())
+                }
+
+                OpenMode::Embedded(..) | OpenMode::Transient(..) => {
+                    // SAFETY: We promise below that the factory will not be
+                    // used after we return by waiting until the window is created and the factory
+                    // is used up.
+                    let options =
+                        std::mem::transmute::<WindowBuilder<'_>, WindowBuilder<'static>>(options);
+
+                    let (sender, receiver) = std::sync::mpsc::sync_channel(0);
+
+                    std::thread::spawn(move || {
+                        match catch_unwind(AssertUnwindSafe(|| Self::create(options, mode))) {
+                            // window opened ok
+                            Ok(Ok(window)) => {
+                                sender
+                                    .send(Ok(Ok(window.waker())))
+                                    .expect("failed to send window open result");
+                                window.run_event_loop().ok();
+                            }
+                            // window failed to open
+                            Ok(Err(err)) => {
+                                sender
+                                    .send(Ok(Err(err)))
+                                    .expect("failed to send window open result");
+                            }
+                            // window factory panicked
+                            Err(err) => {
+                                sender
+                                    .send(Err(err))
+                                    .expect("failed to send window open result");
+                            }
+                        }
+                    });
+
+                    // NOTE: we wait here! this is important as we CANNOT return before the window
+                    // is actually initialized, because: we need our error
+                    // result, AND more importantly, we need to ensure that the factory (that can
+                    // borrow from the outer scope) finishes initializing!!!! See the SAFETY comment
+                    // above!
+                    match receiver
+                        .recv()
+                        .expect("x11 window thread aborted before finishing opening the window")
+                    {
+                        Ok(Ok(waker)) => Ok(waker),
+                        Ok(Err(err)) => Err(err),
+                        Err(e) => std::panic::resume_unwind(e),
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe fn create(options: WindowBuilder<'_>, mode: OpenMode) -> Result<Rc<Self>, WindowError> {
         unsafe {
             // open a new connection first
             let connection = Connection::open().ok_or_else(|| {
@@ -319,7 +380,7 @@ impl WindowImpl {
 
             // our window data, box it because [`WindowFactory`] requires a stable address
             // for the lifetime of the window. See [`run_event_loop`] for more details.
-            let window = Box::new(Self {
+            let window = Rc::new(Self {
                 window_id,
                 window_parent: Cell::new(window_parent),
                 window_colormap,
@@ -357,40 +418,28 @@ impl WindowImpl {
                 connection,
             });
 
-            // finally, run our event loop
-            match mode {
-                OpenMode::Blocking => {
-                    window.run_event_loop(options.factory)?;
-                    Ok(WindowWaker::default())
-                }
-                OpenMode::Embedded(..) | OpenMode::Transient(..) => {
-                    let waker = window.waker();
-                    thread::spawn(|| window.run_event_loop(options.factory).ok());
-                    Ok(waker)
-                }
-            }
-        }
-    }
-
-    /// Poll the events until our window is closed.
-    fn run_event_loop(self: Box<Self>, factory: WindowFactory) -> Result<(), WindowError> {
-        unsafe {
             // SAFETY: we erase the lifetime of WindowImpl; it should be safe to do so
             // because:
-            //  - because our window instance is boxed, it has a stable address for the
-            //    whole lifetime of the window
+            //  - because our window instance is rc'd, it has a stable address for the whole
+            //    lifetime of the window
             //  - we manually dispose of our handler before WindowImpl gets dropped (see
             //    drop impl)
-            //  - we promise to not move WindowImpl (and by extension the handler) to a
-            //    different thread (as that would violate the handler's !Send requirement)
-            let handler = match (factory)(Window(&*(&*self as *const Self))) {
+            let handler = match (options.factory)(Window(&*Rc::as_ptr(&window))) {
                 Ok(handler) => handler,
                 Err(error) => return Err(WindowError::Factory(error)),
             };
 
             // start accepting events
-            self.handler.replace(Some(handler));
+            window.handler.replace(Some(handler));
 
+            // finally
+            Ok(window)
+        }
+    }
+
+    /// Poll the events until our window is closed.
+    fn run_event_loop(self: Rc<Self>) -> Result<(), WindowError> {
+        unsafe {
             // main loop
             // - use a fixed refresh interval to call into [`WindowHandler::frame`] at a
             //   consistent rate
@@ -405,7 +454,7 @@ impl WindowImpl {
                 let wait_time = match next_frame.checked_duration_since(curr_frame) {
                     Some(wait_time) => wait_time,
                     None => {
-                        self.event(|e| e.frame());
+                        self.with_handler(|e| e.frame());
                         next_frame = (next_frame + self.refresh_interval).max(curr_frame); //avoid death spiral by capping next_frame to the current time if we are behind schedule
                         next_frame.saturating_duration_since(curr_frame) // return the time until the next frame, or 0 if we are behind schedule
                     }
@@ -506,7 +555,9 @@ impl WindowImpl {
                                         }
 
                                         if scroll_x != 0.0 || scroll_y != 0.0 {
-                                            self.event(|e| e.mouse_scroll(scroll_x, scroll_y));
+                                            self.with_handler(|e| {
+                                                e.mouse_scroll(scroll_x, scroll_y)
+                                            });
                                         }
                                     }
                                 }
@@ -534,15 +585,15 @@ impl WindowImpl {
                                     let old_zoom = self.last_gesture_zoom.replace(new_zoom);
 
                                     if new_zoom != old_zoom {
-                                        self.event(|e| e.gesture_zoom(new_zoom / old_zoom));
+                                        self.with_handler(|e| e.gesture_zoom(new_zoom / old_zoom));
                                     }
 
                                     if event.delta_angle != 0.0 {
-                                        self.event(|e| e.gesture_rotate(event.delta_angle));
+                                        self.with_handler(|e| e.gesture_rotate(event.delta_angle));
                                     }
 
                                     if event.delta_x != 0.0 || event.delta_y != 0.0 {
-                                        self.event(|e| {
+                                        self.with_handler(|e| {
                                             e.mouse_scroll(
                                                 event.delta_x * 0.05,
                                                 event.delta_y * 0.05,
@@ -563,13 +614,13 @@ impl WindowImpl {
                         && event.message_type == self.connection.atom(c"WM_PROTOCOLS") as _
                         && event.data.get_long(0) == self.connection.atom(c"WM_DELETE_WINDOW") as _
                     {
-                        self.event(|e| e.close_requested());
+                        self.with_handler(|e| e.close_requested());
                     }
 
                     if event.format == 32
                         && event.message_type == self.connection.atom(ATOM_WAKEUP) as _
                     {
-                        self.event(|e| e.wakeup());
+                        self.with_handler(|e| e.wakeup());
                     }
 
                     if event.format == 32
@@ -606,10 +657,10 @@ impl WindowImpl {
                                 }
                             };
 
-                            self.event(|e| e.drag_enter(data, point))
+                            self.with_handler(|e| e.drag_enter(data, point))
                                 .unwrap_or(DropEffect::Reject)
                         } else {
-                            self.event(|e| e.drag_move(point))
+                            self.with_handler(|e| e.drag_move(point))
                                 .unwrap_or(DropEffect::Reject)
                         };
 
@@ -654,14 +705,14 @@ impl WindowImpl {
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndLeave") as _
                     {
-                        self.event(|e| e.drag_leave());
+                        self.with_handler(|e| e.drag_leave());
                         self.last_dragdrop_state.set(false);
                     }
 
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndDrop") as _
                     {
-                        self.event(|e| e.drag_accept());
+                        self.with_handler(|e| e.drag_accept());
                         self.last_dragdrop_state.set(false);
                     }
                 }
@@ -677,12 +728,12 @@ impl WindowImpl {
                 }
 
                 MapNotify if !self.last_window_visible.replace(true) => {
-                    self.event(|e| e.visibility_changed(WindowVisibility::Normal));
+                    self.with_handler(|e| e.visibility_changed(WindowVisibility::Normal));
                 }
 
                 UnmapNotify if self.last_window_visible.replace(false) => {
                     // TODO: add minimize check
-                    self.event(|e| e.visibility_changed(WindowVisibility::Hidden));
+                    self.with_handler(|e| e.visibility_changed(WindowVisibility::Hidden));
                 }
 
                 ConfigureNotify => {
@@ -695,11 +746,11 @@ impl WindowImpl {
                     if let Some(point) = window_position(&self.connection, self.window_id)
                         && self.last_window_position.replace(Some(point)) != Some(point)
                     {
-                        self.event(|e| e.position_changed(point));
+                        self.with_handler(|e| e.position_changed(point));
                     }
 
                     if self.last_window_size.replace(Some(size)) != Some(size) {
-                        self.event(|e| e.size_changed(size));
+                        self.with_handler(|e| e.size_changed(size));
                     }
                 }
 
@@ -729,7 +780,9 @@ impl WindowImpl {
                                 _ => return,
                             };
 
-                            self.event(|e| e.mouse_press(button, event.type_ == ButtonPress));
+                            self.with_handler(|e| {
+                                e.mouse_press(button, event.type_ == ButtonPress)
+                            });
                         }
 
                         4..=7 if event.type_ == ButtonPress && self.xi2_info.is_none() => {
@@ -741,7 +794,7 @@ impl WindowImpl {
                                 _ => return,
                             };
 
-                            self.event(|e| e.mouse_scroll(x, y));
+                            self.with_handler(|e| e.mouse_scroll(x, y));
                         }
 
                         _ => {}
@@ -761,7 +814,7 @@ impl WindowImpl {
 
                     if let Some(key) = keycode_to_key(event.keycode) {
                         let capture = self
-                            .event(|e| e.key_press(key, event.type_ == KeyPress))
+                            .with_handler(|e| e.key_press(key, event.type_ == KeyPress))
                             .unwrap_or(false);
 
                         if !capture {
@@ -802,7 +855,7 @@ impl WindowImpl {
                         return;
                     }
 
-                    self.event(|e| e.mouse_leave());
+                    self.with_handler(|e| e.mouse_leave());
                 }
 
                 FocusIn | FocusOut => {
@@ -814,13 +867,13 @@ impl WindowImpl {
                     }
 
                     if self.last_window_focused.replace(focus) != focus {
-                        self.event(|e| e.focus_changed(focus));
+                        self.with_handler(|e| e.focus_changed(focus));
                     }
                 }
 
                 Expose => {
                     let event = event.expose;
-                    self.event(|e| {
+                    self.with_handler(|e| {
                         e.damage(Rect::from_xywh(
                             event.x,
                             event.y,
@@ -939,7 +992,7 @@ impl WindowImpl {
 
         let point = Point { x, y };
         if self.last_cursor_position.replace(Some(point)) != Some(point) {
-            self.event(|e| e.mouse_move(point)); // TODO: absolute?
+            self.with_handler(|e| e.mouse_move(point)); // TODO: absolute?
         }
     }
 
@@ -947,12 +1000,12 @@ impl WindowImpl {
     /// changed.
     fn handle_event_modifiers(&self, modifiers: Modifiers) {
         if self.last_modifiers.replace(modifiers) != modifiers {
-            self.event(|e| e.key_modifiers(modifiers));
+            self.with_handler(|e| e.key_modifiers(modifiers));
         }
     }
 
     /// Access the [`WindowHandler`] if available.
-    fn event<R>(&self, f: impl FnOnce(&mut dyn WindowHandler) -> R) -> Option<R> {
+    fn with_handler<R>(&self, f: impl FnOnce(&mut dyn WindowHandler) -> R) -> Option<R> {
         (*self.handler.borrow_mut())
             .as_mut()
             .map(|handler| f(handler.as_mut()))
@@ -970,7 +1023,8 @@ impl Drop for WindowImpl {
         }
 
         // handler MUST be dropped BEFORE `WindowImpl` gets dropped, as handler depends
-        // on WindowImpl
+        // on WindowImpl. See safety comment in [`WindowImpl::set_event_handler`] for
+        // more details.
         self.handler.take();
 
         unsafe {

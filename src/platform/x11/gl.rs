@@ -21,8 +21,6 @@ type GlXCreateContextAttribsARB = unsafe extern "C" fn(
     attribs: *const c_int,
 ) -> GLXContext;
 
-unsafe impl Send for GlContext {}
-
 /// A GLX [`PlatformOpenGl`] implementation.
 /// Used for our X11 window implementation.
 pub struct GlContext {
@@ -142,7 +140,13 @@ impl GlContext {
                 &mut n_configs,
             );
 
-            if n_configs <= 0 || fb_config_list.is_null() {
+            if fb_config_list.is_null() {
+                return None;
+            }
+
+            if n_configs <= 0 {
+                // in case its extra stupid idk
+                XFree(fb_config_list as *mut _);
                 return None;
             }
 

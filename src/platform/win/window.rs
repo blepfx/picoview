@@ -145,7 +145,10 @@ unsafe impl Send for WindowWakerImpl {}
 unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
-    pub unsafe fn open(options: WindowBuilder, mode: OpenMode) -> Result<WindowWaker, WindowError> {
+    pub unsafe fn open(
+        options: WindowBuilder<'_>,
+        mode: OpenMode,
+    ) -> Result<WindowWaker, WindowError> {
         unsafe {
             let parent = match mode {
                 OpenMode::Blocking => null_mut(),
@@ -265,7 +268,7 @@ impl WindowImpl {
             //  - we promise to not move WindowImpl (and by extension the handler) to a
             //    different thread (as that would violate the handler's !Send requirement)
             // initialize our event handler
-            let handler = match (options.factory)(Window(&*(&*window as *const Self))) {
+            let handler = match (options.factory)(Window(&*Rc::as_ptr(&window))) {
                 Ok(handler) => handler,
                 Err(error) => return Err(WindowError::Factory(error)),
             };
