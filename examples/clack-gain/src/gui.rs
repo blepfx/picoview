@@ -1,11 +1,10 @@
 #![allow(deprecated)]
 
-use std::time::Instant;
-
 use crate::GainPluginShared;
 use clack_plugin::plugin::PluginError;
 use picoview::rwh_06::{HasRawWindowHandle, WindowHandle};
 use picoview::{GlConfig, Window, WindowBuilder, WindowHandler, WindowWaker};
+use std::time::Instant;
 
 #[derive(Default)]
 pub struct GainPluginGui {

@@ -875,6 +875,10 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_position(&self, point: Point) {
+        let point = self
+            .convert_client(Rect::from_xywh(point.x as i32, point.y as i32, 0, 0), true)
+            .origin();
+
         unsafe {
             SetWindowPos(
                 self.hwnd,

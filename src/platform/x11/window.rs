@@ -60,34 +60,40 @@ pub struct WindowImpl {
     /// destroyed and should not be used/destroyed again.
     is_destroyed: Cell<bool>,
 
-    /// Last key modifiers state provided by the server, used to check for
+    /// Key modifiers state provided by the server, used to check for
     /// changes.
-    last_modifiers: Cell<Modifiers>,
-    /// Last mouse cursor icon provided by our window, used to check for
+    key_modifiers: Cell<Modifiers>,
+    /// Mouse cursor icon provided by our window, used to check for
     /// changes.
-    last_cursor_icon: Cell<MouseCursor>,
-    /// Last mouse cursor position provided by the server, used to check for
-    /// changes.
-    last_cursor_position: Cell<Option<Point>>,
-    /// Last window position provided by the server, used to check
-    /// for changes and for restoring the window state on a call to
-    /// [`PlatformWindow::set_visible`].
-    last_window_position: Cell<Option<Point>>,
-    /// Last window size provided by the server, used to check for
+    cursor_icon: Cell<MouseCursor>,
+    /// Mouse cursor position provided by the server, used to check for
+    /// changes, `None` if the cursor is outside and not grabbed.
+    cursor_position: Cell<Option<Point>>,
+    /// Window position provided by the server or the window, used for restoring
+    /// the window state on a call to [`PlatformWindow::set_visible`] among
+    /// other things.
+    window_position: Cell<Point>,
+    /// Window size provided by the server, used to check for
     /// changes and for restoring the window state on a call to
-    /// [`PlatformWindow::set_visible`].
-    last_window_size: Cell<Option<Size>>,
-    /// Last window visibility state provided by the server, used to check for
+    /// [`PlatformWindow::set_visible`] among other things.
+    window_size: Cell<Size>,
+    /// Window visibility state provided by the server, used to check for
     /// changes.
-    last_window_visible: Cell<bool>,
-    /// Last window focus state provided by the server, used to check for
+    window_visible: Cell<bool>,
+    /// Window focus state provided by the server, used to check for
     /// changes.
-    last_window_focused: Cell<bool>,
+    window_focused: Cell<bool>,
     /// Are we currently in the process of a drag and drop operation?
-    last_dragdrop_state: Cell<bool>,
+    dnd_dragging: Cell<bool>,
     /// Last gesture zoom level provided by the server, used for computing
     /// deltas.
     last_gesture_zoom: Cell<f64>,
+    /// Last window position reported to the event handler, used to check for
+    /// changes.
+    last_window_position: Cell<Point>,
+    /// Last window size reported to the event handler, used to check for
+    /// changes.
+    last_window_size: Cell<Size>,
 
     /// The current clipboard data, used to provide data to other
     /// applications.
@@ -381,40 +387,46 @@ impl WindowImpl {
             // our window data, box it because [`WindowFactory`] requires a stable address
             // for the lifetime of the window. See [`run_event_loop`] for more details.
             let window = Rc::new(Self {
-                window_id,
-                window_parent: Cell::new(window_parent),
-                window_colormap,
-
                 waker: Arc::new(WindowWakerImpl {
                     display: RwLock::new(connection.as_raw()),
                     window_id,
                 }),
 
-                is_closing: Cell::new(false),
-                is_destroyed: Cell::new(false),
                 refresh_interval,
                 dpi_scale,
 
-                last_modifiers: Cell::new(Modifiers::default()),
-                last_cursor_icon: Cell::new(MouseCursor::Default),
-                last_cursor_position: Cell::new(None),
-                last_window_position: Cell::new(None),
-                last_window_size: Cell::new(None),
-                last_window_visible: Cell::new(false),
-                last_window_focused: Cell::new(false),
-                last_dragdrop_state: Cell::new(false),
+                xi2_info,
+                xi2_axes: RefCell::new(xi2_axes),
+
+                is_closing: Cell::new(false),
+                is_destroyed: Cell::new(false),
+
+                cursor_icon: Cell::new(MouseCursor::Default),
+                cursor_position: Cell::new(None),
+
+                window_position: Cell::new(Point::default()),
+                window_size: Cell::new(Size::default()),
+                window_visible: Cell::new(false),
+                window_focused: Cell::new(false),
+
+                key_modifiers: Cell::new(Modifiers::default()),
+                dnd_dragging: Cell::new(false),
+
+                last_window_size: Cell::new(Size::default()),
+                last_window_position: Cell::new(Point::default()),
                 last_gesture_zoom: Cell::new(1.0),
 
                 exchange_clipboard: RefCell::new(Exchange::Empty),
                 exchange_dragndrop: RefCell::new(Exchange::Empty),
 
-                xi2_info,
-                xi2_axes: RefCell::new(xi2_axes),
-
-                cursor_cache: RefCell::new(HashMap::new()),
-
                 handler: RefCell::new(None),
+
+                window_id,
+                window_parent: Cell::new(window_parent),
+                window_colormap,
+
                 gl_context,
+                cursor_cache: RefCell::new(HashMap::new()),
                 connection,
             });
 
@@ -626,22 +638,19 @@ impl WindowImpl {
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndPosition") as _
                     {
-                        let Some(origin) = self.last_window_position.get() else {
-                            return;
-                        };
-
                         let (x, y) = {
                             let packed = event.data.get_long(2);
                             ((packed >> 16) as u16 as i16, packed as u16 as i16)
                         };
 
+                        let origin = self.window_position.get();
                         let point = Point {
                             x: x as f64 - origin.x,
                             y: y as f64 - origin.y,
                         };
 
                         let source = event.data.get_long(0) as c_ulong;
-                        let effect = if !self.last_dragdrop_state.replace(true) {
+                        let effect = if !self.dnd_dragging.replace(true) {
                             let timestamp = event.data.get_long(3) as c_ulong;
                             let data = match parse_selection(
                                 &self.connection,
@@ -704,16 +713,52 @@ impl WindowImpl {
 
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndLeave") as _
+                        && self.dnd_dragging.replace(false)
                     {
                         self.with_handler(|e| e.drag_leave());
-                        self.last_dragdrop_state.set(false);
                     }
 
                     if event.format == 32
                         && event.message_type == self.connection.atom(c"XdndDrop") as _
+                        && self.dnd_dragging.replace(false)
                     {
-                        self.with_handler(|e| e.drag_accept());
-                        self.last_dragdrop_state.set(false);
+                        let source = event.data.get_long(0) as c_ulong;
+                        let effect = self
+                            .with_handler(|e| e.drag_accept())
+                            .unwrap_or(DropEffect::Reject);
+
+                        XSendEvent(
+                            self.connection.as_raw(),
+                            source,
+                            0,
+                            0,
+                            &mut XEvent {
+                                client_message: XClientMessageEvent {
+                                    type_: ClientMessage,
+                                    serial: 0,
+                                    send_event: 1,
+                                    display: self.connection.as_raw(),
+                                    window: source,
+                                    message_type: self.connection.atom(c"XdndFinished"),
+                                    format: 32,
+                                    data: {
+                                        let mut data = ClientMessageData::default();
+                                        data.set_long(0, self.window_id as _);
+                                        data.set_long(
+                                            1,
+                                            if effect == DropEffect::Reject { 0 } else { 1 },
+                                        ); // success
+                                        data.set_long(
+                                            2,
+                                            encode_drop_effect(&self.connection, effect) as _,
+                                        );
+                                        data
+                                    },
+                                },
+                            },
+                        );
+
+                        XFlush(self.connection.as_raw());
                     }
                 }
 
@@ -727,29 +772,33 @@ impl WindowImpl {
                     self.window_parent.set(event.parent);
                 }
 
-                MapNotify if !self.last_window_visible.replace(true) => {
+                MapNotify => {
+                    self.window_visible.set(true);
                     self.with_handler(|e| e.visibility_changed(WindowVisibility::Normal));
                 }
 
-                UnmapNotify if self.last_window_visible.replace(false) => {
+                UnmapNotify => {
                     // TODO: add minimize check
+                    self.window_visible.set(false);
                     self.with_handler(|e| e.visibility_changed(WindowVisibility::Hidden));
                 }
 
                 ConfigureNotify => {
                     let event = event.configure;
                     let size = Size {
-                        width: event.width as u32,
-                        height: event.height as u32,
+                        width: event.width.try_into().unwrap_or(0),
+                        height: event.height.try_into().unwrap_or(0),
                     };
 
                     if let Some(point) = window_position(&self.connection, self.window_id)
-                        && self.last_window_position.replace(Some(point)) != Some(point)
+                        && self.last_window_position.replace(point) != point
                     {
+                        self.window_position.set(point);
                         self.with_handler(|e| e.position_changed(point));
                     }
 
-                    if self.last_window_size.replace(Some(size)) != Some(size) {
+                    if self.last_window_size.replace(size) != size {
+                        self.window_size.set(size);
                         self.with_handler(|e| e.size_changed(size));
                     }
                 }
@@ -762,7 +811,7 @@ impl WindowImpl {
                             self.connection.as_raw(),
                             self.window_id,
                             RevertToParent,
-                            CurrentTime,
+                            event.time,
                         );
                     }
 
@@ -851,7 +900,7 @@ impl WindowImpl {
                         Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask;
 
                     let grabbed = (event.state & ANY_BUTTON) != 0;
-                    if grabbed || self.last_cursor_position.replace(None).is_none() {
+                    if grabbed || self.cursor_position.replace(None).is_none() {
                         return;
                     }
 
@@ -866,7 +915,7 @@ impl WindowImpl {
                         return;
                     }
 
-                    if self.last_window_focused.replace(focus) != focus {
+                    if self.window_focused.replace(focus) != focus {
                         self.with_handler(|e| e.focus_changed(focus));
                     }
                 }
@@ -884,8 +933,8 @@ impl WindowImpl {
                 }
 
                 SelectionRequest => {
+                    let mut event = event.selection_request;
                     let exchange = &*self.exchange_clipboard.borrow();
-                    let event = event.selection_request;
 
                     if event.selection != self.connection.atom(c"CLIPBOARD") {
                         return;
@@ -896,54 +945,57 @@ impl WindowImpl {
                     let a_text_plain = self.connection.atom(c"text/plain");
                     let a_text_uri_list = self.connection.atom(c"text/uri-list");
 
-                    if event.property != 0 {
-                        if event.target == a_targets {
-                            let atom = match exchange {
-                                Exchange::Files(_) => a_text_uri_list,
-                                Exchange::Empty | Exchange::Text(_) => a_utf8_string,
-                            };
+                    if event.property != 0 && event.target == a_targets {
+                        let atom = match exchange {
+                            Exchange::Files(_) => a_text_uri_list,
+                            Exchange::Empty | Exchange::Text(_) => a_utf8_string,
+                        };
 
-                            XChangeProperty(
-                                self.connection.as_raw(),
-                                event.requestor,
-                                event.property,
-                                XA_ATOM,
-                                32,
-                                PropModeReplace,
-                                &atom as *const _ as *const u8,
-                                1,
-                            );
-                        } else if (event.target == a_utf8_string
+                        XChangeProperty(
+                            self.connection.as_raw(),
+                            event.requestor,
+                            event.property,
+                            XA_ATOM,
+                            32,
+                            PropModeReplace,
+                            &atom as *const _ as *const u8,
+                            1,
+                        );
+                    } else if event.property != 0
+                        && (event.target == a_utf8_string
                             || event.target == a_text_plain
                             || event.target == XA_STRING)
-                            && let Exchange::Text(text) = exchange
-                        {
-                            XChangeProperty(
-                                self.connection.as_raw(),
-                                event.requestor,
-                                event.property,
-                                event.target,
-                                8,
-                                PropModeReplace,
-                                text.as_ptr(),
-                                text.len() as i32,
-                            );
-                        } else if event.target == a_text_uri_list
-                            && let Exchange::Files(files) = exchange
-                        {
-                            let list = encode_uri_list(files);
-                            XChangeProperty(
-                                self.connection.as_raw(),
-                                event.requestor,
-                                event.property,
-                                event.target,
-                                8,
-                                PropModeReplace,
-                                list.as_bytes().as_ptr(),
-                                list.len() as i32,
-                            );
-                        }
-                    }
+                        && let Exchange::Text(text) = exchange
+                    {
+                        XChangeProperty(
+                            self.connection.as_raw(),
+                            event.requestor,
+                            event.property,
+                            event.target,
+                            8,
+                            PropModeReplace,
+                            text.as_ptr(),
+                            text.len() as i32,
+                        );
+                    } else if event.property != 0
+                        && event.target == a_text_uri_list
+                        && let Exchange::Files(files) = exchange
+                    {
+                        let list = encode_uri_list(files);
+                        XChangeProperty(
+                            self.connection.as_raw(),
+                            event.requestor,
+                            event.property,
+                            event.target,
+                            8,
+                            PropModeReplace,
+                            list.as_bytes().as_ptr(),
+                            list.len() as i32,
+                        );
+                    } else {
+                        // wasnt accepted, send a SelectionNotify with property set to None
+                        event.property = 0;
+                    };
 
                     XSendEvent(
                         self.connection.as_raw(),
@@ -982,7 +1034,7 @@ impl WindowImpl {
             // we should ignore it as xinput2 will provide us with a better precision
             // event...
 
-            let size = self.last_window_size.get().unwrap_or_default();
+            let size = self.window_size.get();
             if x >= 0.0 && y >= 0.0 && x <= size.width as f64 && y <= size.height as f64 {
                 // unless it is out of bounds, as xinput2 will not provide us
                 // with out of bound events
@@ -991,7 +1043,7 @@ impl WindowImpl {
         }
 
         let point = Point { x, y };
-        if self.last_cursor_position.replace(Some(point)) != Some(point) {
+        if self.cursor_position.replace(Some(point)) != Some(point) {
             self.with_handler(|e| e.mouse_move(point)); // TODO: absolute?
         }
     }
@@ -999,7 +1051,7 @@ impl WindowImpl {
     /// Emits a [`WindowHandler::key_modifiers`] event if the modifiers have
     /// changed.
     fn handle_event_modifiers(&self, modifiers: Modifiers) {
-        if self.last_modifiers.replace(modifiers) != modifiers {
+        if self.key_modifiers.replace(modifiers) != modifiers {
             self.with_handler(|e| e.key_modifiers(modifiers));
         }
     }
@@ -1132,7 +1184,7 @@ impl PlatformWindow for WindowImpl {
         }
 
         // re-map the window to apply the changes
-        if self.last_window_visible.get() {
+        if self.window_visible.get() {
             self.set_visible(false);
             self.set_visible(true);
         }
@@ -1143,7 +1195,7 @@ impl PlatformWindow for WindowImpl {
         //
         // needed because of a promise we made that it is safe to call this every frame
         // (see [`Window::set_cursor_icon`])
-        if self.last_cursor_icon.replace(cursor) == cursor {
+        if self.cursor_icon.replace(cursor) == cursor {
             return;
         }
 
@@ -1186,7 +1238,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_size(&self, size: Size) {
-        if self.last_window_size.get() == Some(size) {
+        if self.window_size.replace(size) == size {
             return;
         }
 
@@ -1248,7 +1300,7 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_position(&self, point: Point) {
-        if self.last_window_position.get() == Some(point) {
+        if self.window_position.replace(point) == point {
             return;
         }
 
@@ -1267,31 +1319,26 @@ impl PlatformWindow for WindowImpl {
     }
 
     fn set_visible(&self, visible: bool) {
-        if self.last_window_visible.replace(visible) == visible {
+        if self.window_visible.replace(visible) == visible {
             return;
         }
 
         unsafe {
             if visible {
-                if let Some(point) = self.last_window_position.get() {
+                let size = self.window_size.get();
+                let point = self.window_position.get();
+
+                XMapRaised(self.connection.as_raw(), self.window_id);
+
+                // TODO: fix positioning (client area vs border area)
+                if size.width > 0 && size.height > 0 {
                     XConfigureWindow(
                         self.connection.as_raw(),
                         self.window_id,
-                        (CWX | CWY) as _,
+                        (CWX | CWY | CWWidth | CWHeight) as _,
                         &mut XWindowChanges {
                             x: point.x as i32,
                             y: point.y as i32,
-                            ..zeroed()
-                        },
-                    );
-                }
-
-                if let Some(size) = self.last_window_size.get() {
-                    XConfigureWindow(
-                        self.connection.as_raw(),
-                        self.window_id,
-                        (CWWidth | CWHeight) as _,
-                        &mut XWindowChanges {
                             width: size.width.try_into().unwrap_or(i32::MAX),
                             height: size.height.try_into().unwrap_or(i32::MAX),
                             ..zeroed()
@@ -1299,7 +1346,6 @@ impl PlatformWindow for WindowImpl {
                     );
                 }
 
-                XMapRaised(self.connection.as_raw(), self.window_id);
                 XSync(self.connection.as_raw(), 0);
             } else {
                 XUnmapWindow(self.connection.as_raw(), self.window_id);
