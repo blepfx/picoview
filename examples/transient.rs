@@ -1,4 +1,6 @@
-use picoview::{Key, MouseButton, MouseCursor, Point, Window, WindowBuilder, WindowHandler};
+use picoview::{
+    Key, MouseButton, MouseCursor, Point, Window, WindowBuilder, WindowHandler, WindowWaker,
+};
 
 fn main() {
     WindowBuilder::new(|window| {
@@ -7,9 +9,12 @@ fn main() {
         window.set_position((100, 200));
         window.set_visible(true);
 
-        let child = WindowBuilder::new(|window| {
+        let mut child = WindowWaker::default();
+        WindowBuilder::new(|window| {
             window.set_size((200, 200));
             window.set_visible(true);
+
+            child = window.waker();
 
             Ok(Box::new(Child { window }))
         })

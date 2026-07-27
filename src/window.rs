@@ -423,7 +423,7 @@ impl<'scope> WindowBuilder<'scope> {
     /// - [`WindowError::Factory`] if the factory function returned an error.
     /// - [`WindowError::Platform`] if a platform-specific error occurred.
     pub fn open_blocking(self) -> Result<(), WindowError> {
-        unsafe { platform::open_window(self, platform::OpenMode::Blocking).map(|_| ()) }
+        unsafe { platform::open_window(self, platform::OpenMode::Blocking) }
     }
 
     /// Open a transient window attached to the given parent window. Unlike
@@ -442,7 +442,7 @@ impl<'scope> WindowBuilder<'scope> {
     /// - [`WindowError::InvalidParent`] if the parent window handle is invalid.
     /// - [`WindowError::Platform`] if a platform-specific error occurred.
     /// - [`WindowError::Factory`] if the factory function returned an error.
-    pub fn open_transient<W>(self, parent: W) -> Result<WindowWaker, WindowError>
+    pub fn open_transient<W>(self, parent: W) -> Result<(), WindowError>
     where
         W: rwh_06::HasWindowHandle,
     {
@@ -469,7 +469,7 @@ impl<'scope> WindowBuilder<'scope> {
     /// - [`WindowError::InvalidParent`] if the parent window handle is invalid.
     /// - [`WindowError::Platform`] if a platform-specific error occurred.
     /// - [`WindowError::Factory`] if the factory function returned an error.
-    pub fn open_embedded<W>(self, parent: W) -> Result<WindowWaker, WindowError>
+    pub fn open_embedded<W>(self, parent: W) -> Result<(), WindowError>
     where
         W: rwh_06::HasWindowHandle,
     {

@@ -133,16 +133,13 @@ unsafe impl Send for WindowWakerImpl {}
 unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
-    pub unsafe fn open(
-        options: WindowBuilder<'_>,
-        mode: OpenMode,
-    ) -> Result<WindowWaker, WindowError> {
+    pub unsafe fn open(options: WindowBuilder<'_>, mode: OpenMode) -> Result<(), WindowError> {
         unsafe {
             match mode {
                 OpenMode::Blocking => {
                     let window = Self::create(options, mode)?;
                     window.run_event_loop()?;
-                    Ok(WindowWaker::default())
+                    Ok(())
                 }
 
                 OpenMode::Embedded(..) | OpenMode::Transient(..) => {
@@ -159,7 +156,7 @@ impl WindowImpl {
                             // window opened ok
                             Ok(Ok(window)) => {
                                 sender
-                                    .send(Ok(Ok(window.waker())))
+                                    .send(Ok(Ok(())))
                                     .expect("failed to send window open result");
                                 window.run_event_loop().ok();
                             }
@@ -187,7 +184,7 @@ impl WindowImpl {
                         .recv()
                         .expect("x11 window thread aborted before finishing opening the window")
                     {
-                        Ok(Ok(waker)) => Ok(waker),
+                        Ok(Ok(())) => Ok(()),
                         Ok(Err(err)) => Err(err),
                         Err(e) => std::panic::resume_unwind(e),
                     }

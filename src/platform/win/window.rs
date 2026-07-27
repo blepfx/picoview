@@ -145,10 +145,7 @@ unsafe impl Send for WindowWakerImpl {}
 unsafe impl Sync for WindowWakerImpl {}
 
 impl WindowImpl {
-    pub unsafe fn open(
-        options: WindowBuilder<'_>,
-        mode: OpenMode,
-    ) -> Result<WindowWaker, WindowError> {
+    pub unsafe fn open(options: WindowBuilder<'_>, mode: OpenMode) -> Result<(), WindowError> {
         unsafe {
             let parent = match mode {
                 OpenMode::Blocking => null_mut(),
@@ -291,7 +288,7 @@ impl WindowImpl {
                 }
             }
 
-            Ok(window.waker())
+            Ok(())
         }
     }
 

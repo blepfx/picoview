@@ -86,10 +86,7 @@ impl Deref for WindowImpl {
 
 // rust methods stuff
 impl WindowImpl {
-    pub unsafe fn open(
-        options: WindowBuilder<'_>,
-        mode: OpenMode,
-    ) -> Result<WindowWaker, WindowError> {
+    pub unsafe fn open(options: WindowBuilder<'_>, mode: OpenMode) -> Result<(), WindowError> {
         let main_thread = MainThreadMarker::new()
             .ok_or_else(|| WindowError::Platform("not on main thread".into()))?;
 
@@ -109,7 +106,7 @@ impl WindowImpl {
                 WindowImpl::init_handler(&view, options.factory)?;
 
                 app.run();
-                Ok(WindowWaker::default())
+                Ok(())
             },
 
             OpenMode::Transient(parent) => unsafe {
@@ -133,7 +130,7 @@ impl WindowImpl {
                     parent_window.addChildWindow_ordered(&window, NSWindowOrderingMode::Above);
                 }
 
-                Ok(view.waker())
+                Ok(())
             },
 
             OpenMode::Embedded(parent) => unsafe {
@@ -148,7 +145,7 @@ impl WindowImpl {
                 WindowImpl::init_handler(&view, options.factory)?;
                 parent_view.addSubview(&view.view);
 
-                Ok(view.waker())
+                Ok(())
             },
         }
     }
