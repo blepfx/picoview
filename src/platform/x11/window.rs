@@ -946,9 +946,24 @@ impl WindowImpl {
                     let a_text_uri_list = self.connection.atom(c"text/uri-list");
 
                     if event.property != 0 && event.target == a_targets {
-                        let atom = match exchange {
-                            Exchange::Files(_) => a_text_uri_list,
-                            Exchange::Empty | Exchange::Text(_) => a_utf8_string,
+                        let mut atoms = [0; 4];
+                        let atoms = match exchange {
+                            Exchange::Files(_) => {
+                                atoms[0] = a_targets;
+                                atoms[1] = a_text_uri_list;
+                                &atoms[..2]
+                            }
+                            Exchange::Empty => {
+                                atoms[0] = a_targets;
+                                &atoms[..1]
+                            }
+                            Exchange::Text(_) => {
+                                atoms[0] = a_targets;
+                                atoms[1] = a_utf8_string;
+                                atoms[2] = a_text_plain;
+                                atoms[3] = XA_STRING;
+                                &atoms[..4]
+                            }
                         };
 
                         XChangeProperty(
@@ -958,8 +973,8 @@ impl WindowImpl {
                             XA_ATOM,
                             32,
                             PropModeReplace,
-                            &atom as *const _ as *const u8,
-                            1,
+                            atoms.as_ptr() as *const u8,
+                            atoms.len() as i32,
                         );
                     } else if event.property != 0
                         && (event.target == a_utf8_string
@@ -1175,7 +1190,7 @@ impl PlatformWindow for WindowImpl {
                 self.connection.as_raw(),
                 self.window_id,
                 self.connection.atom(c"_MOTIF_WM_HINTS"),
-                self.connection.atom(c"ATOM"),
+                self.connection.atom(c"_MOTIF_WM_HINTS"),
                 32,
                 PropModeReplace,
                 data.as_ptr() as *mut _,
