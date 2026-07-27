@@ -732,9 +732,10 @@ impl WindowProc for WindowImpl {
 
                 WM_USER_CLOSE_WINDOW => {
                     drop(dpi_awareness);
-                    // this will deallocate us, return as soon as possible
-                    // TODO: is this even sound? we still have &self here
-                    DestroyWindow(self.hwnd);
+                    // this will deallocate us, return as soon as possible.
+                    // we have to make sure that the self borrow does NOT overlap with DestroyWindow
+                    // here. TODO: is this even sound? we still have &self here
+                    DestroyWindow(hwnd);
                     return 0;
                 }
 
