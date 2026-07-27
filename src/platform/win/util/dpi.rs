@@ -1,5 +1,10 @@
+use std::ptr::null_mut;
+
 use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE, HWND, RECT};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, WINDOW_EX_STYLE, WINDOW_STYLE,
 };
@@ -11,7 +16,8 @@ use windows_sys::core::BOOL;
 pub struct DpiContext {
     user32: HMODULE,
     get_dpi_for_window: Option<unsafe extern "system" fn(HWND) -> u32>,
-    set_thread_dpi_awareness_context: Option<unsafe extern "system" fn(isize) -> isize>,
+    set_thread_dpi_awareness_context:
+        Option<unsafe extern "system" fn(DPI_AWARENESS_CONTEXT) -> DPI_AWARENESS_CONTEXT>,
     adjust_window_rect_ex_for_dpi: Option<
         unsafe extern "system" fn(*mut RECT, WINDOW_STYLE, BOOL, WINDOW_EX_STYLE, u32) -> BOOL,
     >,
@@ -21,7 +27,7 @@ pub struct DpiContext {
 /// restores the previous DPI awareness state when dropped.
 pub struct DpiAwarenessGuard<'a> {
     context: &'a DpiContext,
-    previous: isize,
+    previous: DPI_AWARENESS_CONTEXT, // this makes it !Send
 }
 
 impl DpiContext {
@@ -93,15 +99,14 @@ impl DpiContext {
     /// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` for the duration of the
     /// guard, if supported.
     pub fn enter_per_monitor_aware_v2(&self) -> DpiAwarenessGuard<'_> {
-        /// https://learn.microsoft.com/en-us/windows/win32/hidpi/dpi-awareness-context
-        const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: isize = -4;
+        let previous = self
+            .set_thread_dpi_awareness_context
+            .map(|f| unsafe { f(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) })
+            .unwrap_or(null_mut());
 
         DpiAwarenessGuard {
             context: self,
-            previous: self
-                .set_thread_dpi_awareness_context
-                .map(|f| unsafe { f(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) })
-                .unwrap_or(0),
+            previous,
         }
     }
 }

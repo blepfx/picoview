@@ -395,7 +395,7 @@ impl Drop for WindowImpl {
 impl WindowProc for WindowImpl {
     unsafe fn window_proc(&self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         // enter DPI aware context, who knows what the host thread is doing.
-        let _dpi_awareness = self.dpi_context.enter_per_monitor_aware_v2();
+        let dpi_awareness = self.dpi_context.enter_per_monitor_aware_v2();
 
         unsafe {
             match msg {
@@ -731,6 +731,9 @@ impl WindowProc for WindowImpl {
                 }
 
                 WM_USER_CLOSE_WINDOW => {
+                    drop(dpi_awareness);
+                    // this will deallocate us, return as soon as possible
+                    // TODO: is this even sound? we still have &self here
                     DestroyWindow(self.hwnd);
                     return 0;
                 }
